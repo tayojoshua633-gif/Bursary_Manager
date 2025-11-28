@@ -1,0 +1,64 @@
+name: bursary_manager
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: ^0.19.0
+  shared_preferences: ^2.2.2
+
+  cupertino_icons: ^1.0.8
+
+  # -----------------------------
+  # DATABASE
+  # -----------------------------
+  sqflite: ^2.4.0
+  path: ^1.9.0
+  path_provider: ^2.1.5
+
+  pdf: ^3.10.4
+  printing: ^5.12.0
+  excel: ^2.0.3
+
+  file_picker: ^8.0.0
+  permission_handler: ^11.0.1
+
+  # -----------------------------
+  # IMAGE PICKER (student photos, school logo)
+  # -----------------------------
+  image_picker: ^1.1.2
+
+  # -----------------------------
+  # RECEIPT PRINTING + SHARING
+  # -----------------------------
+  share_plus: ^7.2.2
+
+  # -----------------------------
+  # FILE SUPPORT (for receipt logo display)
+  # -----------------------------
+  file: ^6.1.4
+  # (Optional) If error occurs using File(), Dart has built-in io library
+  # You can remove this dependency if not needed.
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    # Add this if you want to load assets later
+    # Example:
+    # - assets/images/
+    #
+    # Keep empty for now unless you add images.
+    - assets/
