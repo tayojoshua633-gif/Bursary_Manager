@@ -20,11 +20,54 @@ class StudentDetailsScreen extends StatefulWidget {
 
 class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
   late Student current;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    current = widget.student;
+    _loadStudentWithClassArm();
+  }
+
+  // Load student with class and arm names using JOIN
+  Future<void> _loadStudentWithClassArm() async {
+    setState(() => _loading = true);
+
+    try {
+      final db = await DatabaseHelper().database;
+      
+      // Query with JOIN to get class and arm names
+      final result = await db.rawQuery('''
+        SELECT 
+          s.*,
+          c.name as className,
+          a.name as armName
+        FROM students s
+        LEFT JOIN classes c ON s.classId = c.id
+        LEFT JOIN arms a ON s.armId = a.id
+        WHERE s.id = ?
+      ''', [widget.student.id]);
+
+      if (result.isNotEmpty && mounted) {
+        setState(() {
+          current = Student.fromMap(result.first);
+          _loading = false;
+        });
+      } else {
+        // Fallback to original student data
+        setState(() {
+          current = widget.student;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      // Fallback to original student data on error
+      if (mounted) {
+        setState(() {
+          current = widget.student;
+          _loading = false;
+        });
+      }
+    }
   }
 
   Widget info(String label, String? value) {
@@ -50,6 +93,13 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return Scaffold(
+        appBar: AppBar(title: const Text("Student Details")),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     ImageProvider? photo;
     if (current.photoPath != null &&
         current.photoPath!.isNotEmpty &&
@@ -58,7 +108,9 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text("${current.surname} ${current.firstName}")),
+      appBar: AppBar(
+        title: Text("${current.surname} ${current.firstName}"),
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -68,8 +120,13 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
             CircleAvatar(
               radius: 65,
               backgroundImage: photo,
+              backgroundColor: Colors.blue.shade100,
               child: photo == null
-                  ? const Icon(Icons.person, size: 70)
+                  ? Icon(
+                      Icons.person,
+                      size: 70,
+                      color: Colors.blue.shade700,
+                    )
                   : null,
             ),
 
@@ -83,14 +140,18 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
                 child: Column(
                   children: [
                     info("Admission No:", current.admissionNo),
+                    const Divider(),
                     info("Surname:", current.surname),
                     info("First Name:", current.firstName),
                     info("Other Name:", current.otherName),
                     info("Gender:", current.gender),
                     info("Date of Birth:", current.dob),
-                    info("Class:", current.className),
-                    info("Arm:", current.armName),
+                    const Divider(),
+                    info("Class:", current.className ?? 'Not Assigned'),
+                    info("Arm:", current.armName ?? 'Not Assigned'),
+                    const Divider(),
                     info("Address:", current.address),
+                    const Divider(),
                     info("Parent Name:", current.parentName),
                     info("Parent Phone:", current.parentPhone),
                     info("Parent Email:", current.parentEmail),
@@ -102,13 +163,35 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
 
             const SizedBox(height: 25),
 
+            // ACTION BUTTONS SECTION
+            const Text(
+              "Quick Actions",
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey,
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
             // BILLING + PAYMENTS + PAYMENT HISTORY
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
               children: [
                 ElevatedButton.icon(
                   icon: const Icon(Icons.receipt_long),
-                  label: const Text("Bill"),
+                  label: const Text("Generate Bill"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
                   onPressed: () {
                     Navigator.push(
                       context,
@@ -122,10 +205,17 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
                     );
                   },
                 ),
-                const SizedBox(width: 12),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.payment),
-                  label: const Text("Pay"),
+                  label: const Text("Record Payment"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
                   onPressed: () {
                     Navigator.push(
                       context,
@@ -139,12 +229,16 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
                     );
                   },
                 ),
-                const SizedBox(width: 12),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.history),
-                  label: const Text("History"),
+                  label: const Text("Payment History"),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.purple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                   ),
                   onPressed: () {
                     Navigator.push(
@@ -165,28 +259,42 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> {
             const SizedBox(height: 20),
 
             // EDIT BUTTON
-            ElevatedButton.icon(
-              icon: const Icon(Icons.edit),
-              label: const Text("Edit Info"),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-              onPressed: () async {
-                final changed = await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => StudentEditScreen(student: current),
-                  ),
-                );
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.edit),
+                label: const Text(
+                  "Edit Student Information",
+                  style: TextStyle(fontSize: 16),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onPressed: () async {
+                  final changed = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => StudentEditScreen(student: current),
+                    ),
+                  );
 
-                if (changed == true) {
-                  final freshMap =
-                      await DatabaseHelper().getStudentById(current.id!);
-
-                  if (freshMap != null && mounted) {
-                    final freshStudent = Student.fromMap(freshMap);
-                    setState(() => current = freshStudent);
+                  if (changed == true) {
+                    // Reload student with class/arm names
+                    _loadStudentWithClassArm();
                   }
-                }
-              },
+                },
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // REFRESH BUTTON
+            TextButton.icon(
+              icon: const Icon(Icons.refresh),
+              label: const Text("Refresh Data"),
+              onPressed: _loadStudentWithClassArm,
             ),
           ],
         ),

@@ -1,5 +1,5 @@
-// lib/screens/payments/payment_history_screen.dart
-// UPDATED VERSION with 3 Export Options (PDF, JPEG, Thermal)
+// lib/screens/payments/payment_receipt_screen.dart
+// COMPLETE VERSION with Export Options Dialog
 
 import 'dart:io';
 import 'dart:typed_data';
@@ -12,57 +12,62 @@ import 'package:share_plus/share_plus.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../../db/database_helper.dart';
-import '../../utils/printer_settings_helper.dart';  // NEW IMPORT
+import '../../utils/printer_settings_helper.dart';
 
-class PaymentHistoryScreen extends StatefulWidget {
+class PaymentReceiptScreen extends StatefulWidget {
+  final int paymentId;
   final int studentId;
-  final String studentName;
+  final bool showExportDialog; // NEW: Show export dialog on load
 
-  const PaymentHistoryScreen({
+  const PaymentReceiptScreen({
     super.key,
+    required this.paymentId,
     required this.studentId,
-    required this.studentName,
+    this.showExportDialog = false, // Default false for viewing
   });
 
   @override
-  State<PaymentHistoryScreen> createState() => _PaymentHistoryScreenState();
+  State<PaymentReceiptScreen> createState() => _PaymentReceiptScreenState();
 }
 
-class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
+class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
   final DatabaseHelper _db = DatabaseHelper();
-  final GlobalKey _historyKey = GlobalKey();
+  final GlobalKey _receiptKey = GlobalKey();
 
-  List<Map<String, dynamic>> _payments = [];
+  Map<String, dynamic>? _payment;
   Map<String, dynamic>? _student;
   Map<String, dynamic>? _school;
 
-  double _totalPaid = 0;
-  double _grandTotal = 0;
-  double _outstanding = 0;
+  double _grandTotal = 0.0;
+  double _totalPaidThisTerm = 0.0;
+  double _outstanding = 0.0;
 
   bool _loading = true;
   bool _exporting = false;
 
-  String _activeTerm = "";
-  String _activeSession = "";
+  String _term = "";
+  String _session = "";
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadReceipt();
   }
 
-  Future<void> _load() async {
+  Future<void> _loadReceipt() async {
     setState(() => _loading = true);
 
     final db = await _db.database;
 
-    _activeTerm = await _db.getActiveTerm();
-    _activeSession = (await _db.getActiveSession())?['sessionName'] ?? "";
+    final payRows = await db.query(
+      "payments",
+      where: "id = ?",
+      whereArgs: [widget.paymentId],
+      limit: 1,
+    );
 
-    _school = await _db.getSchoolProfile();
+    _payment = payRows.isNotEmpty ? payRows.first : null;
     
-    // Load student WITH class and arm names using JOIN
     final studentRows = await db.rawQuery('''
       SELECT 
         s.*,
@@ -78,27 +83,34 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
       _student = studentRows.first;
     }
 
-    // Load payments for CURRENT TERM only
-    _payments = await db.query(
-      "payments",
-      where: "studentId = ? AND term = ? AND session = ?",
-      whereArgs: [widget.studentId, _activeTerm, _activeSession],
-      orderBy: "paymentDate ASC",
-    );
+    _school = await _db.getSchoolProfile();
+    
+    _term = _payment?['term']?.toString() ?? await _db.getActiveTerm();
+    _session = _payment?['session']?.toString() ?? (await _db.getActiveSession())?['sessionName'] ?? "";
 
-    _totalPaid = 0;
-    for (var p in _payments) {
-      final amt = (p['amount'] as num?)?.toDouble() ?? 0.0;
-      _totalPaid += amt;
-    }
-
-    // Get current term's grand total
-    final bill = await _db.getBillForStudent(widget.studentId, _activeTerm, _activeSession);
+    final bill = await _db.getBillForStudent(widget.studentId, _term, _session);
     _grandTotal = bill != null ? (bill['totalAmount'] as num?)?.toDouble() ?? 0.0 : 0.0;
 
-    _outstanding = _grandTotal - _totalPaid;
+    final pays = await _db.getPayments(widget.studentId, term: _term, session: _session);
+    _totalPaidThisTerm = pays.fold<double>(
+      0.0,
+      (sum, p) => sum + ((p['amount'] as num?)?.toDouble() ?? 0.0),
+    );
 
-    if (mounted) setState(() => _loading = false);
+    _outstanding = _grandTotal - _totalPaidThisTerm;
+
+    if (mounted) {
+      setState(() => _loading = false);
+      
+      // NEW: Show export dialog if requested (e.g., after saving payment)
+      if (widget.showExportDialog) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _showExportOptionsDialog();
+          }
+        });
+      }
+    }
   }
 
   // ========================================
@@ -112,7 +124,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
           children: [
             Icon(Icons.share, color: Colors.blue),
             SizedBox(width: 8),
-            Text('Export Payment History'),
+            Text('Export Receipt As'),
           ],
         ),
         content: Column(
@@ -129,7 +141,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
               icon: Icons.picture_as_pdf,
               iconColor: Colors.red,
               title: 'PDF Document',
-              subtitle: 'Standard A4 format, full details',
+              subtitle: 'Standard format, easy to share',
               onTap: () {
                 Navigator.pop(context);
                 _exportAsPDF();
@@ -379,7 +391,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
   }
 
   // ========================================
-  // EXPORT AS PDF (A4 Format)
+  // EXPORT AS PDF
   // ========================================
   Future<void> _exportAsPDF() async {
     setState(() => _exporting = true);
@@ -387,13 +399,21 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
     try {
       final pdf = pw.Document();
       
+      final amount = (_payment?['amount'] as num?)?.toDouble() ?? 0.0;
+      final dateStr = _payment?['paymentDate']?.toString() ?? "";
+      final parsedDate = DateTime.tryParse(dateStr) ?? DateTime.now();
+      final formattedDate = DateFormat("dd/MM/yy HH:mm").format(parsedDate);
+      final method = _payment?['method']?.toString() ?? "";
+      final note = _payment?['note']?.toString() ?? "";
+      
       final schoolName = _school?['name'] ?? "School Name";
       final schoolAddress = _school?['address'] ?? "";
       final schoolPhone = _school?['phone'] ?? "";
+      final studentName = "${_student?['surname']} ${_student?['firstName']} ${_student?['otherName'] ?? ''}".trim();
       final studentClass = "${_student?['className'] ?? 'N/A'} - ${_student?['armName'] ?? 'N/A'}";
       final admissionNo = _student?['admissionNo'] ?? 'N/A';
 
-      // A4 FORMAT
+      // Standard A4 PDF format
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat.a4,
@@ -430,13 +450,18 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
                 child: pw.Column(
                   children: [
                     pw.Text(
-                      'PAYMENT HISTORY',
+                      'PAYMENT RECEIPT',
                       style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
                     ),
                     pw.SizedBox(height: 8),
                     pw.Text(
-                      '$_activeTerm - $_activeSession',
-                      style: pw.TextStyle(fontSize: 14, color: PdfColors.grey700),
+                      'Receipt No: ${widget.paymentId}',
+                      style: const pw.TextStyle(fontSize: 14),
+                    ),
+                    pw.SizedBox(height: 4),
+                    pw.Text(
+                      '$_term - $_session',
+                      style: pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
                     ),
                   ],
                 ),
@@ -454,7 +479,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    _buildPdfRow('Student Name:', widget.studentName),
+                    _buildPdfRow('Student Name:', studentName),
                     pw.SizedBox(height: 8),
                     _buildPdfRow('Class:', studentClass),
                     pw.SizedBox(height: 8),
@@ -465,64 +490,59 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
 
               pw.SizedBox(height: 20),
 
-              // Payment List Header
+              // Payment Details
               pw.Container(
-                padding: const pw.EdgeInsets.all(10),
-                decoration: const pw.BoxDecoration(
-                  color: PdfColors.grey200,
+                padding: const pw.EdgeInsets.all(15),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(),
+                  borderRadius: pw.BorderRadius.circular(8),
                 ),
-                child: pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    pw.Text('Date', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
-                    pw.Text('Method', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
-                    pw.Text('Amount', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                    _buildPdfRow('Payment Date:', formattedDate),
+                    pw.SizedBox(height: 8),
+                    _buildPdfRow('Payment Method:', method),
+                    if (note.isNotEmpty) ...[
+                      pw.SizedBox(height: 8),
+                      _buildPdfRow('Note:', note),
+                    ],
                   ],
                 ),
               ),
 
-              // Payment List
-              ...(_payments.isEmpty
-                  ? [
-                      pw.Container(
-                        padding: const pw.EdgeInsets.all(20),
-                        child: pw.Center(
-                          child: pw.Text(
-                            'No payments recorded yet',
-                            style: pw.TextStyle(fontSize: 12, color: PdfColors.grey600),
-                          ),
+              pw.SizedBox(height: 30),
+
+              // Amount Paid
+              pw.Center(
+                child: pw.Container(
+                  padding: const pw.EdgeInsets.all(20),
+                  decoration: pw.BoxDecoration(
+                    border: pw.Border.all(width: 3),
+                    borderRadius: pw.BorderRadius.circular(8),
+                  ),
+                  child: pw.Column(
+                    children: [
+                      pw.Text(
+                        'AMOUNT PAID',
+                        style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+                      ),
+                      pw.SizedBox(height: 10),
+                      pw.Text(
+                        '₦${NumberFormat("#,##0.00").format(amount)}',
+                        style: pw.TextStyle(
+                          fontSize: 32,
+                          fontWeight: pw.FontWeight.bold,
                         ),
                       ),
-                    ]
-                  : _payments.map((payment) {
-                      final amount = (payment['amount'] as num?)?.toDouble() ?? 0.0;
-                      final dateStr = payment['paymentDate']?.toString() ?? "";
-                      final parsedDate = DateTime.tryParse(dateStr) ?? DateTime.now();
-                      final formattedDate = DateFormat("dd/MM/yyyy").format(parsedDate);
-                      final method = payment['method']?.toString() ?? "";
-
-                      return pw.Container(
-                        padding: const pw.EdgeInsets.all(10),
-                        decoration: pw.BoxDecoration(
-                          border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300)),
-                        ),
-                        child: pw.Row(
-                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                          children: [
-                            pw.Text(formattedDate, style: const pw.TextStyle(fontSize: 12)),
-                            pw.Text(method, style: const pw.TextStyle(fontSize: 12)),
-                            pw.Text(
-                              '₦${NumberFormat("#,##0.00").format(amount)}',
-                              style: const pw.TextStyle(fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList()),
+                    ],
+                  ),
+                ),
+              ),
 
               pw.SizedBox(height: 30),
 
-              // Summary
+              // Balance Summary
               pw.Container(
                 padding: const pw.EdgeInsets.all(15),
                 decoration: pw.BoxDecoration(
@@ -539,8 +559,8 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
                     ),
                     pw.SizedBox(height: 8),
                     _buildPdfRow(
-                      'Total Paid:',
-                      '₦${NumberFormat("#,##0.00").format(_totalPaid)}',
+                      'Total Paid (Term):',
+                      '₦${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
                       bold: true,
                     ),
                     pw.Divider(thickness: 2),
@@ -563,7 +583,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
                 child: pw.Column(
                   children: [
                     pw.Text(
-                      'Payment history for $_activeTerm - $_activeSession',
+                      'Thank you for your payment',
                       style: pw.TextStyle(fontSize: 12, fontStyle: pw.FontStyle.italic),
                     ),
                     pw.SizedBox(height: 8),
@@ -581,7 +601,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
 
       // Save and share PDF
       final dir = await getApplicationDocumentsDirectory();
-      final fileName = 'PaymentHistory_${widget.studentName}_PDF.pdf';
+      final fileName = 'Receipt_${widget.paymentId}_PDF.pdf';
       final file = File('${dir.path}/$fileName');
       await file.writeAsBytes(await pdf.save());
 
@@ -592,8 +612,8 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
       // Share immediately
       await Share.shareXFiles(
         [XFile(file.path)],
-        subject: 'Payment History - ${widget.studentName}',
-        text: 'Payment history for $_activeTerm - $_activeSession',
+        subject: 'Payment Receipt #${widget.paymentId}',
+        text: 'Payment receipt for $studentName - $_term $_session',
       );
 
       if (!mounted) return;
@@ -645,8 +665,8 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
     setState(() => _exporting = true);
 
     try {
-      // Capture the history widget as image
-      final RenderRepaintBoundary boundary = _historyKey.currentContext!
+      // Capture the receipt widget as image
+      final RenderRepaintBoundary boundary = _receiptKey.currentContext!
           .findRenderObject() as RenderRepaintBoundary;
       
       final ui.Image image = await boundary.toImage(pixelRatio: 3.0);
@@ -657,7 +677,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
 
       // Save as JPEG
       final dir = await getApplicationDocumentsDirectory();
-      final fileName = 'PaymentHistory_${widget.studentName}_IMAGE.jpg';
+      final fileName = 'Receipt_${widget.paymentId}_IMAGE.jpg';
       final file = File('${dir.path}/$fileName');
       await file.writeAsBytes(pngBytes);
 
@@ -666,10 +686,11 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
       if (!mounted) return;
 
       // Share immediately
+      final studentName = "${_student?['surname']} ${_student?['firstName']}".trim();
       await Share.shareXFiles(
         [XFile(file.path)],
-        subject: 'Payment History - ${widget.studentName}',
-        text: 'Payment history for $_activeTerm - $_activeSession',
+        subject: 'Payment Receipt #${widget.paymentId}',
+        text: 'Payment receipt for $studentName - $_term $_session',
       );
 
       if (!mounted) return;
@@ -701,9 +722,17 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
     try {
       final pdf = pw.Document();
       
+      final amount = (_payment?['amount'] as num?)?.toDouble() ?? 0.0;
+      final dateStr = _payment?['paymentDate']?.toString() ?? "";
+      final parsedDate = DateTime.tryParse(dateStr) ?? DateTime.now();
+      final formattedDate = DateFormat("dd/MM/yy HH:mm").format(parsedDate);
+      final method = _payment?['method']?.toString() ?? "";
+      final note = _payment?['note']?.toString() ?? "";
+      
       final schoolName = _school?['name'] ?? "School Name";
       final schoolAddress = _school?['address'] ?? "";
       final schoolPhone = _school?['phone'] ?? "";
+      final studentName = "${_student?['surname']} ${_student?['firstName']} ${_student?['otherName'] ?? ''}".trim();
       final studentClass = "${_student?['className'] ?? 'N/A'} - ${_student?['armName'] ?? 'N/A'}";
       final admissionNo = _student?['admissionNo'] ?? 'N/A';
 
@@ -749,7 +778,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
 
               // Title
               pw.Text(
-                'PAYMENT HISTORY',
+                'PAYMENT RECEIPT',
                 textAlign: pw.TextAlign.center,
                 style: pw.TextStyle(
                   fontSize: size.titleFontSize - 1,
@@ -758,7 +787,13 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
               ),
               pw.SizedBox(height: size.lineSpacing),
               pw.Text(
-                '$_activeTerm - $_activeSession',
+                'Receipt No: ${widget.paymentId}',
+                textAlign: pw.TextAlign.center,
+                style: pw.TextStyle(fontSize: size.fontSize - 1, color: PdfColors.grey700),
+              ),
+              pw.SizedBox(height: size.lineSpacing / 2),
+              pw.Text(
+                '$_term - $_session',
                 textAlign: pw.TextAlign.center,
                 style: pw.TextStyle(fontSize: size.fontSize - 1, color: PdfColors.grey700),
               ),
@@ -771,7 +806,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    _buildThermalRow('Student:', widget.studentName, size),
+                    _buildThermalRow('Student:', studentName, size),
                     pw.SizedBox(height: size.lineSpacing),
                     _buildThermalRow('Class:', studentClass, size),
                     pw.SizedBox(height: size.lineSpacing),
@@ -782,67 +817,78 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
 
               pw.SizedBox(height: size.lineSpacing * 2),
               pw.Divider(thickness: 1),
-              pw.SizedBox(height: size.lineSpacing),
+              pw.SizedBox(height: size.lineSpacing * 2),
 
-              // Payment List
-              ..._payments.map((payment) {
-                final amount = (payment['amount'] as num?)?.toDouble() ?? 0.0;
-                final dateStr = payment['paymentDate']?.toString() ?? "";
-                final parsedDate = DateTime.tryParse(dateStr) ?? DateTime.now();
-                final formattedDate = DateFormat("dd/MM/yy").format(parsedDate);
-                final method = payment['method']?.toString() ?? "";
-
-                return pw.Container(
-                  margin: pw.EdgeInsets.only(bottom: size.lineSpacing),
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                        children: [
-                          pw.Text(
-                            formattedDate,
-                            style: pw.TextStyle(fontSize: size.fontSize, fontWeight: pw.FontWeight.bold),
-                          ),
-                          pw.Text(
-                            '₦${NumberFormat("#,##0.00").format(amount)}',
-                            style: pw.TextStyle(fontSize: size.fontSize, fontWeight: pw.FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                      if (method.isNotEmpty)
-                        pw.Text(
-                          'Method: $method',
-                          style: pw.TextStyle(fontSize: size.fontSize - 1, color: PdfColors.grey700),
-                        ),
-                      pw.Divider(height: size.lineSpacing * 2, thickness: 0.5, color: PdfColors.grey300),
-                    ],
-                  ),
-                );
-              }),
-
-              pw.SizedBox(height: size.lineSpacing),
-
-              // Summary
+              // Payment Details
               pw.Container(
+                width: double.infinity,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    _buildThermalRow('Date:', formattedDate, size),
+                    pw.SizedBox(height: size.lineSpacing),
+                    _buildThermalRow('Method:', method, size),
+                    if (note.isNotEmpty) ...[
+                      pw.SizedBox(height: size.lineSpacing),
+                      pw.Text('Note:', style: pw.TextStyle(fontSize: size.fontSize, fontWeight: pw.FontWeight.bold)),
+                      pw.Text(note, style: pw.TextStyle(fontSize: size.fontSize - 1, color: PdfColors.grey700)),
+                    ],
+                  ],
+                ),
+              ),
+
+              pw.SizedBox(height: size.lineSpacing * 2),
+              pw.Divider(thickness: 1),
+              pw.SizedBox(height: size.lineSpacing * 2),
+
+              // Amount
+              pw.Container(
+                padding: pw.EdgeInsets.all(size.margin),
+                decoration: pw.BoxDecoration(border: pw.Border.all(width: 2)),
+                child: pw.Column(
+                  children: [
+                    pw.Text(
+                      'AMOUNT PAID',
+                      style: pw.TextStyle(fontSize: size.fontSize + 1, fontWeight: pw.FontWeight.bold),
+                    ),
+                    pw.SizedBox(height: size.lineSpacing),
+                    pw.Text(
+                      '₦${NumberFormat("#,##0.00").format(amount)}',
+                      style: pw.TextStyle(
+                        fontSize: size.amountFontSize,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              pw.SizedBox(height: size.lineSpacing * 2),
+
+              // Balance
+              pw.Container(
+                width: double.infinity,
                 padding: pw.EdgeInsets.all(size.margin / 2),
-                decoration: pw.BoxDecoration(border: pw.Border.all(width: 1)),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(width: 1),
+                  color: PdfColors.grey100,
+                ),
                 child: pw.Column(
                   children: [
                     _buildThermalRow(
-                      'Grand Total:',
+                      'Grand Total (Term):',
                       '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
                       size,
                       bold: true,
                     ),
                     pw.SizedBox(height: size.lineSpacing),
                     _buildThermalRow(
-                      'Total Paid:',
-                      '₦${NumberFormat("#,##0.00").format(_totalPaid)}',
+                      'Total Paid (Term):',
+                      '₦${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
                       size,
                       bold: true,
                     ),
-                    pw.SizedBox(height: size.lineSpacing),
+                    pw.Divider(height: size.lineSpacing * 2, thickness: 1),
                     _buildThermalRow(
                       'Outstanding:',
                       '₦${NumberFormat("#,##0.00").format(_outstanding)}',
@@ -860,7 +906,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
               pw.Divider(thickness: 1),
               pw.SizedBox(height: size.lineSpacing),
               pw.Text(
-                'Thank you',
+                'Thank you for your payment',
                 textAlign: pw.TextAlign.center,
                 style: pw.TextStyle(fontSize: size.fontSize, fontStyle: pw.FontStyle.italic),
               ),
@@ -883,7 +929,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
 
       // Save thermal print PDF
       final dir = await getApplicationDocumentsDirectory();
-      final fileName = 'PaymentHistory_${widget.studentName}_${size.name}_THERMAL.pdf';
+      final fileName = 'Receipt_${widget.paymentId}_${size.name}_THERMAL.pdf';
       final file = File('${dir.path}/$fileName');
       await file.writeAsBytes(await pdf.save());
 
@@ -894,15 +940,15 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
       // Share to printer app
       await Share.shareXFiles(
         [XFile(file.path)],
-        subject: 'Print Payment History - ${widget.studentName}',
-        text: 'Payment history (${size.name}) for $_activeTerm - $_activeSession',
+        subject: 'Print Receipt #${widget.paymentId}',
+        text: 'Thermal receipt (${size.name}) for $studentName - $_term $_session',
       );
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Thermal history (${size.name}) ready to print'),
+          content: Text('Thermal receipt (${size.name}) ready to print'),
           backgroundColor: Colors.green,
           action: SnackBarAction(
             label: 'Share Again',
@@ -956,248 +1002,333 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
   // ========================================
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Payment Receipt'),
+          backgroundColor: Colors.teal,
+          foregroundColor: Colors.white,
+        ),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Payment History'),
-        backgroundColor: Colors.indigo,
+        title: const Text('Payment Receipt'),
+        backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
         actions: [
-          if (!_loading && !_exporting)
-            IconButton(
-              icon: const Icon(Icons.share),
-              onPressed: _showExportOptionsDialog,
-              tooltip: 'Export & Share',
-            ),
+          IconButton(
+            icon: const Icon(Icons.share),
+            onPressed: _showExportOptionsDialog,
+            tooltip: 'Export & Share',
+          ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _exporting
-              ? const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 16),
-                      Text('Exporting...'),
-                    ],
-                  ),
-                )
-              : RepaintBoundary(
-                  key: _historyKey,
-                  child: Container(
-                    color: Colors.white,
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
-                      child: _buildContent(),
-                    ),
-                  ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // Receipt Preview Card
+            Card(
+              elevation: 4,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: RepaintBoundary(
+                  key: _receiptKey,
+                  child: _buildReceiptContent(),
                 ),
-    );
-  }
-
-  Widget _buildContent() {
-    final className = _student?['className'] ?? "";
-    final armName = _student?['armName'] ?? "";
-    final admissionNo = _student?['admissionNo'] ?? "";
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // School Header
-        Center(
-          child: Column(
-            children: [
-              Text(
-                (_school?['name'] ?? "School Name").toUpperCase(),
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              if ((_school?['address'] ?? "").isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  _school?['address'] ?? "",
-                  style: const TextStyle(fontSize: 12),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-              if ((_school?['phone'] ?? "").isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  _school?['phone'] ?? "",
-                  style: const TextStyle(fontSize: 12),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 20),
-        const Divider(thickness: 2),
-        const SizedBox(height: 20),
-
-        // Title
-        Center(
-          child: Column(
-            children: [
-              const Text(
-                'PAYMENT HISTORY',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '$_activeTerm - $_activeSession',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey.shade600,
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 20),
-
-        // Student Info
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            children: [
-              _buildRow('Student:', widget.studentName),
-              const SizedBox(height: 8),
-              _buildRow('Class:', '$className - $armName'),
-              const SizedBox(height: 8),
-              _buildRow('Admission No:', admissionNo),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 20),
-
-        // Payment List Header
-        Container(
-          padding: const EdgeInsets.all(10),
-          color: Colors.grey.shade200,
-          child: const Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Date', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('Method', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('Amount', style: TextStyle(fontWeight: FontWeight.bold)),
-            ],
-          ),
-        ),
-
-        // Payment List
-        if (_payments.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(20),
-            child: Center(
-              child: Text(
-                'No payments recorded yet',
-                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
               ),
             ),
-          )
-        else
-          ..._payments.map((payment) {
-            final amount = (payment['amount'] as num?)?.toDouble() ?? 0.0;
-            final dateStr = payment['paymentDate']?.toString() ?? "";
-            final parsedDate = DateTime.tryParse(dateStr) ?? DateTime.now();
-            final formattedDate = DateFormat("dd/MM/yyyy").format(parsedDate);
-            final method = payment['method']?.toString() ?? "";
 
-            return Container(
-              padding: const EdgeInsets.all(10),
+            const SizedBox(height: 24),
+
+            // Export Button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _exporting ? null : _showExportOptionsDialog,
+                icon: _exporting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.share),
+                label: Text(
+                  _exporting ? 'Exporting...' : 'Export & Share Receipt',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.all(16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Info Card
+            Container(
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(formattedDate, style: const TextStyle(fontSize: 14)),
-                  Text(method, style: const TextStyle(fontSize: 14)),
-                  Text(
-                    '₦${NumberFormat("#,##0.00").format(amount)}',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Choose PDF, JPEG, or Thermal Printer format to share',
+                      style: TextStyle(fontSize: 13),
+                    ),
                   ),
                 ],
               ),
-            );
-          }),
-
-        const SizedBox(height: 20),
-
-        // Summary
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade100,
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            children: [
-              _buildRow(
-                'Grand Total (Term):',
-                '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
-                bold: true,
-              ),
-              const SizedBox(height: 8),
-              _buildRow(
-                'Total Paid:',
-                '₦${NumberFormat("#,##0.00").format(_totalPaid)}',
-                bold: true,
-              ),
-              const Divider(),
-              _buildRow(
-                'Outstanding Balance:',
-                '₦${NumberFormat("#,##0.00").format(_outstanding)}',
-                bold: true,
-                color: _outstanding > 0 ? Colors.red : Colors.green,
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
+      ),
+    );
+  }
 
-        const SizedBox(height: 20),
-        const Divider(),
-        const SizedBox(height: 10),
+  // Receipt Preview Widget
+  Widget _buildReceiptContent() {
+    final amount = (_payment?['amount'] as num?)?.toDouble() ?? 0.0;
+    final dateStr = _payment?['paymentDate']?.toString() ?? "";
+    final parsedDate = DateTime.tryParse(dateStr) ?? DateTime.now();
+    final formattedDate = DateFormat("dd MMM yyyy, HH:mm").format(parsedDate);
+    final method = _payment?['method']?.toString() ?? "";
+    final note = _payment?['note']?.toString() ?? "";
+    
+    final schoolName = _school?['name'] ?? "School Name";
+    final schoolAddress = _school?['address'] ?? "";
+    final schoolPhone = _school?['phone'] ?? "";
+    final studentName = "${_student?['surname']} ${_student?['firstName']} ${_student?['otherName'] ?? ''}".trim();
+    final studentClass = "${_student?['className'] ?? 'N/A'} - ${_student?['armName'] ?? 'N/A'}";
+    final admissionNo = _student?['admissionNo'] ?? 'N/A';
 
-        // Footer
-        Center(
-          child: Column(
-            children: [
-              const Text(
-                'Payment history for current term',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontStyle: FontStyle.italic,
+    return Container(
+      color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // School Header
+          Center(
+            child: Column(
+              children: [
+                Text(
+                  schoolName.toUpperCase(),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Generated: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey.shade600,
-                ),
-              ),
-            ],
+                if (schoolAddress.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    schoolAddress,
+                    style: const TextStyle(fontSize: 12),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+                if (schoolPhone.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    schoolPhone,
+                    style: const TextStyle(fontSize: 12),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ],
+            ),
           ),
-        ),
-      ],
+
+          const SizedBox(height: 20),
+          const Divider(thickness: 2),
+          const SizedBox(height: 20),
+
+          // Title
+          Center(
+            child: Column(
+              children: [
+                const Text(
+                  'PAYMENT RECEIPT',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Receipt No: ${widget.paymentId}',
+                  style: const TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$_term - $_session',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Student Info
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                _buildRow('Student Name:', studentName),
+                const SizedBox(height: 8),
+                _buildRow('Class:', studentClass),
+                const SizedBox(height: 8),
+                _buildRow('Admission No:', admissionNo),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // Payment Details
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                _buildRow('Payment Date:', formattedDate),
+                const SizedBox(height: 8),
+                _buildRow('Payment Method:', method),
+                if (note.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _buildRow('Note:', note),
+                ],
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Amount Paid
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                border: Border.all(width: 3, color: Colors.green),
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.green.shade50,
+              ),
+              child: Column(
+                children: [
+                  const Text(
+                    'AMOUNT PAID',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '₦${NumberFormat("#,##0.00").format(amount)}',
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Balance Summary
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                _buildRow(
+                  'Grand Total (Term):',
+                  '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
+                  bold: true,
+                ),
+                const SizedBox(height: 8),
+                _buildRow(
+                  'Total Paid (Term):',
+                  '₦${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
+                  bold: true,
+                ),
+                const Divider(),
+                _buildRow(
+                  'Outstanding Balance:',
+                  '₦${NumberFormat("#,##0.00").format(_outstanding)}',
+                  bold: true,
+                  color: _outstanding > 0 ? Colors.red : Colors.green,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+          const Divider(),
+          const SizedBox(height: 10),
+
+          // Footer
+          Center(
+            child: Column(
+              children: [
+                const Text(
+                  'Thank you for your payment',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Generated: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 

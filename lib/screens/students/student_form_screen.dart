@@ -1,8 +1,6 @@
 // lib/screens/students/student_form_screen.dart
 
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../db/database_helper.dart';
 
@@ -37,7 +35,6 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   List<Map<String, dynamic>> _arms = [];
 
   bool _loading = true;
-  String? _photoPath;
 
   @override
   void initState() {
@@ -59,7 +56,8 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   }
 
   Future<void> _loadArms(int classId) async {
-    _arms = await _db.getArms(classId);
+    // FIXED: Use getArmsByClass instead of getArms
+    _arms = await _db.getArmsByClass(classId);
     _selectedArm = null;
     if (mounted) setState(() {});
   }
@@ -90,18 +88,6 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   }
 
   // ----------------------------------------------------------
-  // PHOTO CAPTURE
-  // ----------------------------------------------------------
-  Future<void> _capturePhoto() async {
-    final picker = ImagePicker();
-    final file = await picker.pickImage(source: ImageSource.camera);
-
-    if (file != null) {
-      setState(() => _photoPath = file.path);
-    }
-  }
-
-  // ----------------------------------------------------------
   // SAVE STUDENT
   // ----------------------------------------------------------
   Future<void> _save() async {
@@ -125,7 +111,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       'parentPhone': _parentPhoneCtrl.text.trim(),
       'parentEmail': _parentEmailCtrl.text.trim(),
       'parentAddress': _parentAddressCtrl.text.trim(),
-      'photoPath': _photoPath,
+      'photoPath': null,
     };
 
     await _db.insertStudent(data);
@@ -169,30 +155,6 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // PHOTO
-              Center(
-                child: Stack(
-                  alignment: Alignment.bottomRight,
-                  children: [
-                    CircleAvatar(
-                      radius: 60,
-                      backgroundColor: Colors.grey[300],
-                      backgroundImage:
-                          _photoPath != null ? FileImage(File(_photoPath!)) : null,
-                      child: _photoPath == null
-                          ? const Icon(Icons.person, size: 60)
-                          : null,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.camera_alt, size: 30),
-                      onPressed: _capturePhoto,
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 20),
-
               // ADMISSION NUMBER
               TextFormField(
                 controller: _admCtrl,

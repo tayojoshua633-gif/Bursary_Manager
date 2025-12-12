@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:excel/excel.dart';
+import 'package:excel/excel.dart' hide Border;
 import 'package:path_provider/path_provider.dart';
 
 class ExcelGenerator {
@@ -8,18 +8,25 @@ class ExcelGenerator {
     var excel = Excel.createExcel();
     Sheet sheet = excel['Students'];
 
-    // Headers
-    sheet.appendRow(["SN", "Surname", "First Name", "Class", "Admission No"]);
+    // Headers - Use TextCellValue for Excel 4.0+
+    sheet.appendRow([
+      TextCellValue("SN"),
+      TextCellValue("Surname"),
+      TextCellValue("First Name"),
+      TextCellValue("Class"),
+      TextCellValue("Admission No"),
+    ]);
 
+    // Data rows - Use TextCellValue for all string values
     for (int i = 0; i < students.length; i++) {
       final s = students[i];
 
       sheet.appendRow([
-        (i + 1).toString(),
-        s["surname"] ?? "",
-        s["firstName"] ?? "",
-        s["className"] ?? "",
-        s["admissionNo"] ?? "",
+        TextCellValue((i + 1).toString()),
+        TextCellValue(s["surname"] ?? ""),
+        TextCellValue(s["firstName"] ?? ""),
+        TextCellValue(s["className"] ?? ""),
+        TextCellValue(s["admissionNo"] ?? ""),
       ]);
     }
 

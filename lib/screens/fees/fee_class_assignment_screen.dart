@@ -23,8 +23,6 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
   bool _loading = true;
   double _total = 0;
 
-  final List<String> _terms = ["1st Term", "2nd Term", "3rd Term"];
-
   @override
   void initState() {
     super.initState();
@@ -73,8 +71,8 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
 
     final rows = await _db.getClassFees(
       classId,
-      term: _activeTerm ?? "",
-      session: _activeSession ?? "",
+      _activeTerm ?? "",
+      _activeSession ?? "",
     );
 
     for (var item in _feeItems) {
@@ -147,15 +145,23 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
 
     await _db.replaceClassFeesFor(
       _selectedClassId!,
-      term: _activeTerm!,
-      session: sessionVal,
-      fees: rows,
+      _activeTerm!,
+      sessionVal,
+      rows,
     );
 
     if (!mounted) return;
 
+    final className = _classes.firstWhere(
+      (c) => c['id'] == _selectedClassId,
+      orElse: () => {'name': 'Unknown'},
+    )['name'];
+
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Class fee assignments saved")),
+      SnackBar(
+        content: Text('Fees saved for $className'),
+        backgroundColor: Colors.green,
+      ),
     );
 
     Navigator.pop(context, true);
@@ -175,22 +181,112 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Assign Fees to Class")),
+      appBar: AppBar(
+        title: const Text("Assign Fees to Class"),
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                // ACTIVE TERM/SESSION DISPLAY - READ ONLY
+                Card(
+                  color: Colors.indigo.shade50,
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.info_outline,
+                                color: Colors.indigo.shade700),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Active Period',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Icon(Icons.event,
+                                size: 18, color: Colors.indigo.shade700),
+                            const SizedBox(width: 8),
+                            const Text('Term: '),
+                            Text(
+                              _activeTerm ?? 'Not set',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(Icons.calendar_today,
+                                size: 18, color: Colors.indigo.shade700),
+                            const SizedBox(width: 8),
+                            const Text('Session: '),
+                            Text(
+                              _activeSession ?? 'Not set',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade100,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.info,
+                                  size: 14, color: Colors.blue.shade700),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'Fees will be assigned for this term/session',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.blue.shade900,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
                 // CLASS SELECT
-                const Text("Select Class",
-                    style:
-                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
+                const Text(
+                  "Select Class",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
 
                 DropdownButtonFormField<int>(
                   initialValue: _selectedClassId,
-                  decoration:
-                      const InputDecoration(border: OutlineInputBorder()),
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.school),
+                    hintText: 'Choose a class',
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                  ),
                   items: _classes
                       .map((c) => DropdownMenuItem<int>(
                             value: c['id'],
@@ -200,97 +296,208 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
                   onChanged: _onClassChanged,
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 24),
 
-                // TERM SELECT
-                const Text("Select Term",
-                    style:
-                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-
-                DropdownButtonFormField<String>(
-                  initialValue: _activeTerm,
-                  decoration:
-                      const InputDecoration(border: OutlineInputBorder()),
-                  items: _terms
-                      .map((t) => DropdownMenuItem<String>(
-                            value: t,
-                            child: Text(t),
-                          ))
-                      .toList(),
-                  onChanged: (v) async {
-                    if (v == null) return;
-                    _activeTerm = v;
-                    await _load();
-                    if (_selectedClassId != null) {
-                      await _onClassChanged(_selectedClassId);
-                    }
-                  },
+                // FEE ITEMS SECTION
+                Row(
+                  children: [
+                    Icon(Icons.receipt_long, color: Colors.indigo.shade700),
+                    const SizedBox(width: 8),
+                    Text(
+                      "Fee Items (${_feeItems.length})",
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
-
-                const SizedBox(height: 20),
-
-                // FEE ITEMS
-                const Text("Fee Items",
-                    style:
-                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 const Divider(),
 
+                // Empty state
+                if (_feeItems.isEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Icon(Icons.inbox,
+                                size: 48, color: Colors.grey.shade400),
+                            const SizedBox(height: 12),
+                            Text(
+                              'No fee items for this term/session',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Create fee items first',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // Fee items list
                 ..._feeItems.map((item) {
                   final id = item['id'] as int;
+                  final name = item['name'] ?? '';
+                  final defaultAmount = (item['defaultAmount'] ?? 0).toStringAsFixed(2);
 
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            item['name'],
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w500),
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    elevation: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            backgroundColor: Colors.indigo.shade100,
+                            child: Icon(Icons.attach_money,
+                                color: Colors.indigo.shade700, size: 20),
                           ),
-                        ),
-                        SizedBox(
-                          width: 120,
-                          child: TextField(
-                            controller: _amountCtrl[id],
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: "Amount",
-                              border: OutlineInputBorder(),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Default: ₦$defaultAmount',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                              ],
                             ),
-                            onChanged: (_) => _recalculateTotal(),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 12),
+                          SizedBox(
+                            width: 120,
+                            child: TextField(
+                              controller: _amountCtrl[id],
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: "Amount",
+                                border: OutlineInputBorder(),
+                                prefixText: '₦',
+                                isDense: true,
+                              ),
+                              onChanged: (_) => _recalculateTotal(),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 }),
 
                 const SizedBox(height: 20),
 
+                // TOTAL DISPLAY
                 Container(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.blue.shade200),
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.green.shade200, width: 2),
                   ),
-                  child: Text(
-                    "Total: ₦${_total.toStringAsFixed(2)}",
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 17,
-                    ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.calculate, color: Colors.green.shade700),
+                          const SizedBox(width: 8),
+                          const Text(
+                            "Total Bill:",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 17,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        "₦${_total.toStringAsFixed(2)}",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 20,
+                          color: Colors.green.shade700,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
 
                 const SizedBox(height: 25),
 
-                ElevatedButton(
-                  onPressed: _saveAssignments,
-                  child: const Text("SAVE"),
+                // SAVE BUTTON
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _feeItems.isEmpty ? null : _saveAssignments,
+                    icon: const Icon(Icons.save),
+                    label: const Text(
+                      "SAVE ASSIGNMENTS",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.indigo,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.all(16),
+                      disabledBackgroundColor: Colors.grey.shade300,
+                    ),
+                  ),
                 ),
+
+                const SizedBox(height: 12),
+
+                // Help text
+                if (_selectedClassId == null)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline,
+                            size: 18, color: Colors.orange.shade700),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Select a class to assign fees',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
     );

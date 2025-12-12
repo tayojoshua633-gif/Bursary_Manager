@@ -7,9 +7,11 @@ import '../payments/payment_student_select_screen.dart';
 import '../classes/class_list_screen.dart';
 import '../fees/fee_item_list_screen.dart';
 import '../reports/daily_report_screen.dart';
-
-// NEW IMPORT — Data Management Page
 import '../settings/clear_data_screen.dart';
+
+// NEW IMPORTS - Deactivation features
+import '../students/deactivate_student_screen.dart';
+import '../students/inactive_students_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -21,10 +23,16 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   final DatabaseHelper _db = DatabaseHelper();
 
-  int _totalStudents = 0;
+  int _totalActiveStudents = 0;
+  int _totalInactiveStudents = 0;
+  
+  // CORRECTED: Term-specific financial data
   double _totalBills = 0;
   double _totalPayments = 0;
   double _outstanding = 0;
+  
+  String _currentTerm = "";
+  String _currentSession = "";
 
   bool _loading = true;
 
@@ -38,26 +46,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (mounted) setState(() => _loading = true);
 
     try {
+      // Use the database helper methods instead of raw queries
+      final activeStudents = await _db.getActiveStudents();
+      _totalActiveStudents = activeStudents.length;
+
+      final inactiveStudents = await _db.getInactiveStudents();
+      _totalInactiveStudents = inactiveStudents.length;
+
+      // Get current term and session
+      _currentTerm = await _db.getActiveTerm();
+      final sessionData = await _db.getActiveSession();
+      _currentSession = sessionData?['sessionName'] ?? "";
+
+      // Get database for financial queries
       final db = await _db.database;
 
-      // Total students
-      final students =
-          await db.rawQuery("SELECT COUNT(*) AS count FROM students");
-      _totalStudents =
-          students.isNotEmpty ? (students.first["count"] as int? ?? 0) : 0;
+      // CORRECTED: Total bills for CURRENT TERM only
+      final bills = await db.rawQuery(
+        "SELECT COALESCE(SUM(totalAmount), 0) AS total FROM student_bills WHERE term = ? AND session = ?",
+        [_currentTerm, _currentSession],
+      );
+      _totalBills = bills.isNotEmpty
+          ? (bills.first["total"] as num? ?? 0).toDouble()
+          : 0;
 
-      // Total expected bills
-      final bills =
-          await db.rawQuery("SELECT SUM(totalAmount) AS total FROM student_bills");
-      _totalBills =
-          bills.isNotEmpty ? (bills.first["total"] as num? ?? 0).toDouble() : 0;
-
-      // Total payments
-      final pays =
-          await db.rawQuery("SELECT SUM(amount) AS paid FROM payments");
+      // CORRECTED: Total payments for CURRENT TERM only
+      final pays = await db.rawQuery(
+        "SELECT COALESCE(SUM(amount), 0) AS paid FROM payments WHERE term = ? AND session = ?",
+        [_currentTerm, _currentSession],
+      );
       _totalPayments =
           pays.isNotEmpty ? (pays.first["paid"] as num? ?? 0).toDouble() : 0;
 
+      // CORRECTED: Outstanding for CURRENT TERM
       _outstanding = _totalBills - _totalPayments;
     } catch (e, st) {
       debugPrint("Dashboard load error: $e\n$st");
@@ -72,7 +93,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: ListTile(
         leading: CircleAvatar(
           radius: 22,
-          backgroundColor: color.withAlpha((0.15 * 255).round()),
+          backgroundColor: color.withValues(alpha: 0.15),
           child: Icon(icon, size: 28, color: color),
         ),
         title: Text(title),
@@ -95,11 +116,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ) {
     return Expanded(
       child: GestureDetector(
-        onTap: () {
-          Navigator.push(
+        onTap: () async {
+          await Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => screen),
           );
+          // Refresh dashboard when returning from certain screens
+          if (screen is DeactivateStudentScreen ||
+              screen is InactiveStudentsScreen) {
+            _loadDashboardData();
+          }
         },
         child: Card(
           child: Container(
@@ -128,7 +154,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Dashboard")),
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Dashboard"),
+            if (_currentTerm.isNotEmpty && _currentSession.isNotEmpty)
+              Text(
+                "$_currentTerm - $_currentSession",
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.normal,
+                ),
+              ),
+          ],
+        ),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -136,21 +177,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  // Stats
-                  _statCard("Total Students", "$_totalStudents",
-                      Icons.people, Colors.indigo),
+                  // Stats - Active Students
+                  _statCard(
+                    "Total Students",
+                    "$_totalActiveStudents",
+                    Icons.people,
+                    Colors.indigo,
+                  ),
 
-                  _statCard("Total Fees Expected",
-                      "₦${_totalBills.toStringAsFixed(2)}",
-                      Icons.account_balance_wallet, Colors.green),
+                  // Show inactive students count if there are any
+                  if (_totalInactiveStudents > 0)
+                    _statCard(
+                      "Inactive Students",
+                      "$_totalInactiveStudents",
+                      Icons.person_off,
+                      Colors.orange,
+                    ),
 
-                  _statCard("Total Payments Received",
-                      "₦${_totalPayments.toStringAsFixed(2)}",
-                      Icons.check_circle, Colors.blue),
+                  // CORRECTED: Term-specific financial stats
+                  _statCard(
+                    "Total Fees Expected (This Term)",
+                    "₦${_totalBills.toStringAsFixed(2)}",
+                    Icons.account_balance_wallet,
+                    Colors.green,
+                  ),
 
-                  _statCard("Outstanding Balance",
-                      "₦${_outstanding.toStringAsFixed(2)}",
-                      Icons.warning, Colors.red),
+                  _statCard(
+                    "Total Payments Received (This Term)",
+                    "₦${_totalPayments.toStringAsFixed(2)}",
+                    Icons.check_circle,
+                    Colors.blue,
+                  ),
+
+                  _statCard(
+                    "Outstanding Balance (This Term)",
+                    "₦${_outstanding.toStringAsFixed(2)}",
+                    Icons.warning,
+                    Colors.red,
+                  ),
 
                   const SizedBox(height: 20),
                   const Text(
@@ -202,7 +266,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
 
-                  // ROW 4 — NEW: DATA CLEARING PAGE
+                  // ROW 4 - Student Deactivation Features
+                  Row(
+                    children: [
+                      _quickButton(
+                        "Deactivate Students",
+                        Icons.person_off,
+                        const DeactivateStudentScreen(),
+                        context,
+                      ),
+                      _quickButton(
+                        "Inactive Students",
+                        Icons.archive,
+                        const InactiveStudentsScreen(),
+                        context,
+                      ),
+                    ],
+                  ),
+
+                  // ROW 5 - Data Management
                   Row(
                     children: [
                       _quickButton(

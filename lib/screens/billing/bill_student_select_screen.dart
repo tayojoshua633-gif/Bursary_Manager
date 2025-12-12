@@ -16,6 +16,7 @@ class _BillStudentSelectScreenState extends State<BillStudentSelectScreen> {
 
   bool _loading = true;
   List<Map<String, dynamic>> _students = [];
+  List<Map<String, dynamic>> _allStudents = []; // Store all students for filtering
 
   @override
   void initState() {
@@ -23,23 +24,52 @@ class _BillStudentSelectScreenState extends State<BillStudentSelectScreen> {
     _loadStudents();
   }
 
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadStudents() async {
     setState(() => _loading = true);
 
-    final rows = await _db.getAllStudents();
+    // Load active students WITH class and arm names using JOIN
+    final db = await _db.database;
+    final rows = await db.rawQuery('''
+      SELECT 
+        s.*,
+        c.name as className,
+        a.name as armName
+      FROM students s
+      LEFT JOIN classes c ON s.classId = c.id
+      LEFT JOIN arms a ON s.armId = a.id
+      WHERE s.isActive = 1
+      ORDER BY s.surname ASC, s.firstName ASC
+    ''');
+    
+    _allStudents = rows;
     _students = rows;
 
     if (mounted) setState(() => _loading = false);
   }
 
-  Future<void> _search() async {
-    final kw = _searchCtrl.text.trim();
+  Future<void> _search(String keyword) async {
     setState(() => _loading = true);
 
-    if (kw.isEmpty) {
-      _students = await _db.getAllStudents();
+    // Filter in-memory
+    if (keyword.trim().isEmpty) {
+      _students = _allStudents;
     } else {
-      _students = await _db.searchStudents(kw);
+      final kw = keyword.trim().toLowerCase();
+      _students = _allStudents.where((student) {
+        final surname = (student['surname'] ?? '').toString().toLowerCase();
+        final firstName = (student['firstName'] ?? '').toString().toLowerCase();
+        final admissionNo = (student['admissionNo'] ?? '').toString().toLowerCase();
+        
+        return surname.contains(kw) || 
+               firstName.contains(kw) || 
+               admissionNo.contains(kw);
+      }).toList();
     }
 
     if (mounted) setState(() => _loading = false);
@@ -66,13 +96,31 @@ class _BillStudentSelectScreenState extends State<BillStudentSelectScreen> {
   Widget _studentTile(Map<String, dynamic> s) {
     final name = "${s['surname']} ${s['firstName']}".trim();
     final adm = s['admissionNo'] ?? '';
-    final cls = s['className'] ?? '';
-    final arm = s['armName'] ?? '';
+    final cls = s['className'] ?? 'No Class';
+    final arm = s['armName'] ?? 'No Arm';
 
     return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: ListTile(
-        title: Text(name),
-        subtitle: Text("Adm: $adm   |   $cls $arm"),
+        leading: CircleAvatar(
+          backgroundColor: Colors.green.shade100,
+          child: Icon(Icons.receipt_long, color: Colors.green.shade700),
+        ),
+        title: Text(
+          name,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Adm: $adm"),
+            Text(
+              "$cls - $arm",
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+        isThreeLine: true,
         trailing: const Icon(Icons.arrow_forward_ios, size: 16),
         onTap: () => _openBilling(s),
       ),
@@ -82,7 +130,11 @@ class _BillStudentSelectScreenState extends State<BillStudentSelectScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Select Student for Billing")),
+      appBar: AppBar(
+        title: const Text("Select Student for Billing"),
+        backgroundColor: Colors.green.shade700,
+        foregroundColor: Colors.white,
+      ),
       body: Column(
         children: [
           // SEARCH BAR
@@ -91,25 +143,79 @@ class _BillStudentSelectScreenState extends State<BillStudentSelectScreen> {
             child: TextField(
               controller: _searchCtrl,
               decoration: InputDecoration(
-                labelText: "Search by name or admission no.",
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.search),
-                  onPressed: _search,
-                ),
+                labelText: "Search active students...",
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchCtrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          _loadStudents();
+                        },
+                      )
+                    : null,
                 border: const OutlineInputBorder(),
               ),
-              onSubmitted: (_) => _search(),
+              onChanged: (value) => _search(value),
             ),
           ),
 
+          // INFO BANNER
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: Colors.green.shade50,
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, size: 16, color: Colors.green.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Only active students can be billed (${_students.length})",
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.green.shade900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // STUDENT LIST
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _students.isEmpty
-                    ? const Center(child: Text("No students found."))
-                    : ListView.builder(
-                        itemCount: _students.length,
-                        itemBuilder: (_, i) => _studentTile(_students[i]),
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.people_outline,
+                                size: 64, color: Colors.grey.shade400),
+                            const SizedBox(height: 16),
+                            Text(
+                              _searchCtrl.text.isEmpty
+                                  ? "No active students found."
+                                  : "No active students match your search.",
+                              style: TextStyle(
+                                  fontSize: 16, color: Colors.grey.shade600),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              "Add students to begin billing",
+                              style: TextStyle(
+                                  fontSize: 14, color: Colors.grey.shade500),
+                            ),
+                          ],
+                        ),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _loadStudents,
+                        child: ListView.builder(
+                          itemCount: _students.length,
+                          itemBuilder: (_, i) => _studentTile(_students[i]),
+                        ),
                       ),
           ),
         ],

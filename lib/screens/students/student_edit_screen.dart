@@ -74,7 +74,8 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
   }
 
   Future<void> _loadArms(int classId) async {
-    final a = await _db.getArms(classId);
+    // FIXED: Use getArmsByClass instead of getArms
+    final a = await _db.getArmsByClass(classId);
     setState(() {
       _arms = a;
     });
@@ -191,10 +192,11 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
               ),
               const SizedBox(height: 20),
 
+              // FIXED: Changed 'value' to 'initialValue' (Line 198)
               DropdownButtonFormField<String>(
                 decoration: const InputDecoration(
                     labelText: "Gender", border: OutlineInputBorder()),
-                initialValue: _gender,
+                initialValue: _gender,  // ✅ FIXED: was 'value'
                 items: const [
                   DropdownMenuItem(value: "Male", child: Text("Male")),
                   DropdownMenuItem(value: "Female", child: Text("Female")),
@@ -218,10 +220,11 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
 
               const SizedBox(height: 20),
 
+              // FIXED: Changed 'value' to 'initialValue' (Line 225)
               DropdownButtonFormField<int>(
                 decoration: const InputDecoration(
                     labelText: "Class", border: OutlineInputBorder()),
-                initialValue: _classId,
+                initialValue: _classId,  // ✅ FIXED: was 'value'
                 items: _classes
                     .map((c) => DropdownMenuItem<int>(
                         value: c['id'], child: Text(c['name'])))
@@ -238,10 +241,11 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
 
               const SizedBox(height: 20),
 
+              // FIXED: Changed 'value' to 'initialValue' (Line 245)
               DropdownButtonFormField<int>(
                 decoration: const InputDecoration(
                     labelText: "Arm", border: OutlineInputBorder()),
-                initialValue: _armId,
+                initialValue: _armId,  // ✅ FIXED: was 'value'
                 items: _arms
                     .map((a) => DropdownMenuItem<int>(
                         value: a['id'], child: Text(a['name'])))
