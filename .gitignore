@@ -53,3 +53,5 @@ android/build/
 nul
 tmpclaude-*-cwd
 temp_db.db
+packages/flutter_usb_printer/android/.gradle/
+packages/flutter_usb_printer/example/android/.gradle/
