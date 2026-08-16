@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:bursary_manager/db/database_helper.dart';
+import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import 'package:bursary_manager/models/arm.dart';
 
 class ArmFormScreen extends StatefulWidget {
@@ -16,7 +16,7 @@ class _ArmFormScreenState extends State<ArmFormScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   bool _saving = false;
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   @override
   void initState() {

@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+android/build/
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/
+
+# Stray temp/session artifacts
+nul
+tmpclaude-*-cwd
+temp_db.db

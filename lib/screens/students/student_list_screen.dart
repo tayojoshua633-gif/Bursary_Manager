@@ -1,8 +1,9 @@
 // lib/screens/students/student_list_screen.dart
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:bursary_manager/db/database_helper.dart';
-import 'package:bursary_manager/models/student.dart';
+import 'package:bursary_manager/data/database_helper_wrapper.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../models/student.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
@@ -16,6 +17,11 @@ import 'student_details_screen.dart';
 // 👇 ADD THIS IMPORT
 // ========================================
 import 'batch_student_upload_screen.dart';
+import '../../utils/permission_helper.dart';
+import '../../utils/display_settings_helper.dart';
+import '../../utils/navigation_helper.dart';
+import '../../utils/sibling_helper.dart';
+import '../../widgets/sibling_mark.dart';
 // ========================================
 
 class StudentListScreen extends StatefulWidget {
@@ -26,18 +32,45 @@ class StudentListScreen extends StatefulWidget {
 }
 
 class _StudentListScreenState extends State<StudentListScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final TextEditingController _searchCtrl = TextEditingController();
 
   List<Student> _students = [];
   List<Student> _allStudents = [];
   List<Map<String, dynamic>> _classes = [];
+  List<Map<String, dynamic>> _arms = [];
+  Set<String> _siblingPhones = {};
   bool _loading = true;
+  int? _selectedClassFilter; // null means "All Classes"
+  int? _selectedArmFilter; // null means "All Arms"
+  Map<String, dynamic>? _currentUser;
+  bool _canManageStudents = false;
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentUser();
     _loadStudents();
+  }
+
+  Future<void> _loadCurrentUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userType = prefs.getString('userType') ?? 'bursar';
+    final userId = prefs.getInt('userId') ?? 0;
+    final username = prefs.getString('username') ?? 'User';
+
+    final currentUser = {
+      'id': userId,
+      'userType': userType,
+      'username': username,
+    };
+
+    final canManage = await PermissionHelper.hasPermission(currentUser, 'students_manage');
+
+    setState(() {
+      _currentUser = currentUser;
+      _canManageStudents = canManage;
+    });
   }
 
   @override
@@ -49,66 +82,115 @@ class _StudentListScreenState extends State<StudentListScreen> {
   Future<void> _loadStudents() async {
     setState(() => _loading = true);
 
-    // Load classes for export
+    // Load classes and arms
     _classes = await _db.getClasses();
+    _arms = await _db.getArms();
 
-    // Load ACTIVE students WITH class and arm names using JOIN
-    final db = await _db.database;
-    final raw = await db.rawQuery('''
-      SELECT 
-        s.*,
-        c.name as className,
-        a.name as armName
-      FROM students s
-      LEFT JOIN classes c ON s.classId = c.id
-      LEFT JOIN arms a ON s.armId = a.id
-      WHERE s.isActive = 1
-      ORDER BY s.surname ASC, s.firstName ASC
-    ''');
-
+    // Load ACTIVE students WITH class and arm names (works in all modes)
+    final raw = await _db.getActiveStudentsWithDetails();
     final list = raw.map((m) => Student.fromMap(m)).toList();
+    final siblingPhones = computeSiblingPhones(raw);
 
     if (!mounted) return;
 
     setState(() {
       _allStudents = list;
-      _students = list;
+      _siblingPhones = siblingPhones;
       _loading = false;
     });
+
+    // Apply filters to maintain filter state after refresh
+    _applyFilters();
   }
 
-  Future<void> _searchStudents(String keyword) async {
-    if (keyword.trim().isEmpty) {
-      setState(() => _students = _allStudents);
-    } else {
-      final kw = keyword.trim().toLowerCase();
-      setState(() {
-        _students = _allStudents.where((student) {
+  Future<void> _applyFilters() async {
+    final keyword = _searchCtrl.text.trim();
+
+    setState(() {
+      // Start with all students
+      List<Student> filtered = _allStudents;
+
+      // Apply class filter first
+      if (_selectedClassFilter != null) {
+        filtered = filtered.where((s) => s.classId == _selectedClassFilter).toList();
+      }
+
+      // Apply arm filter
+      if (_selectedArmFilter != null) {
+        filtered = filtered.where((s) => s.armId == _selectedArmFilter).toList();
+      }
+
+      // Then apply search keyword
+      if (keyword.isNotEmpty) {
+        final kw = keyword.toLowerCase();
+        filtered = filtered.where((student) {
           final surname = student.surname.toLowerCase();
           final firstName = student.firstName.toLowerCase();
+          final otherName = (student.otherName ?? '').toLowerCase();
           final admissionNo = student.admissionNo.toLowerCase();
           final className = (student.className ?? '').toLowerCase();
           final armName = (student.armName ?? '').toLowerCase();
-          
-          return surname.contains(kw) || 
-                 firstName.contains(kw) || 
+
+          return surname.contains(kw) ||
+                 firstName.contains(kw) ||
+                 otherName.contains(kw) ||
                  admissionNo.contains(kw) ||
                  className.contains(kw) ||
                  armName.contains(kw);
         }).toList();
-      });
+      }
+
+      _students = filtered;
+    });
+  }
+
+  Future<void> _searchStudents(String keyword) async {
+    _applyFilters();
+  }
+
+  String _buildFilterInfoText() {
+    if (_selectedClassFilter == null && _selectedArmFilter == null) {
+      return "Showing ${_students.length} of ${_allStudents.length} active students";
     }
+
+    String filterText = "Showing ${_students.length} students";
+    List<String> filters = [];
+
+    if (_selectedClassFilter != null) {
+      final className = _classes.firstWhere((c) => c['id'] == _selectedClassFilter)['name'];
+      filters.add("Class: $className");
+    }
+
+    if (_selectedArmFilter != null) {
+      final armName = _arms.firstWhere((a) => a['id'] == _selectedArmFilter)['name'];
+      filters.add("Arm: $armName");
+    }
+
+    if (filters.isNotEmpty) {
+      filterText += " (${filters.join(', ')})";
+    }
+
+    return filterText;
+  }
+
+  // Get filtered arms based on selected class
+  List<Map<String, dynamic>> _getFilteredArms() {
+    if (_selectedClassFilter == null) {
+      return _arms; // Show all arms if no class is selected
+    }
+    // Filter arms by the selected class
+    return _arms.where((arm) => arm['classId'] == _selectedClassFilter).toList();
   }
 
   // ========================================
   // 👇 ADD THIS METHOD
   // ========================================
   Future<void> _openBatchUpload() async {
-    final result = await Navigator.push(
+    final result = await NavigationHelper.pushWithSidebar(
       context,
-      MaterialPageRoute(
-        builder: (_) => const BatchStudentUploadScreen(),
-      ),
+      page: const BatchStudentUploadScreen(),
+      currentUser: _currentUser ?? {},
+      pageId: 'student_management/students',
     );
     
     if (result != null && result > 0) {
@@ -362,7 +444,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
               pw.SizedBox(height: 20),
 
               // Table
-              pw.Table.fromTextArray(
+              pw.TableHelper.fromTextArray(
                 headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
                 cellStyle: const pw.TextStyle(fontSize: 9),
                 headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
@@ -525,14 +607,31 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final ds = DisplaySettingsProvider.of(context);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text("Students"),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.file_download),
-            tooltip: 'Export Class List',
-            onPressed: _showExportDialog,
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: ds.cardPadding * 0.5, vertical: ds.cardPadding * 0.5),
+            child: ElevatedButton.icon(
+              onPressed: _showExportDialog,
+              icon: Icon(Icons.file_download, size: ds.iconSize * 0.85),
+              label: Text(
+                'Export',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: ds.bodyFontSize),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.blue.shade700,
+                elevation: 2,
+                padding: EdgeInsets.symmetric(horizontal: ds.cardPadding, vertical: ds.cardPadding * 0.6),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -543,57 +642,159 @@ class _StudentListScreenState extends State<StudentListScreen> {
               child: Column(
                 children: [
                   // ========================================
-                  // 👇 UPDATED SECTION WITH BATCH UPLOAD
+                  // 👇 UPDATED SECTION WITH BATCH UPLOAD (PERMISSION-PROTECTED)
                   // ========================================
-                  // BUTTONS ROW
+                  // BUTTONS ROW - Only show for users with students_manage permission
+                  if (_canManageStudents)
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(ds.cardPadding * 0.75, ds.cardPadding * 0.75, ds.cardPadding * 0.75, ds.cardPadding * 0.5),
+                      child: Row(
+                        children: [
+                          // REGISTER NEW STUDENT BUTTON
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                NavigationHelper.pushWithSidebar(
+                                  context,
+                                  page: const StudentFormScreen(),
+                                  currentUser: _currentUser ?? {},
+                                  pageId: 'student_management/students',
+                                ).then((value) {
+                                  if (value == true) _loadStudents();
+                                });
+                              },
+                              icon: Icon(Icons.person_add, size: ds.iconSize * 0.85),
+                              label: Text(
+                                'Register',
+                                style: TextStyle(fontSize: ds.bodyFontSize, fontWeight: FontWeight.w600),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                padding: EdgeInsets.symmetric(vertical: ds.cardPadding * 0.9),
+                                backgroundColor: Colors.green,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          SizedBox(width: ds.cardPadding * 0.75),
+
+                          // BATCH UPLOAD BUTTON
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: _openBatchUpload,
+                              icon: Icon(Icons.upload_file, size: ds.iconSize * 0.85),
+                              label: Text(
+                                'Batch Upload',
+                                style: TextStyle(fontSize: ds.bodyFontSize, fontWeight: FontWeight.w600),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                padding: EdgeInsets.symmetric(vertical: ds.cardPadding * 0.9),
+                                backgroundColor: Colors.orange,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  // ========================================
+
+                  // CLASS AND ARM FILTER DROPDOWNS
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                    padding: EdgeInsets.fromLTRB(ds.cardPadding * 0.75, ds.cardPadding * 0.25, ds.cardPadding * 0.75, ds.cardPadding * 0.5),
                     child: Row(
                       children: [
-                        // REGISTER NEW STUDENT BUTTON
+                        // CLASS FILTER
                         Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (_) => const StudentFormScreen()),
-                              ).then((value) {
-                                if (value == true) _loadStudents();
-                              });
-                            },
-                            icon: const Icon(Icons.person_add, size: 20),
-                            label: const Text(
-                              'Register',
-                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.blue.shade200),
                             ),
-                            style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              backgroundColor: Colors.green,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                            padding: EdgeInsets.symmetric(horizontal: ds.cardPadding * 0.75),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<int?>(
+                                isExpanded: true,
+                                value: _selectedClassFilter,
+                                hint: Text('Filter by Class', style: TextStyle(fontSize: ds.bodyFontSize)),
+                                icon: Icon(Icons.filter_list, size: ds.iconSize * 0.85),
+                                items: [
+                                  DropdownMenuItem<int?>(
+                                    value: null,
+                                    child: Text(
+                                      'All Classes',
+                                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: ds.bodyFontSize),
+                                    ),
+                                  ),
+                                  ..._classes.map((c) => DropdownMenuItem<int?>(
+                                        value: c['id'],
+                                        child: Text(c['name'], style: TextStyle(fontSize: ds.bodyFontSize)),
+                                      )),
+                                ],
+                                onChanged: (value) {
+                                  setState(() {
+                                    _selectedClassFilter = value;
+                                    // Reset arm filter if the currently selected arm doesn't belong to the new class
+                                    if (_selectedArmFilter != null) {
+                                      final filteredArms = value == null
+                                          ? _arms
+                                          : _arms.where((arm) => arm['classId'] == value).toList();
+                                      final armExists = filteredArms.any((arm) => arm['id'] == _selectedArmFilter);
+                                      if (!armExists) {
+                                        _selectedArmFilter = null;
+                                      }
+                                    }
+                                  });
+                                  _applyFilters();
+                                },
                               ),
                             ),
                           ),
                         ),
-                        
-                        const SizedBox(width: 12),
-                        
-                        // BATCH UPLOAD BUTTON
+
+                        SizedBox(width: ds.cardPadding * 0.5),
+
+                        // ARM FILTER
                         Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: _openBatchUpload,
-                            icon: const Icon(Icons.upload_file, size: 20),
-                            label: const Text(
-                              'Batch Upload',
-                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.green.shade200),
                             ),
-                            style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              backgroundColor: Colors.orange,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                            padding: EdgeInsets.symmetric(horizontal: ds.cardPadding * 0.75),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<int?>(
+                                isExpanded: true,
+                                value: _selectedArmFilter,
+                                hint: Text('Filter by Arm', style: TextStyle(fontSize: ds.bodyFontSize)),
+                                icon: Icon(Icons.filter_list, size: ds.iconSize * 0.85),
+                                items: [
+                                  DropdownMenuItem<int?>(
+                                    value: null,
+                                    child: Text(
+                                      'All Arms',
+                                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: ds.bodyFontSize),
+                                    ),
+                                  ),
+                                  ..._getFilteredArms().map((a) => DropdownMenuItem<int?>(
+                                        value: a['id'],
+                                        child: Text(a['name'], style: TextStyle(fontSize: ds.bodyFontSize)),
+                                      )),
+                                ],
+                                onChanged: (value) {
+                                  setState(() {
+                                    _selectedArmFilter = value;
+                                  });
+                                  _applyFilters();
+                                },
                               ),
                             ),
                           ),
@@ -601,23 +802,24 @@ class _StudentListScreenState extends State<StudentListScreen> {
                       ],
                     ),
                   ),
-                  // ========================================
 
                   // SEARCH BAR
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                    padding: EdgeInsets.fromLTRB(ds.cardPadding * 0.75, ds.cardPadding * 0.25, ds.cardPadding * 0.75, ds.cardPadding * 0.5),
                     child: TextField(
                       controller: _searchCtrl,
+                      style: TextStyle(fontSize: ds.bodyFontSize),
                       decoration: InputDecoration(
-                        prefixIcon: const Icon(Icons.search),
+                        prefixIcon: Icon(Icons.search, size: ds.iconSize),
                         border: const OutlineInputBorder(),
                         hintText: "Search active students...",
+                        hintStyle: TextStyle(fontSize: ds.bodyFontSize),
                         suffixIcon: _searchCtrl.text.isNotEmpty
                             ? IconButton(
-                                icon: const Icon(Icons.clear),
+                                icon: Icon(Icons.clear, size: ds.iconSize),
                                 onPressed: () {
                                   _searchCtrl.clear();
-                                  _loadStudents();
+                                  _applyFilters();
                                 },
                               )
                             : null,
@@ -629,17 +831,17 @@ class _StudentListScreenState extends State<StudentListScreen> {
                   // INFO BANNER
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: EdgeInsets.symmetric(horizontal: ds.cardPadding, vertical: ds.cardPadding * 0.5),
                     color: Colors.blue.shade50,
                     child: Row(
                       children: [
-                        Icon(Icons.info_outline, size: 16, color: Colors.blue.shade700),
-                        const SizedBox(width: 8),
+                        Icon(Icons.info_outline, size: ds.iconSize * 0.7, color: Colors.blue.shade700),
+                        SizedBox(width: ds.cardPadding * 0.5),
                         Expanded(
                           child: Text(
-                            "Showing active students only (${_students.length})",
+                            _buildFilterInfoText(),
                             style: TextStyle(
-                              fontSize: 12,
+                              fontSize: ds.subtitleFontSize,
                               color: Colors.blue.shade900,
                             ),
                           ),
@@ -655,13 +857,13 @@ class _StudentListScreenState extends State<StudentListScreen> {
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(Icons.people_outline, size: 64, color: Colors.grey.shade400),
-                                const SizedBox(height: 16),
+                                Icon(Icons.people_outline, size: ds.iconSize * 2.5, color: Colors.grey.shade400),
+                                SizedBox(height: ds.cardPadding),
                                 Text(
                                   _searchCtrl.text.isEmpty
                                       ? "No active students found."
                                       : "No active students match your search.",
-                                  style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
+                                  style: TextStyle(fontSize: ds.bodyFontSize, color: Colors.grey.shade600),
                                 ),
                               ],
                             ),
@@ -670,40 +872,52 @@ class _StudentListScreenState extends State<StudentListScreen> {
                             itemCount: _students.length,
                             itemBuilder: (context, index) {
                               final s = _students[index];
-                              final String name = "${s.surname} ${s.firstName}".trim();
+                              final String name = [s.surname, s.firstName, s.otherName]
+                                  .where((n) => n != null && n.trim().isNotEmpty)
+                                  .join(' ')
+                                  .trim();
 
                               return Card(
-                                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                margin: EdgeInsets.symmetric(horizontal: ds.cardPadding * 0.75, vertical: ds.cardPadding * 0.25),
                                 child: ListTile(
                                   // NO PHOTO - Removed leading avatar
-                                  title: Text(
-                                    name,
-                                    style: const TextStyle(fontWeight: FontWeight.w600),
+                                  title: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Flexible(
+                                        child: Text(
+                                          name,
+                                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: ds.bodyFontSize),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      SiblingMark(show: isSiblingPhone(s.parentPhone, _siblingPhones)),
+                                    ],
                                   ),
                                   subtitle: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text("Adm No: ${s.admissionNo}"),
+                                      Text("Adm No: ${s.admissionNo}", style: TextStyle(fontSize: ds.subtitleFontSize)),
                                       Text(
                                         "${s.className ?? 'N/A'} - ${s.armName ?? 'N/A'}",
                                         style: TextStyle(
-                                          fontSize: 12,
+                                          fontSize: ds.subtitleFontSize,
                                           color: Colors.grey.shade600,
                                         ),
                                       ),
                                     ],
                                   ),
                                   isThreeLine: true,
-                                  trailing: const Icon(
+                                  trailing: Icon(
                                     Icons.arrow_forward_ios,
-                                    size: 16,
+                                    size: ds.iconSize * 0.7,
                                   ),
                                   onTap: () {
-                                    Navigator.push(
+                                    NavigationHelper.pushWithSidebar(
                                       context,
-                                      MaterialPageRoute(
-                                        builder: (_) => StudentDetailsScreen(student: s),
-                                      ),
+                                      page: StudentDetailsScreen(student: s),
+                                      currentUser: _currentUser ?? {},
+                                      pageId: 'student_management/students',
                                     ).then((value) {
                                       if (value == true) _loadStudents();
                                     });

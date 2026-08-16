@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -6,12 +7,34 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 import '../db/database_helper.dart';
+import 'central_backup_helper.dart';
 
 class DBBackupHelper {
   static const String _dbName = "bursary_manager.db";
   static const String _backupFolderName = "BursaryBackups";
   static const String _backupEmail = "tysolutionsmultimediatech@gmail.com";
+
+  // Prefix used when storing SharedPreferences values inside the settings table
+  static const String _prefPrefix = 'pref_';
+
+  // Maps each preference key to its type so we can round-trip it correctly.
+  // Device-specific values (login session, server URL, backup directory) are
+  // intentionally omitted — they should not be copied across devices.
+  static const Map<String, String> _prefKeyTypes = {
+    'backup_reminders_enabled'    : 'bool',
+    'backup_transaction_threshold': 'int',
+    'backup_warning_days'         : 'int',
+    'backup_critical_days'        : 'int',
+    'auto_logout_minutes'         : 'int',
+    'usb_printer_paper_size'      : 'string',
+    'thermal_printer_paper_size'  : 'string',
+    'default_printer'             : 'string',
+    'recent_printers'             : 'string',
+    'printer_paper_sizes'         : 'string',
+  };
 
   /// Returns full database path
   static Future<String> _getDatabasePath() async {
@@ -19,8 +42,25 @@ class DBBackupHelper {
     return join(dbPath, _dbName);
   }
 
-  /// Returns folder for backups (in Downloads/BursaryBackups)
+  /// Returns folder for backups (in Downloads/BursaryBackups or custom directory)
   static Future<Directory> _getBackupFolder() async {
+    // Check if user has set a custom backup directory
+    final prefs = await SharedPreferences.getInstance();
+    final customDirectory = prefs.getString('custom_backup_directory');
+
+    if (customDirectory != null && customDirectory.isNotEmpty) {
+      // Use custom directory
+      final directory = Directory(customDirectory);
+
+      // Create folder if it doesn't exist
+      if (!await directory.exists()) {
+        await directory.create(recursive: true);
+      }
+
+      return directory;
+    }
+
+    // Use default directory
     Directory? directory;
 
     if (Platform.isAndroid) {
@@ -103,6 +143,99 @@ class DBBackupHelper {
     return '${cleanName}_Backup_$timestamp.db';
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Preferences ↔ DB settings table helpers
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Writes all important SharedPreferences into the `settings` DB table so
+  /// they are captured inside the .db backup file.
+  static Future<void> _snapshotPrefsToDb() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final database = await DatabaseHelper().database;
+
+      for (final entry in _prefKeyTypes.entries) {
+        final key = entry.key;
+        final type = entry.value;
+        String? value;
+
+        switch (type) {
+          case 'bool':
+            final v = prefs.getBool(key);
+            if (v != null) value = v.toString();
+            break;
+          case 'int':
+            final v = prefs.getInt(key);
+            if (v != null) value = v.toString();
+            break;
+          case 'string':
+            value = prefs.getString(key);
+            break;
+        }
+
+        if (value != null) {
+          await database.insert(
+            'settings',
+            {'key': '$_prefPrefix$key', 'value': value},
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      }
+    } catch (_) {
+      // Non-fatal — backup continues even if the snapshot fails
+    }
+  }
+
+  /// Reads all `pref_*` rows from an already-open [db] and writes them back
+  /// into SharedPreferences.
+  static Future<void> _applyPrefsFromOpenDb(Database db) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rows = await db.query(
+        'settings',
+        where: 'key LIKE ?',
+        whereArgs: ['$_prefPrefix%'],
+      );
+
+      for (final row in rows) {
+        final fullKey = row['key'] as String;
+        final value   = row['value'] as String?;
+        if (value == null) continue;
+
+        final key  = fullKey.substring(_prefPrefix.length);
+        final type = _prefKeyTypes[key];
+        if (type == null) continue;
+
+        switch (type) {
+          case 'bool':
+            await prefs.setBool(key, value == 'true');
+            break;
+          case 'int':
+            final intVal = int.tryParse(value);
+            if (intVal != null) await prefs.setInt(key, intVal);
+            break;
+          case 'string':
+            await prefs.setString(key, value);
+            break;
+        }
+      }
+    } catch (_) {
+      // Non-fatal
+    }
+  }
+
+  /// Opens the backup file as a read-only DB and applies its preferences to
+  /// SharedPreferences. Used after a full restore.
+  static Future<void> _restorePrefsFromBackupFile(String backupFilePath) async {
+    try {
+      final db = await openDatabase(backupFilePath, readOnly: true);
+      await _applyPrefsFromOpenDb(db);
+      await db.close();
+    } catch (_) {
+      // Non-fatal
+    }
+  }
+
   /// ================================
   /// BACKUP DATABASE (Enhanced)
   /// ================================
@@ -118,6 +251,22 @@ class DBBackupHelper {
         };
       }
 
+      // Snapshot SharedPreferences into the settings table before copying the file
+      // so that user preferences travel with the backup.
+      await _snapshotPrefsToDb();
+
+      // Checkpoint WAL before backup so all recent writes are in the main .db file.
+      // Without this, records written since the last checkpoint are in the .db-wal
+      // file and would be missing from the copied backup.
+      try {
+        final db = DatabaseHelper();
+        final database = await db.database;
+        await database.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch (_) {
+        // If checkpoint fails (e.g. db not open yet), proceed anyway —
+        // the data already in the .db file will still be backed up.
+      }
+
       // Get paths
       final dbPath = await _getDatabasePath();
       final backupFolder = await _getBackupFolder();
@@ -130,7 +279,11 @@ class DBBackupHelper {
 
       if (await sourceFile.exists()) {
         await destFile.writeAsBytes(await sourceFile.readAsBytes());
-        
+
+        // Best-effort copy to the central support server — never blocks or
+        // fails the backup itself if it doesn't succeed.
+        unawaited(CentralBackupHelper.uploadBackup(backupPath));
+
         return {
           'success': true,
           'message': 'Backup created successfully',
@@ -138,7 +291,7 @@ class DBBackupHelper {
           'filename': filename,
         };
       }
-      
+
       return {
         'success': false,
         'message': 'Database file not found',
@@ -281,10 +434,9 @@ Sent from Bursary Manager App
         };
       }
 
-      // Close any open database connections
+      // Close and reset database connection properly
       try {
-        final db = await DatabaseHelper().database;
-        await db.close();
+        await DatabaseHelper().closeAndReset();
       } catch (_) {
         // Database might not be open, continue
       }
@@ -292,9 +444,12 @@ Sent from Bursary Manager App
       // Copy backup to database location
       await destFile.writeAsBytes(await backupFile.readAsBytes());
 
+      // Re-apply preferences stored inside the backup to SharedPreferences
+      await _restorePrefsFromBackupFile(backupFilePath);
+
       return {
         'success': true,
-        'message': 'Database restored successfully',
+        'message': 'Database restored successfully. Please restart the app to complete the restore.',
       };
     } catch (e) {
       return {
@@ -475,6 +630,108 @@ Sent from Bursary Manager App
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Selective restore: Restore only specific tables from backup
+  static Future<Map<String, dynamic>> selectiveRestoreDatabase(
+    String backupFilePath,
+    List<String> tablesToRestore,
+  ) async {
+    try {
+      if (tablesToRestore.isEmpty) {
+        return {
+          'success': false,
+          'message': 'No tables selected for restore',
+        };
+      }
+
+      final dbPath = await _getDatabasePath();
+      final backupFile = File(backupFilePath);
+
+      if (!await backupFile.exists()) {
+        return {
+          'success': false,
+          'message': 'Backup file not found',
+        };
+      }
+
+      // Validate it's a database file
+      if (!backupFilePath.endsWith('.db')) {
+        return {
+          'success': false,
+          'message': 'Invalid backup file. Must be a .db file',
+        };
+      }
+
+      // Close current database connection
+      try {
+        await DatabaseHelper().closeAndReset();
+      } catch (_) {
+        // Database might not be open, continue
+      }
+
+      // Open both databases
+      final currentDb = await openDatabase(dbPath);
+      final backupDb = await openDatabase(backupFilePath, readOnly: true);
+
+      int restoredTables = 0;
+      int totalRecords = 0;
+
+      for (String tableName in tablesToRestore) {
+        try {
+          // Get all data from backup table
+          final backupData = await backupDb.query(tableName);
+
+          if (backupData.isEmpty) {
+            continue; // Skip empty tables
+          }
+
+          // Delete existing data in current table
+          await currentDb.delete(tableName);
+
+          // Insert backup data
+          final batch = currentDb.batch();
+          for (var row in backupData) {
+            batch.insert(tableName, row);
+          }
+          await batch.commit(noResult: true);
+
+          // If the settings table was just restored, re-apply pref_ rows to SharedPreferences
+          if (tableName == 'settings') {
+            await _applyPrefsFromOpenDb(currentDb);
+          }
+
+          restoredTables++;
+          totalRecords += backupData.length;
+        } catch (e) {
+          // Skip table if error (might not exist or have schema issues)
+          debugPrint('Warning: Could not restore table $tableName: $e');
+        }
+      }
+
+      // Close databases
+      await backupDb.close();
+      await currentDb.close();
+
+      if (restoredTables == 0) {
+        return {
+          'success': false,
+          'message': 'No tables were successfully restored',
+        };
+      }
+
+      return {
+        'success': true,
+        'message': 'Restored $restoredTables table(s) with $totalRecords record(s). Please restart the app.',
+        'tablesRestored': restoredTables,
+        'recordsRestored': totalRecords,
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Selective restore failed: $e',
+      };
     }
   }
 }

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../db/database_helper.dart';
+import '../../data/database_helper_wrapper.dart';
 
 class FeeItemFormScreen extends StatefulWidget {
   final Map<String, dynamic>? item; // null = new, not null = edit
@@ -16,7 +16,7 @@ class _FeeItemFormScreenState extends State<FeeItemFormScreen> {
   final _amountCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
 
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   String? _activeTerm;
   String? _activeSession;

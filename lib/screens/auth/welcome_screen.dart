@@ -1,7 +1,11 @@
 // lib/screens/auth/welcome_screen.dart
 import 'package:flutter/material.dart';
-import '../../db/database_helper.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../data/database_helper_wrapper.dart';
+import '../../widgets/developer_auth_dialog.dart';
+import '../../navigation/sidebar_scaffold.dart';
 import '../home_screen.dart';
+import '../license/license_generator_screen.dart';
 
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
@@ -11,19 +15,97 @@ class WelcomeScreen extends StatefulWidget {
 }
 
 class _WelcomeScreenState extends State<WelcomeScreen> {
-  final _db = DatabaseHelper();
+  final _db = DatabaseHelperWrapper();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  
+
   bool _isLoading = false;
   bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    debugPrint('🔵 WelcomeScreen initialized');
+  }
 
   @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  /// Save user data to SharedPreferences after successful login
+  /// ✅ FIXED: Properly handles userId as int (not String)
+  Future<void> _saveUserDataAfterLogin(Map<String, dynamic> user) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Mark as logged in
+      await prefs.setBool('isLoggedIn', true);
+      
+      // Save username (always String)
+      final username = user['username']?.toString() ?? 'User';
+      await prefs.setString('username', username);
+      
+      // Save userType (always String)
+      final userType = user['userType']?.toString() ?? 'user';
+      await prefs.setString('userType', userType);
+      
+      // ✅ IMPORTANT: Save userId as int (not String!)
+      // Handle both int and String from database
+      final userId = user['id'] ?? user['userId'];
+      if (userId != null) {
+        if (userId is int) {
+          // Already an int - save directly
+          await prefs.setInt('userId', userId);
+        } else if (userId is String) {
+          // String - parse to int
+          final parsed = int.tryParse(userId);
+          if (parsed != null) {
+            await prefs.setInt('userId', parsed);
+          } else {
+            debugPrint('⚠️ Warning: Could not parse userId: $userId');
+            // Fallback: save as int 1
+            await prefs.setInt('userId', 1);
+          }
+        } else {
+          debugPrint('⚠️ Warning: Unknown userId type: ${userId.runtimeType}');
+          await prefs.setInt('userId', 1);
+        }
+      } else {
+        // No userId provided - use default
+        await prefs.setInt('userId', 1);
+      }
+      
+      // Save email if available
+      if (user['email'] != null) {
+        await prefs.setString('email', user['email'].toString());
+      }
+      
+      // Save schoolId if available
+      final schoolId = user['schoolId'];
+      if (schoolId != null) {
+        if (schoolId is int) {
+          await prefs.setInt('schoolId', schoolId);
+        } else if (schoolId is String) {
+          final parsed = int.tryParse(schoolId);
+          if (parsed != null) {
+            await prefs.setInt('schoolId', parsed);
+          }
+        }
+      }
+      
+      debugPrint('✅ User data saved successfully');
+      debugPrint('Username: $username');
+      debugPrint('UserType: $userType');
+      debugPrint('UserId: $userId (saved as int)');
+
+    } catch (e) {
+      debugPrint('❌ Error saving user data: $e');
+      // Don't rethrow - allow login to continue even if saving fails
+    }
   }
 
   Future<void> _login() async {
@@ -40,12 +122,21 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       if (!mounted) return;
 
       if (user != null) {
-        // Login successful
+        // ✅ FIXED: Save user data to SharedPreferences
+        await _saveUserDataAfterLogin(user);
+
+        if (!mounted) return;
+
+        // Login successful - navigate to home
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => HomeScreen(
+            builder: (_) => SidebarScaffold(
               currentUser: user,
+              currentPageId: 'home',
+              child: HomeScreen(
+                currentUser: user,
+              ),
             ),
           ),
         );
@@ -71,6 +162,21 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  Future<void> _openDeveloperMode() async {
+    // Show authentication dialog
+    final authenticated = await showDeveloperAuthDialog(context);
+
+    if (authenticated && mounted) {
+      // Navigate to license generator screen
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const LicenseGeneratorScreen(),
+        ),
+      );
     }
   }
 
@@ -342,7 +448,27 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     ),
                   ),
 
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 24),
+
+                  // Developer Access Button
+                  TextButton.icon(
+                    onPressed: _openDeveloperMode,
+                    icon: Icon(
+                      Icons.code,
+                      size: 16,
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
+                    label: Text(
+                      'Developer Access',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.7),
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                  ),
                 ],
               ),
             ),

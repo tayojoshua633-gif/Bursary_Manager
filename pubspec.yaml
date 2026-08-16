@@ -1,8 +1,8 @@
-name: bursary_manager
+﻿name: bursary_manager
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 15.3.0+1
 
 environment:
   sdk: ^3.10.0
@@ -14,16 +14,19 @@ dependencies:
   shared_preferences: ^2.2.2
   
   url_launcher: ^6.2.2
+  webview_flutter: ^4.10.0
   
   cupertino_icons: ^1.0.8
 
   crypto: ^3.0.3
   device_info_plus: ^10.0.1
+  package_info_plus: ^8.0.0
   
   # -----------------------------
   # DATABASE
   # -----------------------------
   sqflite: ^2.4.0
+  sqflite_common_ffi: ^2.3.0  # SQLite support for Windows/Linux/macOS
   path: ^1.9.0
   path_provider: ^2.1.5
 
@@ -32,7 +35,8 @@ dependencies:
   # -----------------------------
   pdf: ^3.10.4
   printing: ^5.12.0
-  excel: ^4.0.6  # ← UPDATED from 2.0.3 to 4.0.6 for new API
+  excel: ^4.0.6  # â† UPDATED from 2.0.3 to 4.0.6 for new API
+  csv: ^6.0.0  # CSV file parsing support
 
   file_picker: ^8.0.0
   permission_handler: ^11.0.1
@@ -43,9 +47,30 @@ dependencies:
   image_picker: ^1.1.2
 
   # -----------------------------
+  # CONTACTS (save parent contact to device)
+  # -----------------------------
+  flutter_contacts: ^1.1.9+2
+
+  # -----------------------------
+  # DEVICE SIM SMS (alternative to cloud SMS gateway)
+  # -----------------------------
+  another_telephony: ^0.4.1
+
+  # -----------------------------
   # RECEIPT PRINTING + SHARING
   # -----------------------------
   share_plus: ^7.2.2
+
+  # -----------------------------
+  # BLUETOOTH THERMAL PRINTER
+  # -----------------------------
+  flutter_blue_plus: ^1.32.12
+  esc_pos_utils_plus: ^2.0.1+6
+
+  # -----------------------------
+  # USB THERMAL PRINTER (OTG cable)
+  # -----------------------------
+  flutter_usb_printer: ^0.1.0+1
 
   # -----------------------------
   # FILE SUPPORT (for receipt logo display)
@@ -54,11 +79,34 @@ dependencies:
   # (Optional) If error occurs using File(), Dart has built-in io library
   # You can remove this dependency if not needed.
 
+  # -----------------------------
+  # SERVER & NETWORKING (Client-Server Mode)
+  # -----------------------------
+  shelf: ^1.4.1                    # HTTP server framework
+  shelf_router: ^1.1.4             # REST API routing
+  dart_jsonwebtoken: ^2.13.0       # JWT authentication
+  multicast_dns: ^0.3.2+3          # mDNS service discovery
+  network_info_plus: ^5.0.0        # Network information
+  connectivity_plus: ^6.0.0        # Connectivity status
+  bcrypt: ^1.1.3                   # Password hashing
+  http: ^1.2.0                     # HTTP client (for client mode)
+  wifi_iot: ^0.3.18                # WiFi/hotspot control
+  # Google Drive backup
+  google_sign_in: ^6.2.1
+  googleapis: ^13.2.0
+
+dependency_overrides:
+  # Vendored local copy of flutter_usb_printer with AGP 8+ namespace fix applied.
+  # This prevents flutter pub get from ever reverting to the broken pub.dev version.
+  flutter_usb_printer:
+    path: packages/flutter_usb_printer
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
@@ -70,3 +118,90 @@ flutter:
     #
     # Keep empty for now unless you add images.
     - assets/
+
+# App Icon Configuration
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon.png"
+  adaptive_icon_background: "#2196F3"
+  adaptive_icon_foreground: "assets/icon.png"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

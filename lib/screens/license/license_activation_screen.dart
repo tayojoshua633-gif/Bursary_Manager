@@ -1,34 +1,40 @@
 // lib/screens/license/license_activation_screen.dart
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../data/database_helper_wrapper.dart';
 import '../../utils/license_helper.dart';
-import '../../utils/license_checker.dart';
-import '../../db/database_helper.dart';
+import '../../widgets/developer_auth_dialog.dart';
+import '../auth/mode_selection_screen.dart';
+import '../auth/welcome_screen.dart';
+import 'license_generator_screen.dart';
 
 class LicenseActivationScreen extends StatefulWidget {
-  const LicenseActivationScreen({super.key});
+  final bool canSkip;
+
+  const LicenseActivationScreen({
+    super.key,
+    this.canSkip = false,
+  });
 
   @override
-  State<LicenseActivationScreen> createState() => _LicenseActivationScreenState();
+  State<LicenseActivationScreen> createState() =>
+      _LicenseActivationScreenState();
 }
 
 class _LicenseActivationScreenState extends State<LicenseActivationScreen> {
-  final _licenseKeyController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  final _db = DatabaseHelper();
-  
-  bool _isLoading = false;
-  bool _showTrialInfo = false;
-  String _deviceId = '';
-  String? _schoolName;
-  Map<String, dynamic>? _licenseStatus;
+  final _licenseKeyController = TextEditingController();
+  final _db = DatabaseHelperWrapper();
+
+  bool _isActivating = false;
+  String? _deviceId;
+  Map<String, dynamic>? _licenseData;
 
   @override
   void initState() {
     super.initState();
-    _initialize();
+    _loadDeviceId();
   }
 
   @override
@@ -37,557 +43,595 @@ class _LicenseActivationScreenState extends State<LicenseActivationScreen> {
     super.dispose();
   }
 
-  Future<void> _initialize() async {
-    // Get device ID
-    _deviceId = await LicenseHelper.getDeviceId();
-    
-    // Get school name from database
-    final schoolProfile = await _db.getSchoolProfile();
-    _schoolName = schoolProfile?['name'] ?? 'School';
-    
-    // Check current license status
-    _licenseStatus = await LicenseHelper.checkLicenseStatus();
-    
-    if (mounted) {
-      setState(() {});
+  Future<void> _loadDeviceId() async {
+    final deviceId = await LicenseHelper.getDeviceId();
+    setState(() => _deviceId = deviceId);
+  }
+
+  Future<void> _validateLicenseKey() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isActivating = true);
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      final licenseKey = _licenseKeyController.text.trim();
+
+      // Validate license key format
+      final licenseData = LicenseHelper.validateLicenseKey(licenseKey);
+
+      if (licenseData == null) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Invalid license key format'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        setState(() => _isActivating = false);
+        return;
+      }
+
+      // Check if expired
+      if (licenseData['isExpired'] == true) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('This license key has expired'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        setState(() => _isActivating = false);
+        return;
+      }
+
+      // Skip device binding checks for master license key
+      final isMasterKey = licenseData['isMasterKey'] == true;
+
+      if (!isMasterKey) {
+        // Check if already activated (only for regular licenses, not master key)
+        final exists = await _db.licenseKeyExists(licenseKey);
+        if (exists) {
+          // Check if it's the same device trying to reactivate
+          final existingLicense = await _db.getLicenseByKey(licenseKey);
+
+          if (existingLicense != null &&
+              existingLicense['deviceId'] == _deviceId &&
+              existingLicense['isActive'] == 0) {
+            // Same device, license was deactivated - allow reactivation
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('License reactivated! Please select app mode.'),
+                backgroundColor: Colors.green,
+                duration: Duration(seconds: 2),
+              ),
+            );
+
+            // Reactivate the license
+            await _db.reactivateLicense(existingLicense['id'] as int);
+
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('License reactivated successfully!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+
+            // Set default app mode to standalone
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('app_mode', 'standalone');
+
+            // Navigate to login screen
+            await Future.delayed(const Duration(seconds: 1));
+
+            if (mounted) {
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+                (route) => false,
+              );
+            }
+            return;
+          } else {
+            // Different device or already active
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('This license key has already been activated on another device'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 3),
+              ),
+            );
+            setState(() => _isActivating = false);
+            return;
+          }
+        }
+
+        // Check if license is bound to a specific device
+        if (licenseData.containsKey('deviceId') && licenseData['deviceId'] != null) {
+          final boundDeviceId = licenseData['deviceId'] as String;
+
+          // Verify this device matches the bound device
+          if (_deviceId != null && boundDeviceId != _deviceId) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('This license is bound to a different device and cannot be activated here'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 4),
+              ),
+            );
+            setState(() => _isActivating = false);
+            return;
+          }
+        }
+      }
+
+      // Show license details and confirm
+      setState(() {
+        _licenseData = licenseData;
+        _isActivating = false;
+      });
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      setState(() => _isActivating = false);
     }
   }
 
   Future<void> _activateLicense() async {
-    if (!_formKey.currentState!.validate()) return;
-    if (_schoolName == null) {
-      _showError('School name not set. Please set up school profile first.');
-      return;
-    }
+    if (_licenseData == null || _deviceId == null) return;
 
-    setState(() => _isLoading = true);
+    setState(() => _isActivating = true);
+
+    final messenger = ScaffoldMessenger.of(context);
 
     try {
-      final result = await LicenseHelper.activateLicense(
+      final expiryDate = DateTime.parse(_licenseData!['expiry'] as String);
+
+      await _db.activateLicense(
         licenseKey: _licenseKeyController.text.trim(),
-        schoolName: _schoolName!,
+        schoolName: _licenseData!['school'] as String,
+        schoolCode: _licenseData!['code'] as String,
+        deviceId: _deviceId!,
+        expiryDate: expiryDate,
+        maxStudents: _licenseData!['maxStudents'] as int?,
       );
 
       if (!mounted) return;
 
-      // Check if activation was successful
-      if (result['success'] == true) {
-        _showSuccess(result['message'] ?? 'License activated successfully!');
-        
-        // Wait a bit then navigate to app
-        await Future.delayed(const Duration(seconds: 2));
-        if (mounted) {
-          _navigateToApp();
-        }
-      } else {
-        _showError(result['message'] ?? 'Activation failed');
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('License activated successfully!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      // Set default app mode to standalone
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('app_mode', 'standalone');
+
+      // Navigate to login screen
+      await Future.delayed(const Duration(seconds: 1));
+
+      if (mounted) {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+          (route) => false,
+        );
       }
     } catch (e) {
       if (mounted) {
-        _showError('Activation error: $e');
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Activation failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      setState(() => _isActivating = false);
     }
   }
 
-  Future<void> _startTrial() async {
-    if (_schoolName == null || _schoolName!.isEmpty) {
-      _showError('School name not set. Please set up school profile first.');
-      return;
-    }
+  Future<void> _openDeveloperMode() async {
+    // Show authentication dialog
+    final authenticated = await showDeveloperAuthDialog(context);
 
-    setState(() => _isLoading = true);
-
-    try {
-      final result = await LicenseHelper.startTrial(_schoolName!);
-
-      if (!mounted) return;
-
-      // Safely check the result
-      bool success = false;
-      bool isAlreadyActive = false;
-      String message = 'Unknown error occurred';
-
-      success = result['success'] == true;
-      // Check if trial was already active
-      isAlreadyActive = result['valid'] == true && result['isTrial'] == true;
-      message = result['message'] ?? 'Trial operation completed';
-    
-      // If trial is active (new or existing), proceed to app
-      if (success || isAlreadyActive) {
-        if (success) {
-          _showSuccess('Trial started! You have 30 days to evaluate the app.');
-        } else {
-          _showSuccess('Trial is already active. Proceeding to app...');
-        }
-        
-        await Future.delayed(const Duration(seconds: 1));
-        if (mounted) {
-          _navigateToApp();
-        }
-      } else {
-        _showError(message);
-      }
-    } catch (e) {
-      if (mounted) {
-        _showError('Trial start error: $e');
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
-  }
-
-  void _navigateToApp() {
-    if (!mounted) return;
-    
-    // Use the LicenseChecker helper to navigate properly
-    LicenseChecker.navigateToApp(context);
-  }
-
-  void _showSuccess(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green,
-      ),
-    );
-  }
-
-  void _showError(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-        duration: const Duration(seconds: 4),
-      ),
-    );
-  }
-
-  Future<void> _contactSupport() async {
-    final contact = LicenseHelper.getContactInfo();
-    
-    if (!mounted) return;
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.contact_support, color: Colors.blue),
-            SizedBox(width: 8),
-            Text('Purchase License'),
-          ],
+    if (authenticated && mounted) {
+      // Navigate to license generator screen
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const LicenseGeneratorScreen(),
         ),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Contact us to purchase a license:',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              _buildContactItem(Icons.business, 'Company', contact['company']!),
-              _buildContactItem(Icons.email, 'Email', contact['email']!),
-              _buildContactItem(Icons.phone, 'Phone', contact['phone']!),
-              _buildContactItem(Icons.language, 'Website', contact['website']!),
-              const SizedBox(height: 16),
-              const Text(
-                'Your Device ID (needed for activation):',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _deviceId.length >= 16 ? _deviceId.substring(0, 16) : _deviceId,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.copy, size: 16),
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: _deviceId));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Device ID copied'),
-                            duration: Duration(seconds: 1),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.pop(context);
-              launchUrl(Uri.parse('mailto:${contact['email']}'));
-            },
-            icon: const Icon(Icons.email),
-            label: const Text('Send Email'),
-          ),
-        ],
-      ),
-    );
+      );
+    }
   }
 
-  Widget _buildContactItem(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: Colors.grey.shade600),
-          const SizedBox(width: 8),
-          Text(
-            '$label: ',
-            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(fontSize: 13),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
-    final hasExpiredTrial = _licenseStatus != null &&
-        _licenseStatus!['status'] == LicenseStatus.expired &&
-        _licenseStatus!['isTrial'] == true;
-
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.orange.shade700,
-              Colors.orange.shade500,
-            ],
-          ),
+      appBar: AppBar(
+        title: const Text('Activate License'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const ModeSelectionScreen(),
+              ),
+            );
+          },
         ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Lock Icon
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 20,
-                          spreadRadius: 5,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.lock_outline,
-                      size: 80,
-                      color: Colors.orange,
-                    ),
+        actions: widget.canSkip
+            ? [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text(
+                    'Skip',
+                    style: TextStyle(color: Colors.white),
                   ),
+                ),
+              ]
+            : null,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header Icon
+            Icon(
+              Icons.verified_user,
+              size: 80,
+              color: Colors.blue.shade700,
+            ),
 
-                  const SizedBox(height: 32),
+            const SizedBox(height: 16),
 
-                  // Title
-                  const Text(
-                    'Activate Bursary Manager',
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
+            // Title
+            const Text(
+              'Activate Bursary Manager',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
 
-                  const SizedBox(height: 8),
+            const SizedBox(height: 8),
 
-                  if (_schoolName != null)
-                    Text(
-                      _schoolName!,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        color: Colors.white70,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+            const Text(
+              'Enter your license key to activate the app',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey,
+              ),
+              textAlign: TextAlign.center,
+            ),
 
-                  const SizedBox(height: 48),
+            const SizedBox(height: 32),
 
-                  // Activation Form Card
-                  Card(
-                    elevation: 8,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Form(
-                        key: _formKey,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            const Text(
-                              'Enter License Key',
+            // Device ID Display
+            if (_deviceId != null)
+              Card(
+                color: Colors.blue.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.fingerprint, size: 18, color: Colors.blue.shade700),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'This Device ID',
                               style: TextStyle(
-                                fontSize: 20,
+                                fontSize: 13,
                                 fontWeight: FontWeight.bold,
                               ),
-                              textAlign: TextAlign.center,
                             ),
-
-                            const SizedBox(height: 24),
-
-                            // License Key Field
-                            TextFormField(
-                              controller: _licenseKeyController,
-                              decoration: InputDecoration(
-                                labelText: 'License Key',
-                                hintText: 'XXXXX-XXX-XXXXX-XXXXXXXX-XXXXX',
-                                prefixIcon: const Icon(Icons.vpn_key),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy, size: 18),
+                            tooltip: 'Copy Device ID',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: _deviceId!));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Device ID copied to clipboard!'),
+                                  duration: Duration(seconds: 2),
                                 ),
-                                filled: true,
-                                fillColor: Colors.grey[50],
-                              ),
-                              validator: (value) {
-                                if (value == null || value.trim().isEmpty) {
-                                  return 'Please enter license key';
-                                }
-                                return null;
-                              },
-                              textCapitalization: TextCapitalization.characters,
-                            ),
-
-                            const SizedBox(height: 24),
-
-                            // Activate Button
-                            ElevatedButton.icon(
-                              onPressed: _isLoading ? null : _activateLicense,
-                              icon: _isLoading
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Colors.white,
-                                      ),
-                                    )
-                                  : const Icon(Icons.check_circle),
-                              label: Text(
-                                _isLoading ? 'Activating...' : 'Activate License',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-
-                            const SizedBox(height: 16),
-
-                            // Contact Support Button
-                            OutlinedButton.icon(
-                              onPressed: _contactSupport,
-                              icon: const Icon(Icons.shopping_cart),
-                              label: const Text('Purchase License'),
-                              style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-                          ],
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: SelectableText(
+                          _deviceId!,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey.shade800,
+                            fontFamily: 'monospace',
+                          ),
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 12, color: Colors.blue.shade600),
+                          const SizedBox(width: 4),
+                          const Expanded(
+                            child: Text(
+                              'Share this ID with the license provider if needed',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            const SizedBox(height: 24),
+
+            // License Input Form
+            Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextFormField(
+                    controller: _licenseKeyController,
+                    decoration: InputDecoration(
+                      labelText: 'License Key',
+                      hintText: 'XXXXX-XXXXX-XXXXX-XXXXX',
+                      prefixIcon: const Icon(Icons.vpn_key),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.content_paste),
+                        tooltip: 'Paste',
+                        onPressed: () async {
+                          final data = await Clipboard.getData('text/plain');
+                          if (data?.text != null) {
+                            _licenseKeyController.text = data!.text!;
+                          }
+                        },
+                      ),
                     ),
+                    textCapitalization: TextCapitalization.characters,
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Please enter license key';
+                      }
+                      return null;
+                    },
+                    onChanged: (_) {
+                      // Clear license data when user edits
+                      if (_licenseData != null) {
+                        setState(() => _licenseData = null);
+                      }
+                    },
                   ),
 
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
 
-                  // Trial Option
-                  if (!hasExpiredTrial)
-                    Card(
-                      elevation: 4,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: InkWell(
-                        onTap: () => setState(() => _showTrialInfo = !_showTrialInfo),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Row(
-                                    children: [
-                                      Icon(Icons.timer, color: Colors.blue),
-                                      SizedBox(width: 8),
-                                      Text(
-                                        'Start 30-Day Free Trial',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  Icon(
-                                    _showTrialInfo
-                                        ? Icons.keyboard_arrow_up
-                                        : Icons.keyboard_arrow_down,
-                                  ),
-                                ],
+                  // Validate Button
+                  if (_licenseData == null)
+                    ElevatedButton.icon(
+                      onPressed: _isActivating ? null : _validateLicenseKey,
+                      icon: _isActivating
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
                               ),
-                              if (_showTrialInfo) ...[
-                                const SizedBox(height: 12),
-                                const Divider(),
-                                const SizedBox(height: 12),
-                                const Text(
-                                  '• Full access to all features\n'
-                                  '• 30 days evaluation period\n'
-                                  '• No credit card required\n'
-                                  '• Purchase anytime during trial',
-                                  style: TextStyle(fontSize: 13),
-                                ),
-                                const SizedBox(height: 16),
-                                ElevatedButton.icon(
-                                  onPressed: _isLoading ? null : _startTrial,
-                                  icon: _isLoading
-                                      ? const SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
-                                          ),
-                                        )
-                                      : const Icon(Icons.play_arrow),
-                                  label: Text(_isLoading ? 'Starting...' : 'Start Trial Now'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.blue,
-                                    foregroundColor: Colors.white,
-                                    minimumSize: const Size(double.infinity, 45),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-
-                  if (hasExpiredTrial)
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.red.shade200),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.info, color: Colors.red),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Your trial period has expired. Please purchase a license to continue.',
-                              style: TextStyle(fontSize: 13),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  const SizedBox(height: 32),
-
-                  // Device Info (for support)
-                  if (_deviceId.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Column(
-                        children: [
-                          Text(
-                            'Device ID: ${_deviceId.length >= 16 ? _deviceId.substring(0, 16) : _deviceId}...',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.white.withValues(alpha: 0.8),
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '(Provide this when purchasing)',
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.white.withValues(alpha: 0.6),
-                              fontStyle: FontStyle.italic,
-                            ),
-                          ),
-                        ],
+                            )
+                          : const Icon(Icons.check_circle),
+                      label: const Text('Validate License'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
                       ),
                     ),
                 ],
               ),
             ),
-          ),
+
+            // License Details (after validation)
+            if (_licenseData != null) ...[
+              const SizedBox(height: 24),
+
+              Card(
+                color: Colors.green.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.check_circle, color: Colors.green.shade700),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Valid License',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const Divider(height: 24),
+
+                      _buildDetailRow('School', _licenseData!['school']),
+                      _buildDetailRow('School Code', _licenseData!['code']),
+                      _buildDetailRow(
+                        'Expiry Date',
+                        _formatDate(DateTime.parse(_licenseData!['expiry'])),
+                      ),
+                      _buildDetailRow(
+                        'Days Remaining',
+                        '${_licenseData!['daysRemaining']} days',
+                      ),
+                      if (_licenseData!['maxStudents'] != null &&
+                          _licenseData!['maxStudents'] > 0)
+                        _buildDetailRow(
+                          'Max Students',
+                          '${_licenseData!['maxStudents']}',
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Activate Button
+              ElevatedButton.icon(
+                onPressed: _isActivating ? null : _activateLicense,
+                icon: _isActivating
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.verified_user),
+                label: const Text('Activate License'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+              ),
+
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _licenseData = null;
+                    _licenseKeyController.clear();
+                  });
+                },
+                child: const Text('Enter Different Key'),
+              ),
+            ],
+
+            const SizedBox(height: 32),
+
+            // Help Text
+            Card(
+              color: Colors.blue.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.help_outline, color: Colors.blue.shade700),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Need Help?',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '• Contact support to get your license key\n'
+                      '• The license is bound to this device only\n'
+                      '• Ensure you have a valid expiry date\n'
+                      '• Keep your license key safe and secure',
+                      style: TextStyle(fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Developer Access Button (hidden, tap 5 times to reveal)
+            Center(
+              child: TextButton.icon(
+                onPressed: _openDeveloperMode,
+                icon: Icon(Icons.code, size: 16, color: Colors.grey.shade600),
+                label: Text(
+                  'Developer Access',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+              ),
+            ),
+
+          ],
         ),
       ),
     );
+  }
+
+  Widget _buildDetailRow(String label, dynamic value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              '$label:',
+              style: const TextStyle(
+                fontWeight: FontWeight.w500,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value.toString(),
+              style: const TextStyle(fontSize: 14),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.day}/${date.month}/${date.year}';
   }
 }

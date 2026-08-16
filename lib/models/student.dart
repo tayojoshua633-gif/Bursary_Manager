@@ -14,6 +14,13 @@ class Student {
   String? parentEmail;
   String? parentAddress;
   String? photoPath; // NEW FIELD
+  String? dateOfAdmission; // Registration date
+  String? nationality;
+  String? stateOfOrigin;
+  String? lga;
+  int isActive;
+  String? leftDate;
+  String? leftReason;
 
   // Optional joined fields (from classes and arms)
   String? className;
@@ -35,6 +42,13 @@ class Student {
     this.parentEmail,
     this.parentAddress,
     this.photoPath,
+    this.dateOfAdmission,
+    this.nationality,
+    this.stateOfOrigin,
+    this.lga,
+    this.isActive = 1,
+    this.leftDate,
+    this.leftReason,
     this.className,
     this.armName,
   });
@@ -57,6 +71,13 @@ class Student {
       parentEmail: map['parentEmail'],
       parentAddress: map['parentAddress'],
       photoPath: map['photoPath'],
+      dateOfAdmission: map['dateOfAdmission'],
+      nationality: map['nationality'],
+      stateOfOrigin: map['stateOfOrigin'],
+      lga: map['lga'],
+      isActive: (map['isActive'] as int?) ?? 1,
+      leftDate: map['leftDate'],
+      leftReason: map['leftReason'],
 
       // Joined fields (from SELECT s.*, c.name AS className, a.name AS armName)
       className: map['className'],
@@ -82,6 +103,13 @@ class Student {
       'parentEmail': parentEmail,
       'parentAddress': parentAddress,
       'photoPath': photoPath,
+      'dateOfAdmission': dateOfAdmission,
+      'nationality': nationality,
+      'stateOfOrigin': stateOfOrigin,
+      'lga': lga,
+      'isActive': isActive,
+      'leftDate': leftDate,
+      'leftReason': leftReason,
     };
   }
 }

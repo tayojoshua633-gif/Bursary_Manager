@@ -1,28 +1,55 @@
 // lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import 'students/student_list_screen.dart';
-import 'students/student_promotion_screen.dart';
-import 'classes/class_list_screen.dart';
-import 'fees/fee_item_list_screen.dart';
-import 'billing/bill_student_select_screen.dart';
-import 'payments/payment_student_select_screen.dart';
-import 'school_profile/school_profile_screen.dart';
+import 'dart:async';
+import '../utils/app_version.dart';
+import '../utils/app_uptime.dart';
+import '../utils/display_settings_helper.dart';
+import '../utils/license_checker.dart';
+import '../utils/license_tier_helper.dart';
+import '../data/database_helper_wrapper.dart';
+import '../navigation/sidebar_scaffold.dart';
 import 'dashboard/dashboard_screen.dart';
-import 'backup/backup_screen.dart';
-import 'sessions/session_term_management_screen.dart';
 import 'auth/welcome_screen.dart';
-import 'auth/user_management_screen.dart';
-import 'reports/debtors_list_screen.dart';
-import 'license/license_management_screen.dart'; // NEW: License Management
-import '../utils/license_checker.dart'; // NEW: License Checker
+import 'settings/change_credentials_screen.dart';
+import 'menus/school_management_menu.dart';
+import 'menus/student_management_menu.dart';
+import 'menus/parents_management_menu.dart';
+import 'menus/bills_payment_menu.dart';
+import 'menus/transportation_menu.dart';
+import 'menus/reports_menu.dart';
+import 'menus/stock_sales_menu.dart';
+import 'menus/expenditure_menu.dart';
+import 'menus/preferences_menu.dart';
+import 'menus/staff_management_menu.dart';
+import '../server/server.dart';
+import '../widgets/network_status_indicator.dart';
+import '../utils/cloud_sync_helper.dart';
+import 'guide/app_guide_screen.dart';
+import 'examinations/examination_menu_screen.dart';
+import 'web/web_view_screen.dart';
+import '../widgets/whats_new_dialog.dart';
+
+// Quick access imports
+import 'students/student_form_screen.dart';
+import 'students/student_list_screen.dart';
+import 'payments/payment_student_select_screen.dart';
+import 'sales/buyer_selection_screen.dart';
+import 'reports/daily_report_screen.dart';
+import 'expenses/expense_form_screen.dart';
+import 'billing/bill_student_select_screen.dart';
+import 'backup/backup_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
+  final bool cloudSyncRestored;
 
   const HomeScreen({
     super.key,
     required this.currentUser,
+    this.cloudSyncRestored = false,
   });
 
   @override
@@ -30,27 +57,246 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  Map<String, dynamic>? _licenseStatus;
+  String _appMode = 'standalone';
+  bool _isReadOnlyMode = false;
+  bool _cloudSyncAvailable = false;
+  bool _isSyncing = false;
+
+  String? _activeSession;
+  String? _activeTerm;
+  int? _licenseDaysRemaining;
+  LicenseTier? _currentTier;
+  String _uptimeText = AppUptime.format();
+  Timer? _uptimeTimer;
 
   @override
   void initState() {
     super.initState();
-    // Check license status and show warning if needed
-    _checkLicenseStatus();
+    _loadAppMode();
+    _loadActiveSessionTerm();
+    _loadLicenseStatus();
+    _loadCurrentTier();
+    _uptimeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _uptimeText = AppUptime.format());
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      WhatsNewDialog.maybeShow(context);
+    });
+    if (widget.cloudSyncRestored) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Icon(Icons.cloud_done, color: Colors.white, size: 18),
+                SizedBox(width: 10),
+                Text('Data synced from Google Drive'),
+              ],
+            ),
+            backgroundColor: Colors.teal.shade700,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      });
+    }
   }
 
-  Future<void> _checkLicenseStatus() async {
-    // Get license status
-    final status = await LicenseChecker.getLicenseStatus();
-    
-    if (mounted) {
-      setState(() {
-        _licenseStatus = status;
-      });
-      
-      // Show expiry warning if needed
-      LicenseChecker.showExpiryWarningIfNeeded(context);
+  @override
+  void dispose() {
+    _uptimeTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadAppMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final results = await Future.wait<bool>([
+      CloudSyncHelper.isReadOnlyMode(),
+      CloudSyncHelper.isAvailable(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _appMode = prefs.getString('app_mode') ?? 'standalone';
+      _isReadOnlyMode = results[0];
+      _cloudSyncAvailable = results[1];
+    });
+  }
+
+  Future<void> _loadActiveSessionTerm() async {
+    final db = DatabaseHelperWrapper();
+    final results = await Future.wait([
+      db.getActiveSession(),
+      db.getActiveTerm(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      final session = results[0] as Map<String, dynamic>?;
+      _activeSession = session?['sessionName'] as String?;
+      _activeTerm = results[1] as String?;
+    });
+  }
+
+  Future<void> _loadLicenseStatus() async {
+    final status = await LicenseChecker.checkLicense();
+    if (!mounted) return;
+    setState(() {
+      _licenseDaysRemaining = status.isValid ? status.daysRemaining : null;
+    });
+  }
+
+  /// Tiers were introduced after many licenses were already activated, so
+  /// there's no tier stored on the license itself — derive it from the
+  /// school's current active student count instead.
+  Future<void> _loadCurrentTier() async {
+    final db = DatabaseHelperWrapper();
+    final activeStudents = await db.getActiveStudents();
+    if (!mounted) return;
+    setState(() {
+      _currentTier = tierForStudentCount(activeStudents.length);
+    });
+  }
+
+  /// Manual sync: restore on read-only devices, backup on write devices.
+  Future<void> _triggerManualSync() async {
+    if (_isSyncing) return;
+    setState(() => _isSyncing = true);
+
+    final result = _isReadOnlyMode
+        ? await CloudSyncHelper.manualRestore()
+        : await CloudSyncHelper.manualBackup();
+
+    if (!mounted) return;
+
+    if (result['success'] == true && _isReadOnlyMode) {
+      await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus()]);
+      if (!mounted) return;
     }
+
+    setState(() => _isSyncing = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              result['success'] == true ? Icons.cloud_done : Icons.cloud_off,
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(result['message'] ?? 'Sync complete')),
+          ],
+        ),
+        backgroundColor: result['success'] == true
+            ? Colors.teal.shade700
+            : Colors.red,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  Future<bool> _showExitConfirmation() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.exit_to_app, color: Colors.red),
+            SizedBox(width: 10),
+            Text('Exit App'),
+          ],
+        ),
+        content: const Text('Are you sure you want to exit the app?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Exit'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  // HIDDEN: Server hosting permission check (pending future upgrade)
+  // Will be re-enabled in next version
+  // Future<bool> _hasServerHostingPermission() async {
+  //   final userTypeRaw = widget.currentUser['userType'] ?? 'bursar';
+  //   // Super admin always has access
+  //   if (userTypeRaw == 'super_admin') {
+  //     return true;
+  //   }
+  //   // Check permission for admin and bursar
+  //   final db = DatabaseHelperWrapper();
+  //   return await db.hasPermission(userTypeRaw, 'server_hosting');
+  // }
+
+  void _showUserProfileDialog(BuildContext context) {
+    final userTypeRaw = widget.currentUser['userType'] ?? 'bursar';
+    final username = widget.currentUser['username'] ?? 'User';
+    final userType = userTypeRaw == 'super_admin'
+        ? 'Super Admin'
+        : userTypeRaw == 'admin'
+        ? 'Admin'
+        : 'Bursar';
+    final userId =
+        widget.currentUser['userId'] ?? widget.currentUser['id'] ?? 'N/A';
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.account_circle, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('User Profile'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _profileInfoRow('Username', username),
+            const SizedBox(height: 12),
+            _profileInfoRow('User Type', userType),
+            const SizedBox(height: 12),
+            _profileInfoRow('User ID', userId.toString()),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _profileInfoRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 80,
+          child: Text(
+            '$label:',
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+        ),
+        Expanded(child: Text(value, style: const TextStyle(fontSize: 14))),
+      ],
+    );
   }
 
   Future<void> _logout(BuildContext context) async {
@@ -75,6 +321,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed != true) return;
 
+    // Stop server if running
+    final server = BursaryServer();
+    if (server.isRunning) {
+      try {
+        await server.stop();
+        debugPrint('🛑 Server stopped on logout');
+      } catch (e) {
+        debugPrint('⚠️ Error stopping server on logout: $e');
+      }
+    }
+
+    // Clear user data from SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('isLoggedIn');
+    await prefs.remove('username');
+    await prefs.remove('userType');
+    await prefs.remove('userId');
+    await prefs.remove('email');
+    await prefs.remove('schoolId');
+
     if (context.mounted) {
       Navigator.pushAndRemoveUntil(
         context,
@@ -84,241 +350,707 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// Helper method to navigate with sidebar support
+  void _navigateWithSidebar(BuildContext context, Widget page, String? pageId) {
+    final screenSize = MediaQuery.of(context).size;
+    final shortestSide = screenSize.shortestSide;
+    final showSidebar = shortestSide >= 700;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => showSidebar
+            ? SidebarScaffold(
+                currentUser: widget.currentUser,
+                currentPageId: pageId,
+                child: page,
+              )
+            : page,
+      ),
+    ).then((_) => _loadActiveSessionTerm());
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isSuperAdmin = widget.currentUser['userType'] == 'super_admin';
+    final userTypeRaw = widget.currentUser['userType'] ?? 'bursar';
+    final isSuperAdmin = userTypeRaw == 'super_admin';
+    final isAdmin = userTypeRaw == 'admin';
     final username = widget.currentUser['username'] ?? 'User';
-    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+    final userDisplayRole = userTypeRaw == 'super_admin'
+        ? 'Super Admin'
+        : userTypeRaw == 'admin'
+        ? 'Admin'
+        : 'Bursar';
+    final ds = DisplaySettingsProvider.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('School Bursary Manager'),
-        centerTitle: true,
-        actions: [
-          // License Status Indicator
-          _buildLicenseIndicator(),
-          
-          const SizedBox(width: 8),
-          
-          // User Info
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Center(
-              child: Row(
-                children: [
-                  Icon(
-                    isSuperAdmin
-                        ? Icons.admin_panel_settings
-                        : Icons.person,
-                    size: 20,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await _showExitConfirmation();
+        if (shouldExit && mounted) {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            _currentTier == null
+                ? 'School Bursary Manager $kAppVersion'
+                : 'School Bursary Manager ${_currentTier!.label} $kAppVersion',
+          ),
+          centerTitle: true,
+          actions: [
+            // Mode Indicators
+            if (_appMode == 'client')
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: NetworkStatusIndicator(
+                  onDisconnected: () {
+                    // Handle disconnection - could show reconnect dialog
+                  },
+                ),
+              ),
+            // HIDDEN: Server badge (pending future upgrade)
+            // Will be re-enabled in next version
+            // FutureBuilder<bool>(
+            //   future: _hasServerHostingPermission(),
+            //   builder: (context, snapshot) {
+            //     final hasPermission = snapshot.data ?? false;
+            //     if (!hasPermission) return const SizedBox.shrink();
+            //     return Padding(...);
+            //   },
+            // ),
+
+            // CloudSync button — visible when signed in to Google
+            if (_cloudSyncAvailable)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: _isSyncing
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                      )
+                    : IconButton(
+                        icon: Icon(
+                          _isReadOnlyMode
+                              ? Icons.cloud_download
+                              : Icons.cloud_upload,
+                          color: Colors.white,
+                        ),
+                        tooltip: _isReadOnlyMode
+                            ? 'Sync from Drive'
+                            : 'Backup to Drive',
+                        onPressed: _triggerManualSync,
+                      ),
+              ),
+
+            // User Menu - Larger and more visible
+            PopupMenuButton<String>(
+              offset: const Offset(0, 56),
+              tooltip: 'User Menu',
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.5),
+                    width: 1.5,
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    username,
-                    style: const TextStyle(fontSize: 14),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isSuperAdmin ? Icons.admin_panel_settings : Icons.person,
+                      size: 24,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      username,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(
+                      Icons.arrow_drop_down,
+                      size: 24,
+                      color: Colors.white,
+                    ),
+                  ],
+                ),
+              ),
+              itemBuilder: (context) => [
+                PopupMenuItem<String>(
+                  value: 'profile',
+                  child: Row(
+                    children: [
+                      Icon(
+                        isSuperAdmin
+                            ? Icons.admin_panel_settings
+                            : isAdmin
+                            ? Icons.admin_panel_settings_outlined
+                            : Icons.person,
+                        size: 20,
+                        color: Colors.blue,
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            username,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            userDisplayRole,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+                const PopupMenuItem<String>(
+                  value: 'change_credentials',
+                  child: Row(
+                    children: [
+                      Icon(Icons.lock_outline, size: 20),
+                      SizedBox(width: 12),
+                      Text('Change Credentials'),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+                const PopupMenuItem<String>(
+                  value: 'logout',
+                  child: Row(
+                    children: [
+                      Icon(Icons.logout, size: 20, color: Colors.red),
+                      SizedBox(width: 12),
+                      Text('Logout', style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
+              ],
+              onSelected: (value) {
+                switch (value) {
+                  case 'profile':
+                    // Show user profile info dialog
+                    _showUserProfileDialog(context);
+                    break;
+                  case 'change_credentials':
+                    // Navigate to change credentials screen
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ChangeCredentialsScreen(
+                          currentUser: widget.currentUser,
+                        ),
+                      ),
+                    );
+                    break;
+                  case 'logout':
+                    _logout(context);
+                    break;
+                }
+              },
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            // Read-Only Mode banner
+            if (_isReadOnlyMode)
+              Container(
+                width: double.infinity,
+                color: Colors.orange.shade700,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 6,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.lock, color: Colors.white, size: 16),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Read-Only Mode — pull down or tap Sync to refresh data.',
+                        style: TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: _isSyncing ? null : _triggerManualSync,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: _isSyncing
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text(
+                                'Sync Now',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            // Quick Access Bar
+            Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: ds.cardPadding,
+                vertical: ds.cardPadding * 0.75,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.grey.withValues(alpha: 0.2),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _quickAccessItem(
+                    context,
+                    icon: Icons.person_add,
+                    label: 'Register',
+                    color: Colors.green,
+                    onTap: () => _navigateWithSidebar(
+                      context,
+                      const StudentFormScreen(),
+                      'student_management/students',
+                    ),
+                  ),
+                  _quickAccessItem(
+                    context,
+                    icon: Icons.people,
+                    label: 'Students',
+                    color: Colors.blue,
+                    onTap: () => _navigateWithSidebar(
+                      context,
+                      const StudentListScreen(),
+                      'student_management/students',
+                    ),
+                  ),
+                  _quickAccessItem(
+                    context,
+                    icon: Icons.receipt_long,
+                    label: 'Bill',
+                    color: Colors.teal,
+                    onTap: () => _navigateWithSidebar(
+                      context,
+                      const BillStudentSelectScreen(),
+                      'bills_payment/student_bills',
+                    ),
+                  ),
+                  _quickAccessItem(
+                    context,
+                    icon: Icons.payment,
+                    label: 'Payment',
+                    color: Colors.indigo,
+                    onTap: () => _navigateWithSidebar(
+                      context,
+                      const PaymentStudentSelectScreen(),
+                      'bills_payment/payments',
+                    ),
+                  ),
+                  _quickAccessItem(
+                    context,
+                    icon: Icons.point_of_sale,
+                    label: 'Sale',
+                    color: Colors.orange,
+                    onTap: () => _navigateWithSidebar(
+                      context,
+                      const BuyerSelectionScreen(),
+                      'stock_sales/sales',
+                    ),
+                  ),
+                  _quickAccessItem(
+                    context,
+                    icon: Icons.money_off,
+                    label: 'Expense',
+                    color: Colors.purple,
+                    onTap: () => _navigateWithSidebar(
+                      context,
+                      ExpenseFormScreen(currentUser: widget.currentUser),
+                      'expenditure/record',
+                    ),
+                  ),
+                  _quickAccessItem(
+                    context,
+                    icon: Icons.assessment,
+                    label: 'Daily',
+                    color: Colors.deepOrange,
+                    onTap: () => _navigateWithSidebar(
+                      context,
+                      const DailyReportScreen(),
+                      'reports/daily',
+                    ),
+                  ),
+                  _quickAccessItem(
+                    context,
+                    icon: Icons.backup,
+                    label: 'Backup',
+                    color: Colors.blueGrey,
+                    onTap: () => _navigateWithSidebar(
+                      context,
+                      const BackupScreen(),
+                      'preferences/backup',
+                    ),
                   ),
                 ],
               ),
             ),
-          ),
-          // Logout Button
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Logout',
-            onPressed: () => _logout(context),
-          ),
-        ],
-      ),
-      body: GridView.count(
-        crossAxisCount: isLandscape ? 3 : 2,
-        padding: const EdgeInsets.all(16),
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: isLandscape ? 1.8 : 0.85,
-        children: [
-          _menuCard(
-            context,
-            title: 'Dashboard',
-            subtitle: 'Summary & statistics',
-            icon: Icons.dashboard_outlined,
-            color: Colors.blue,
-            page: const DashboardScreen(),
-          ),
 
-          _menuCard(
-            context,
-            title: 'Session & Term',
-            subtitle: 'Manage sessions',
-            icon: Icons.date_range_outlined,
-            color: Colors.purple,
-            page: const SessionTermManagementScreen(),
-          ),
-
-          _menuCard(
-            context,
-            title: 'Students',
-            subtitle: 'Manage students',
-            icon: Icons.person_outline,
-            color: Colors.green,
-            page: const StudentListScreen(),
-          ),
-
-          _menuCard(
-            context,
-            title: 'Promote Students',
-            subtitle: 'Move to next class',
-            icon: Icons.arrow_upward_outlined,
-            color: Colors.deepPurple,
-            page: const StudentPromotionScreen(),
-          ),
-
-          _menuCard(
-            context,
-            title: 'Classes & Arms',
-            subtitle: 'Configure classes',
-            icon: Icons.school_outlined,
-            color: Colors.orange,
-            page: const ClassListScreen(),
-          ),
-
-          _menuCard(
-            context,
-            title: 'Fee Items',
-            subtitle: 'Define & assign fees',
-            icon: Icons.payments_outlined,
-            color: Colors.teal,
-            page: const FeeItemListScreen(),
-          ),
-
-          _menuCard(
-            context,
-            title: 'Student Bills',
-            subtitle: 'Generate bills',
-            icon: Icons.receipt_long_outlined,
-            color: Colors.indigo,
-            page: const BillStudentSelectScreen(),
-          ),
-
-          _menuCard(
-            context,
-            title: 'Payments',
-            subtitle: 'Record payments',
-            icon: Icons.attach_money_outlined,
-            color: Colors.lightGreen,
-            page: const PaymentStudentSelectScreen(),
-          ),
-
-          _menuCard(
-            context,
-            title: 'Debtors List',
-            subtitle: 'Track outstanding payments',
-            icon: Icons.money_off_outlined,
-            color: Colors.red,
-            page: const DebtorsListScreen(),
-          ),
-
-          _menuCard(
-            context,
-            title: 'School Profile',
-            subtitle: 'School info & logo',
-            icon: Icons.account_balance_outlined,
-            color: Colors.deepPurple,
-            page: const SchoolProfileScreen(),
-          ),
-
-          // User Management (Super Admin Only)
-          if (isSuperAdmin)
-            _menuCard(
-              context,
-              title: 'User Management',
-              subtitle: 'Manage user accounts',
-              icon: Icons.manage_accounts_outlined,
-              color: Colors.red,
-              page: UserManagementScreen(currentUser: widget.currentUser),
+            // Session/Term Strip
+            Container(
+              width: double.infinity,
+              color: Colors.indigo.shade50,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (_activeSession != null || _activeTerm != null) ...[
+                    Icon(
+                      Icons.calendar_today,
+                      size: 14,
+                      color: Colors.indigo.shade700,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      [
+                        if (_activeSession != null) _activeSession!,
+                        if (_activeTerm != null) _activeTerm!,
+                      ].join('  •  '),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.indigo.shade800,
+                      ),
+                    ),
+                  ],
+                  if (_licenseDaysRemaining != null) ...[
+                    if (_activeSession != null || _activeTerm != null)
+                      const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _licenseDaysRemaining! <= 30
+                            ? Colors.red.shade100
+                            : Colors.indigo.shade100,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        'LiRm-${_licenseDaysRemaining}dys',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: _licenseDaysRemaining! <= 30
+                              ? Colors.red.shade800
+                              : Colors.indigo.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (_activeSession != null ||
+                      _activeTerm != null ||
+                      _licenseDaysRemaining != null)
+                    const SizedBox(width: 10),
+                  Icon(
+                    Icons.timer_outlined,
+                    size: 14,
+                    color: Colors.indigo.shade700,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Up: $_uptimeText',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.indigo.shade700,
+                    ),
+                  ),
+                ],
+              ),
             ),
 
-          // License Management (Super Admin Only)
-          if (isSuperAdmin)
-            _menuCard(
-              context,
-              title: 'License',
-              subtitle: 'Manage license',
-              icon: Icons.vpn_key_outlined,
-              color: Colors.amber,
-              page: const LicenseManagementScreen(),
-            ),
+            // Main Menu Grid
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _triggerManualSync,
+                color: Colors.teal.shade700,
+                child: GridView.extent(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  maxCrossAxisExtent: context.gridMaxExtent,
+                  padding: EdgeInsets.all(ds.cardPadding),
+                  crossAxisSpacing: ds.cardPadding,
+                  mainAxisSpacing: ds.cardPadding,
+                  childAspectRatio: context.gridChildAspectRatio,
+                  children: [
+                    // Dashboard - Direct access
+                    _menuCard(
+                      context,
+                      title: 'Dashboard',
+                      subtitle: 'Summary & statistics',
+                      icon: Icons.dashboard_outlined,
+                      color: Colors.blue,
+                      page: const DashboardScreen(),
+                      pageId: 'dashboard',
+                    ),
 
-          _menuCard(
-            context,
-            title: 'Backup',
-            subtitle: 'Save & restore data',
-            icon: Icons.save_alt_outlined,
-            color: Colors.blueGrey,
-            page: const BackupScreen(),
-          ),
-        ],
-      ),
+                    // School Management Category
+                    _menuCard(
+                      context,
+                      title: 'School Management',
+                      subtitle: 'Profile, classes & sessions',
+                      icon: Icons.account_balance_outlined,
+                      color: Colors.deepPurple,
+                      page: SchoolManagementMenu(
+                        currentUser: widget.currentUser,
+                      ),
+                      pageId: 'school_management',
+                    ),
+
+                    // Student Management Category
+                    _menuCard(
+                      context,
+                      title: 'Student Management',
+                      subtitle: 'Students & debtors',
+                      icon: Icons.people_outlined,
+                      color: Colors.green,
+                      page: StudentManagementMenu(
+                        currentUser: widget.currentUser,
+                      ),
+                      pageId: 'student_management',
+                    ),
+
+                    // Parents Management Category
+                    _menuCard(
+                      context,
+                      title: 'Parents Management',
+                      subtitle: 'Parents information',
+                      icon: Icons.family_restroom_outlined,
+                      color: Colors.teal,
+                      page: ParentsManagementMenu(
+                        currentUser: widget.currentUser,
+                      ),
+                      pageId: 'parents_management',
+                    ),
+
+                    // Bills & Payment Category
+                    _menuCard(
+                      context,
+                      title: 'Bills & Payment',
+                      subtitle: 'Fees, bills & payments',
+                      icon: Icons.receipt_long_outlined,
+                      color: Colors.indigo,
+                      page: BillsPaymentMenu(currentUser: widget.currentUser),
+                      pageId: 'bills_payment',
+                    ),
+
+                    // Transportation Category
+                    _menuCard(
+                      context,
+                      title: 'Transportation',
+                      subtitle: 'Routes & student allocation',
+                      icon: Icons.directions_bus_outlined,
+                      color: Colors.teal,
+                      page: TransportationMenu(currentUser: widget.currentUser),
+                      pageId: 'transportation',
+                    ),
+
+                    // Reports Category
+                    _menuCard(
+                      context,
+                      title: 'Reports',
+                      subtitle: 'Analytics & summaries',
+                      icon: Icons.bar_chart_outlined,
+                      color: Colors.deepOrange,
+                      page: ReportsMenu(currentUser: widget.currentUser),
+                      pageId: 'reports',
+                    ),
+
+                    // Stock & Sales Management Category
+                    _menuCard(
+                      context,
+                      title: 'Stock & Sales',
+                      subtitle: 'Inventory & sales',
+                      icon: Icons.inventory_2_outlined,
+                      color: Colors.brown,
+                      page: StockSalesMenu(currentUser: widget.currentUser),
+                      pageId: 'stock_sales',
+                    ),
+
+                    // Expenditure Management Category
+                    _menuCard(
+                      context,
+                      title: 'Expenditure',
+                      subtitle: 'Track expenses',
+                      icon: Icons.money_off_outlined,
+                      color: Colors.purple,
+                      page: ExpenditureMenu(currentUser: widget.currentUser),
+                      pageId: 'expenditure',
+                    ),
+
+                    // Staff Management Category
+                    _menuCard(
+                      context,
+                      title: 'Staff Management',
+                      subtitle: 'Staff records & allocations',
+                      icon: Icons.badge_outlined,
+                      color: Colors.indigo,
+                      page: StaffManagementMenu(
+                        currentUser: widget.currentUser,
+                      ),
+                      pageId: 'staff_management',
+                    ),
+
+                    // Preferences Category
+                    _menuCard(
+                      context,
+                      title: 'Preferences',
+                      subtitle: 'Backup, license & settings',
+                      icon: Icons.settings_outlined,
+                      color: Colors.blueGrey,
+                      page: PreferencesMenu(currentUser: widget.currentUser),
+                      pageId: 'preferences',
+                    ),
+
+                    // External Examination
+                    _menuCard(
+                      context,
+                      title: 'External Examination',
+                      subtitle: 'Exam types & registration',
+                      icon: Icons.assignment_outlined,
+                      color: Colors.cyan,
+                      page: ExaminationMenuScreen(
+                        currentUser: widget.currentUser,
+                      ),
+                      pageId: 'external_examinations',
+                    ),
+
+                    // App Guide
+                    _menuCard(
+                      context,
+                      title: 'App Guide',
+                      subtitle: 'Documentation & manual',
+                      icon: Icons.menu_book_outlined,
+                      color: Colors.teal,
+                      page: const AppGuideScreen(),
+                      pageId: 'guide',
+                    ),
+
+                    // Updates
+                    _menuCard(
+                      context,
+                      title: 'Updates',
+                      subtitle: 'Latest app updates',
+                      icon: Icons.system_update_outlined,
+                      color: Colors.cyan,
+                      page: const WebViewScreen(
+                        url: 'https://tysolutions.com.ng/apps/bursary-manager.html',
+                        title: 'Updates',
+                      ),
+                      pageId: 'updates',
+                    ),
+                  ],
+                ), // GridView.extent
+              ), // RefreshIndicator
+            ), // Expanded
+          ], // Column children
+        ), // Column
+      ), // Scaffold
     );
   }
 
-  /// Build license status indicator in AppBar
-  Widget _buildLicenseIndicator() {
-    if (_licenseStatus == null) {
-      return const SizedBox.shrink();
-    }
+  Widget _quickAccessItem(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    final ds = DisplaySettingsProvider.of(context);
 
-    final isValid = _licenseStatus!['valid'] == true;
-    final isTrial = _licenseStatus!['isTrial'] == true;
-    final isLifetime = _licenseStatus!['isLifetime'] == true;
-    final daysRemaining = _licenseStatus!['daysRemaining'] as int?;
-
-    // Determine indicator color and icon
-    Color indicatorColor;
-    IconData indicatorIcon;
-    String tooltipText;
-
-    if (!isValid) {
-      indicatorColor = Colors.red;
-      indicatorIcon = Icons.error;
-      tooltipText = 'License Invalid/Expired';
-    } else if (isTrial) {
-      if (daysRemaining != null && daysRemaining <= 7) {
-        indicatorColor = Colors.orange;
-        indicatorIcon = Icons.warning;
-        tooltipText = 'Trial expires in $daysRemaining days';
-      } else {
-        indicatorColor = Colors.blue;
-        indicatorIcon = Icons.timer;
-        tooltipText = isTrial ? 'Trial: $daysRemaining days left' : 'Trial Active';
-      }
-    } else if (isLifetime) {
-      indicatorColor = Colors.green;
-      indicatorIcon = Icons.verified;
-      tooltipText = 'Lifetime License';
-    } else if (daysRemaining != null && daysRemaining <= 7) {
-      indicatorColor = Colors.orange;
-      indicatorIcon = Icons.warning;
-      tooltipText = 'License expires in $daysRemaining days';
-    } else {
-      indicatorColor = Colors.green;
-      indicatorIcon = Icons.check_circle;
-      tooltipText = daysRemaining != null 
-          ? 'License Active: $daysRemaining days left'
-          : 'License Active';
-    }
-
-    return IconButton(
-      icon: Icon(indicatorIcon, color: indicatorColor),
-      tooltip: tooltipText,
-      onPressed: () {
-        // Navigate to license management screen
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => const LicenseManagementScreen(),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Tooltip(
+        message: label,
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: ds.cardPadding * 0.5,
+            vertical: ds.cardPadding * 0.4,
           ),
-        ).then((_) => _checkLicenseStatus()); // Refresh status when returning
-      },
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: ds.iconSize * 1.1, color: color),
+              SizedBox(height: ds.cardPadding * 0.2),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: ds.subtitleFontSize * 0.75,
+                  fontWeight: FontWeight.w500,
+                  color: color,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -329,20 +1061,36 @@ class _HomeScreenState extends State<HomeScreen> {
     required IconData icon,
     required Color color,
     required Widget page,
+    String? pageId,
   }) {
+    final ds = DisplaySettingsProvider.of(context);
+
     return Card(
       elevation: 3,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: () {
+          // Check if we should show sidebar
+          final screenSize = MediaQuery.of(context).size;
+          final shortestSide = screenSize.shortestSide;
+          final showSidebar = shortestSide >= 700;
+
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => page),
-          );
+            MaterialPageRoute(
+              builder: (_) => showSidebar
+                  ? SidebarScaffold(
+                      currentUser: widget.currentUser,
+                      currentPageId: pageId,
+                      child: page,
+                    )
+                  : page,
+            ),
+          ).then((_) => _loadActiveSessionTerm());
         },
         child: Container(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(ds.cardPadding),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             gradient: LinearGradient(
@@ -358,32 +1106,28 @@ class _HomeScreenState extends State<HomeScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: EdgeInsets.all(ds.cardPadding),
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.2),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  icon,
-                  size: 40,
-                  color: color,
-                ),
+                child: Icon(icon, size: ds.iconSize * 1.6, color: color),
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: ds.cardPadding * 0.75),
               Text(
                 title,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.bold,
-                  fontSize: 15,
+                  fontSize: ds.titleFontSize * 0.85,
                 ),
               ),
-              const SizedBox(height: 4),
+              SizedBox(height: ds.cardPadding * 0.25),
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: ds.subtitleFontSize,
                   color: Colors.grey[600],
                 ),
                 maxLines: 2,

@@ -15,7 +15,7 @@
     <!-- APPLICATION -->
     <!-- ============================================ -->
     <application
-        android:label="bursary_manager"
+        android:label="Bursary Manager"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">

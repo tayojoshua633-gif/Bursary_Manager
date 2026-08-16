@@ -1,7 +1,7 @@
 // lib/screens/sessions/session_term_management_screen.dart
 
 import 'package:flutter/material.dart';
-import 'package:bursary_manager/db/database_helper.dart';
+import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import 'package:sqflite/sqflite.dart';
 
 class SessionTermManagementScreen extends StatefulWidget {
@@ -14,7 +14,7 @@ class SessionTermManagementScreen extends StatefulWidget {
 
 class _SessionTermManagementScreenState
     extends State<SessionTermManagementScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   final TextEditingController _sessionCtrl = TextEditingController();
   List<Map<String, dynamic>> _sessions = [];
@@ -138,6 +138,62 @@ class _SessionTermManagementScreenState
     }
   }
 
+  /// Groups of tables that store records tagged with a session name.
+  /// Each entry is a human-readable label mapped to the tables that
+  /// belong under it, so usage can be reported to the user in a way
+  /// they understand (rather than raw table names).
+  static const Map<String, List<String>> _sessionDataGroups = {
+    'Student bills': ['student_bills'],
+    'Payments received': ['payments'],
+    'Expenses recorded': ['expenses'],
+    'Fee structure (fee items & class fee assignments)': [
+      'fee_items',
+      'class_fees',
+      'special_fee_items',
+      'special_class_fees',
+      'excluded_default_fees',
+      'fee_priority',
+    ],
+    'Examination registrations': ['examination_registrations'],
+    'Academic results & exams': [
+      'exams',
+      'grading_definitions',
+      'student_scores',
+      'student_psychomotor_scores',
+      'student_affective_scores',
+      'result_computations',
+    ],
+    'Store sales & debtors': ['sales', 'sales_debtors'],
+    'Transport allocations': ['student_transport_allocations'],
+    'Staff teaching allocations': [
+      'class_teacher_allocations',
+      'subject_teacher_allocations',
+    ],
+  };
+
+  /// Returns the human-readable labels (with record counts) of every
+  /// data group that has at least one record tagged with [sessionName].
+  Future<Map<String, int>> _getSessionUsage(String sessionName) async {
+    final db = await _db.database;
+    final Map<String, int> usage = {};
+
+    for (final entry in _sessionDataGroups.entries) {
+      int total = 0;
+      for (final table in entry.value) {
+        final result = await db.rawQuery(
+          'SELECT COUNT(*) AS c FROM $table WHERE session = ?',
+          [sessionName],
+        );
+        total += (result.first['c'] as int?) ?? 0;
+      }
+      if (total > 0) {
+        usage[entry.key] = total;
+      }
+    }
+
+    return usage;
+  }
+
   Future<void> _deleteSession(int id, String sessionName) async {
     // Check if trying to delete active session
     if (id == _activeSessionId) {
@@ -151,6 +207,74 @@ class _SessionTermManagementScreenState
       }
       return;
     }
+
+    // Check if the session has any records tied to it. If it does, block
+    // deletion outright — removing the session would orphan those
+    // financial/academic records and break reports that look them up by
+    // session name.
+    final usage = await _getSessionUsage(sessionName);
+    if (usage.isNotEmpty) {
+      if (mounted) {
+        await showDialog<void>(
+          context: context,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.block, color: Colors.red),
+                  SizedBox(width: 8),
+                  Text('Cannot Delete Session'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '"$sessionName" cannot be deleted because it contains the following records:',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  ...usage.entries.map(
+                    (e) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.fiber_manual_record, size: 8),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text('${e.key} (${e.value})'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Deleting a session that still has records would '
+                    'permanently disconnect those bills, payments, results '
+                    'and reports from any session, corrupting your '
+                    'historical data. Only sessions with no records can be '
+                    'deleted.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                ],
+              ),
+              actions: [
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK'),
+                ),
+              ],
+            );
+          },
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
 
     // Show confirmation dialog
     final confirmed = await showDialog<bool>(
@@ -424,12 +548,16 @@ class _SessionTermManagementScreenState
                     return Card(
                       elevation: isSelected ? 4 : 1,
                       color: isSelected ? Colors.indigo.shade50 : null,
-                      child: RadioListTile<int>(
-                        value: id,
-                        groupValue: _selectedSessionId,
-                        onChanged: (value) {
-                          setState(() => _selectedSessionId = value);
-                        },
+                      child: ListTile(
+                        leading: Radio<int>(
+                          value: id,
+                          // ignore: deprecated_member_use
+                          groupValue: _selectedSessionId,
+                          // ignore: deprecated_member_use
+                          onChanged: (value) {
+                            setState(() => _selectedSessionId = value);
+                          },
+                        ),
                         title: Text(
                           name,
                           style: TextStyle(
@@ -496,11 +624,14 @@ class _SessionTermManagementScreenState
                               ),
                           ],
                         ),
-                        secondary: IconButton(
+                        trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
                           onPressed: () => _deleteSession(id, name),
                           tooltip: 'Delete session',
                         ),
+                        onTap: () {
+                          setState(() => _selectedSessionId = id);
+                        },
                       ),
                     );
                   }),

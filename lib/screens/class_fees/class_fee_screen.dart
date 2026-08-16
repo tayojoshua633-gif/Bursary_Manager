@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:bursary_manager/db/database_helper.dart';
+import 'package:bursary_manager/data/database_helper_wrapper.dart';
 
 class ClassFeeScreen extends StatefulWidget {
   final int classId;
@@ -16,7 +16,7 @@ class ClassFeeScreen extends StatefulWidget {
 }
 
 class _ClassFeeScreenState extends State<ClassFeeScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   List<Map<String, dynamic>> _feeItems = [];
   final Map<int, TextEditingController> _amountControllers = {};
   bool _loading = true;

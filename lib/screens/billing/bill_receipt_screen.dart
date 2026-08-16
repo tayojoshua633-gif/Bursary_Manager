@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:printing/printing.dart';
 
-import 'package:bursary_manager/db/database_helper.dart';
+import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import 'package:bursary_manager/models/student.dart';
 import 'package:flutter/rendering.dart';
 
@@ -25,7 +25,7 @@ class BillReceiptScreen extends StatefulWidget {
 }
 
 class _BillReceiptScreenState extends State<BillReceiptScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   Map<String, dynamic>? _school;
   Map<String, dynamic>? _billHeader;
@@ -69,9 +69,23 @@ class _BillReceiptScreenState extends State<BillReceiptScreen> {
     }
 
     _billHeader = header.first;
-    _billTotal = (_billHeader!['totalAmount'] as num).toDouble();
-    _previousBalance = (_billHeader!['previousBalance'] as num?)?.toDouble() ?? 0;
-    _grandTotal = _billTotal + _previousBalance;
+
+    // Calculate fresh previous balance
+    final billTerm = _billHeader!['term']?.toString() ?? '';
+    final billSession = _billHeader!['session']?.toString() ?? '';
+    _previousBalance = await _db.computeOutstandingBeforeTerm(
+      widget.student.id!,
+      term: billTerm,
+      session: billSession,
+    );
+
+    // Current term fees = storedTotal - storedPreviousBalance
+    final storedTotal = (_billHeader!['totalAmount'] as num).toDouble();
+    final storedPrevBalance = (_billHeader!['previousBalance'] as num?)?.toDouble() ?? 0;
+    _billTotal = storedTotal - storedPrevBalance;
+
+    // Grand total = fresh previous balance + current term fees
+    _grandTotal = _previousBalance + _billTotal;
 
     // --------- Load Breakdown (normal fees + custom fees with labels) ----------
     final rows = await db.rawQuery('''
@@ -228,7 +242,7 @@ class _BillReceiptScreenState extends State<BillReceiptScreen> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(item['name']),
-                                Text("₦${item['amount']}"),
+                                Text("N${item['amount']}"),
                               ],
                             ),
                           );
@@ -246,7 +260,7 @@ class _BillReceiptScreenState extends State<BillReceiptScreen> {
                               "Previous Balance:",
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
-                            Text("₦$_previousBalance"),
+                            Text("N$_previousBalance"),
                           ],
                         ),
 
@@ -257,7 +271,7 @@ class _BillReceiptScreenState extends State<BillReceiptScreen> {
                             "Total for This Term:",
                             style: TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          Text("₦$_billTotal"),
+                          Text("N$_billTotal"),
                         ],
                       ),
 
@@ -274,7 +288,7 @@ class _BillReceiptScreenState extends State<BillReceiptScreen> {
                             ),
                           ),
                           Text(
-                            "₦$_grandTotal",
+                            "N$_grandTotal",
                             style: const TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,

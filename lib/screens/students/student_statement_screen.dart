@@ -1,7 +1,7 @@
 // lib/screens/students/student_statement_screen.dart
 
 import 'package:flutter/material.dart';
-import 'package:bursary_manager/db/database_helper.dart';
+import 'package:bursary_manager/data/database_helper_wrapper.dart';
 
 class StudentStatementScreen extends StatefulWidget {
   final int studentId;
@@ -19,7 +19,7 @@ class StudentStatementScreen extends StatefulWidget {
 }
 
 class _StudentStatementScreenState extends State<StudentStatementScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   bool _loading = true;
 
@@ -82,7 +82,8 @@ class _StudentStatementScreenState extends State<StudentStatementScreen> {
     for (var b in _bills) {
       final total = (b['totalAmount'] ?? 0) as num;
       final prev = (b['previousBalance'] ?? 0) as num;
-      _totalBills += (total + prev).toDouble();
+      // Current term fees only (totalAmount already includes previousBalance)
+      _totalBills += (total - prev).toDouble();
     }
 
     _totalPayments = 0;
@@ -112,7 +113,7 @@ class _StudentStatementScreenState extends State<StudentStatementScreen> {
       children: [
         Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
         Text(
-          "₦${amount.toStringAsFixed(2)}",
+          "N${amount.toStringAsFixed(2)}",
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,
@@ -178,10 +179,10 @@ class _StudentStatementScreenState extends State<StudentStatementScreen> {
                       child: ListTile(
                         leading: const Icon(Icons.receipt_long),
                         title: Text(
-                            "₦${(b['totalAmount'] as num).toStringAsFixed(2)}"),
+                            "N${(b['totalAmount'] as num).toStringAsFixed(2)}"),
                         subtitle: Text(b['billDate'] ?? ""),
                         trailing: Text(
-                          "+₦${(b['previousBalance'] as num).toStringAsFixed(2)}",
+                          "+N${(b['previousBalance'] as num).toStringAsFixed(2)}",
                           style: const TextStyle(color: Colors.orange),
                         ),
                       ),
@@ -202,7 +203,7 @@ class _StudentStatementScreenState extends State<StudentStatementScreen> {
                       child: ListTile(
                         leading: const Icon(Icons.payment),
                         title: Text(
-                          "₦${(p['amount'] as num).toStringAsFixed(2)}",
+                          "N${(p['amount'] as num).toStringAsFixed(2)}",
                         ),
                         subtitle: Text(p['paymentDate'] ?? ""),
                         trailing: Text(

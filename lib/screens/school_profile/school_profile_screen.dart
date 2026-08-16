@@ -3,7 +3,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import '../../db/database_helper.dart';
+import '../../data/database_helper_wrapper.dart';
 
 class SchoolProfileScreen extends StatefulWidget {
   const SchoolProfileScreen({super.key});
@@ -13,7 +13,7 @@ class SchoolProfileScreen extends StatefulWidget {
 }
 
 class _SchoolProfileScreenState extends State<SchoolProfileScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final _formKey = GlobalKey<FormState>();
 
   // Controllers
@@ -23,6 +23,17 @@ class _SchoolProfileScreenState extends State<SchoolProfileScreen> {
   final _addressCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
+
+  // Bank Account Controllers (3 accounts)
+  final _bankName1Ctrl = TextEditingController();
+  final _accountNumber1Ctrl = TextEditingController();
+  final _accountName1Ctrl = TextEditingController();
+  final _bankName2Ctrl = TextEditingController();
+  final _accountNumber2Ctrl = TextEditingController();
+  final _accountName2Ctrl = TextEditingController();
+  final _bankName3Ctrl = TextEditingController();
+  final _accountNumber3Ctrl = TextEditingController();
+  final _accountName3Ctrl = TextEditingController();
 
   String? _logoPath;
   bool _loading = true;
@@ -47,6 +58,17 @@ class _SchoolProfileScreenState extends State<SchoolProfileScreen> {
       _phoneCtrl.text = p['phone'] ?? "";
       _emailCtrl.text = p['email'] ?? "";
       _logoPath = p['logoPath'];
+
+      // Bank accounts
+      _bankName1Ctrl.text = p['bankName1'] ?? "";
+      _accountNumber1Ctrl.text = p['accountNumber1'] ?? "";
+      _accountName1Ctrl.text = p['accountName1'] ?? "";
+      _bankName2Ctrl.text = p['bankName2'] ?? "";
+      _accountNumber2Ctrl.text = p['accountNumber2'] ?? "";
+      _accountName2Ctrl.text = p['accountName2'] ?? "";
+      _bankName3Ctrl.text = p['bankName3'] ?? "";
+      _accountNumber3Ctrl.text = p['accountNumber3'] ?? "";
+      _accountName3Ctrl.text = p['accountName3'] ?? "";
     }
 
     if (mounted) setState(() => _loading = false);
@@ -78,6 +100,15 @@ class _SchoolProfileScreenState extends State<SchoolProfileScreen> {
       "phone": _phoneCtrl.text.trim(),
       "email": _emailCtrl.text.trim(),
       "logoPath": _logoPath,
+      "bankName1": _bankName1Ctrl.text.trim(),
+      "accountNumber1": _accountNumber1Ctrl.text.trim(),
+      "accountName1": _accountName1Ctrl.text.trim(),
+      "bankName2": _bankName2Ctrl.text.trim(),
+      "accountNumber2": _accountNumber2Ctrl.text.trim(),
+      "accountName2": _accountName2Ctrl.text.trim(),
+      "bankName3": _bankName3Ctrl.text.trim(),
+      "accountNumber3": _accountNumber3Ctrl.text.trim(),
+      "accountName3": _accountName3Ctrl.text.trim(),
     };
 
     await _db.saveSchoolProfile(data);
@@ -177,6 +208,55 @@ class _SchoolProfileScreenState extends State<SchoolProfileScreen> {
                       ),
                     ),
 
+                    const SizedBox(height: 20),
+
+                    // ====================== BANKING INFO ======================
+                    _sectionCard(
+                      "Banking Information",
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Add up to 3 bank accounts. These will appear on all bills, receipts and reports.',
+                            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Bank Account 1
+                          _bankAccountGroup(
+                            number: 1,
+                            bankNameCtrl: _bankName1Ctrl,
+                            accountNumberCtrl: _accountNumber1Ctrl,
+                            accountNameCtrl: _accountName1Ctrl,
+                          ),
+
+                          const SizedBox(height: 16),
+                          Divider(color: Colors.grey.shade300),
+                          const SizedBox(height: 16),
+
+                          // Bank Account 2
+                          _bankAccountGroup(
+                            number: 2,
+                            bankNameCtrl: _bankName2Ctrl,
+                            accountNumberCtrl: _accountNumber2Ctrl,
+                            accountNameCtrl: _accountName2Ctrl,
+                          ),
+
+                          const SizedBox(height: 16),
+                          Divider(color: Colors.grey.shade300),
+                          const SizedBox(height: 16),
+
+                          // Bank Account 3
+                          _bankAccountGroup(
+                            number: 3,
+                            bankNameCtrl: _bankName3Ctrl,
+                            accountNumberCtrl: _accountNumber3Ctrl,
+                            accountNameCtrl: _accountName3Ctrl,
+                          ),
+                        ],
+                      ),
+                    ),
+
                     const SizedBox(height: 25),
 
                     // ====================== SAVE BUTTON ======================
@@ -214,6 +294,39 @@ class _SchoolProfileScreenState extends State<SchoolProfileScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _bankAccountGroup({
+    required int number,
+    required TextEditingController bankNameCtrl,
+    required TextEditingController accountNumberCtrl,
+    required TextEditingController accountNameCtrl,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.account_balance, size: 18, color: Colors.blue.shade700),
+            const SizedBox(width: 8),
+            Text(
+              'Bank Account $number',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+                color: Colors.blue.shade700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _input(bankNameCtrl, "Bank Name"),
+        const SizedBox(height: 10),
+        _input(accountNumberCtrl, "Account Number"),
+        const SizedBox(height: 10),
+        _input(accountNameCtrl, "Account Name"),
+      ],
     );
   }
 

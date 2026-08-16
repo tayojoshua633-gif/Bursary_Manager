@@ -11,8 +11,15 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import '../../db/database_helper.dart';
+import '../../data/database_helper_wrapper.dart';
 import '../../utils/printer_settings_helper.dart';
+import '../../utils/thermal_printer_manager.dart';
+import '../../utils/usb_printer_manager.dart';
+import '../../utils/print_counter_helper.dart';
+import '../../screens/settings/thermal_printer_screen.dart';
+import '../../screens/settings/usb_printer_screen.dart';
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
+import '../../utils/sms_service.dart';
 
 class PaymentReceiptScreen extends StatefulWidget {
   final int paymentId;
@@ -31,7 +38,7 @@ class PaymentReceiptScreen extends StatefulWidget {
 }
 
 class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final GlobalKey _receiptKey = GlobalKey();
 
   Map<String, dynamic>? _payment;
@@ -88,8 +95,24 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
     _term = _payment?['term']?.toString() ?? await _db.getActiveTerm();
     _session = _payment?['session']?.toString() ?? (await _db.getActiveSession())?['sessionName'] ?? "";
 
+    // Calculate previous balance fresh (same as Record screen)
+    final freshPreviousBalance = await _db.computeOutstandingBeforeTerm(
+      widget.studentId,
+      term: _term,
+      session: _session,
+    );
+
     final bill = await _db.getBillForStudent(widget.studentId, _term, _session);
-    _grandTotal = bill != null ? (bill['totalAmount'] as num?)?.toDouble() ?? 0.0 : 0.0;
+    if (bill != null) {
+      final storedTotal = (bill['totalAmount'] as num?)?.toDouble() ?? 0.0;
+      final storedPrevBalance = (bill['previousBalance'] as num?)?.toDouble() ?? 0.0;
+      // Current term fees only (excluding old stored previous balance)
+      final currentTermBill = storedTotal - storedPrevBalance;
+      // Grand Total = fresh previous balance + current term fees
+      _grandTotal = freshPreviousBalance + currentTermBill;
+    } else {
+      _grandTotal = freshPreviousBalance;
+    }
 
     final pays = await _db.getPayments(widget.studentId, term: _term, session: _session);
     _totalPaidThisTerm = pays.fold<double>(
@@ -175,6 +198,34 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
                 _showThermalPrinterSizeDialog();
               },
             ),
+
+            const SizedBox(height: 12),
+
+            // Option 4: USB Printer
+            _buildExportOption(
+              icon: Icons.usb,
+              iconColor: Colors.deepPurple,
+              title: 'USB Printer (OTG)',
+              subtitle: 'Print via USB cable',
+              onTap: () {
+                Navigator.pop(context);
+                _showUsbPrinterSizeDialog();
+              },
+            ),
+
+            const SizedBox(height: 12),
+
+            // Option 5: SMS
+            _buildExportOption(
+              icon: Icons.sms,
+              iconColor: Colors.teal,
+              title: 'Send SMS',
+              subtitle: "Text receipt to parent's phone",
+              onTap: () {
+                Navigator.pop(context);
+                _sendSmsReceipt();
+              },
+            ),
           ],
         ),
         actions: [
@@ -185,6 +236,47 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
         ],
       ),
     );
+  }
+
+  // ========================================
+  // SEND SMS RECEIPT
+  // ========================================
+  Future<void> _sendSmsReceipt() async {
+    final studentName = [
+      _student?['surname'],
+      _student?['firstName'],
+    ].where((s) => s != null && s.toString().isNotEmpty).join(' ');
+    final amount = (_payment?['amount'] as num?)?.toDouble() ?? 0.0;
+
+    final message = buildPaymentReceiptSms(
+      schoolName: _school?['name']?.toString() ?? 'the school',
+      studentName: studentName.isEmpty ? 'your ward' : studentName,
+      amount: amount,
+      grandTotal: _grandTotal,
+      outstanding: _outstanding,
+      term: _term,
+      session: _session,
+    );
+
+    setState(() => _exporting = true);
+    final result = await SmsService.send(
+      rawPhone: _student?['parentPhone']?.toString(),
+      message: message,
+      studentId: widget.studentId,
+      context: 'payment_receipt',
+    );
+    if (mounted) {
+      setState(() => _exporting = false);
+      final label = result.success
+          ? (result.requiresManualConfirmation ? 'Messaging app opened — tap Send to deliver the receipt' : 'SMS receipt sent to parent')
+          : (result.errorMessage ?? 'Failed to send SMS');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(label),
+          backgroundColor: result.success ? Colors.green : Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _buildExportOption({
@@ -244,60 +336,98 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
   }
 
   // ========================================
-  // NEW: THERMAL PRINTER SIZE SELECTION DIALOG
+  // THERMAL PRINTER SIZE SELECTION DIALOG (Bluetooth Direct Print)
   // ========================================
-  void _showThermalPrinterSizeDialog() {
+  Future<void> _showThermalPrinterSizeDialog() async {
+    // Check if printer is connected
+    if (!ThermalPrinterManager.isConnected) {
+      if (!mounted) return;
+
+      // Show message and navigate to printer connection screen
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please connect to a thermal printer first'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      // Navigate to thermal printer connection screen
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ThermalPrinterScreen()),
+      );
+
+      // Check again if printer is connected after returning
+      if (!ThermalPrinterManager.isConnected) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Printer not connected. Receipt printing cancelled.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!mounted) return;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.straighten, color: Colors.orange),
-            SizedBox(width: 8),
-            Text('Select Paper Size'),
+            const Icon(Icons.print, color: Colors.orange),
+            const SizedBox(width: 8),
+            const Text('Print Receipt'),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'CONNECTED',
+                style: TextStyle(fontSize: 10, color: Colors.white),
+              ),
+            ),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Choose your thermal printer paper size:',
-              style: TextStyle(fontSize: 14, color: Colors.grey),
-            ),
-            const SizedBox(height: 16),
-
             // 58mm Option
-            _buildSizeOption(
-              size: PrinterSettingsHelper.size58mm,
-              isRecommended: false,
+            ListTile(
+              leading: const Icon(Icons.receipt_long, color: Colors.orange),
+              title: const Text('58mm Paper'),
+              subtitle: const Text('Standard thermal receipt'),
               onTap: () {
                 Navigator.pop(context);
-                _exportAsThermalPrint(PrinterSettingsHelper.size58mm);
+                _printViaBluetooth(PaperSize.mm58);
               },
             ),
 
-            const SizedBox(height: 12),
+            const Divider(),
 
-            // 80mm Option (Recommended)
-            _buildSizeOption(
-              size: PrinterSettingsHelper.size80mm,
-              isRecommended: true,
+            // 80mm Option
+            ListTile(
+              leading: const Icon(Icons.receipt_long, color: Colors.green),
+              title: const Text('80mm Paper'),
+              subtitle: const Text('Wider format (Recommended)'),
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.green,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text(
+                  'RECOMMENDED',
+                  style: TextStyle(fontSize: 9, color: Colors.white),
+                ),
+              ),
               onTap: () {
                 Navigator.pop(context);
-                _exportAsThermalPrint(PrinterSettingsHelper.size80mm);
-              },
-            ),
-
-            const SizedBox(height: 12),
-
-            // 110mm Option
-            _buildSizeOption(
-              size: PrinterSettingsHelper.size110mm,
-              isRecommended: false,
-              onTap: () {
-                Navigator.pop(context);
-                _exportAsThermalPrint(PrinterSettingsHelper.size110mm);
+                _printViaBluetooth(PaperSize.mm80);
               },
             ),
           ],
@@ -310,6 +440,116 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
         ],
       ),
     );
+  }
+
+  // ========================================
+  // USB PRINTER SIZE SELECTION DIALOG
+  // ========================================
+  Future<void> _showUsbPrinterSizeDialog() async {
+    if (!UsbPrinterManager.isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Connect a USB printer first'), duration: Duration(seconds: 2)),
+      );
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => const UsbPrinterScreen()));
+      if (!UsbPrinterManager.isConnected) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('USB printer not connected. Cancelled.'), backgroundColor: Colors.orange),
+        );
+        return;
+      }
+    }
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(children: [Icon(Icons.usb, color: Colors.deepPurple), SizedBox(width: 8), Text('USB Print Receipt')]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.receipt_long, color: Colors.orange),
+              title: const Text('58mm Paper'),
+              subtitle: const Text('Standard thermal receipt'),
+              onTap: () { Navigator.pop(context); _printViaUsb(PaperSize.mm58); },
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.receipt_long, color: Colors.green),
+              title: const Text('80mm Paper'),
+              subtitle: const Text('Wider format (Recommended)'),
+              onTap: () { Navigator.pop(context); _printViaUsb(PaperSize.mm80); },
+            ),
+          ],
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))],
+      ),
+    );
+  }
+
+  // ========================================
+  // DIRECT USB PRINTING
+  // ========================================
+  Future<void> _printViaUsb(PaperSize paperSize) async {
+    setState(() => _exporting = true);
+
+    try {
+      final schoolName = _school?['name'] ?? "School Name";
+      final schoolAddress = _school?['address'] ?? "";
+      final studentName = "${_student?['surname']} ${_student?['firstName']} ${_student?['otherName'] ?? ''}".trim();
+      final studentClass = "${_student?['className'] ?? 'N/A'} - ${_student?['armName'] ?? 'N/A'}";
+
+      final receiptNo = widget.paymentId.toString();
+      final amountPaid = (_payment?['amount'] as num?)?.toDouble() ?? 0.0;
+      final paymentDate = _payment?['paymentDate']?.toString() ?? '';
+      final paymentMethod = _payment?['method']?.toString() ?? 'Cash';
+      final reference = _payment?['reference']?.toString();
+      final paymentFor = _payment?['paymentFor']?.toString();
+
+      await UsbPrinterManager.printPaymentReceipt(
+        schoolName: schoolName,
+        schoolAddress: schoolAddress,
+        studentName: studentName,
+        studentClass: studentClass,
+        term: _term,
+        amountPaid: amountPaid,
+        totalBill: _grandTotal,
+        outstanding: _outstanding,
+        paymentDate: paymentDate,
+        paymentMethod: paymentMethod,
+        receiptNumber: receiptNo,
+        note: reference,
+        paymentFor: paymentFor,
+        schoolPhone: _school?['phone']?.toString(),
+        bankAccounts: _getBankAccounts(),
+        paperSize: paperSize,
+      );
+
+      await PrintCounterHelper.incrementReceiptsPrinted();
+
+      setState(() => _exporting = false);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Receipt printed via USB on ${paperSize == PaperSize.mm58 ? "58mm" : "80mm"} paper!'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      setState(() => _exporting = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('USB print failed: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
   }
 
   Widget _buildSizeOption({
@@ -404,8 +644,9 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
       final parsedDate = DateTime.tryParse(dateStr) ?? DateTime.now();
       final formattedDate = DateFormat("dd/MM/yy HH:mm").format(parsedDate);
       final method = _payment?['method']?.toString() ?? "";
+      final paymentFor = _payment?['paymentFor']?.toString() ?? "";
       final note = _payment?['note']?.toString() ?? "";
-      
+
       final schoolName = _school?['name'] ?? "School Name";
       final schoolAddress = _school?['address'] ?? "";
       final schoolPhone = _school?['phone'] ?? "";
@@ -503,6 +744,10 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
                     _buildPdfRow('Payment Date:', formattedDate),
                     pw.SizedBox(height: 8),
                     _buildPdfRow('Payment Method:', method),
+                    if (paymentFor.isNotEmpty) ...[
+                      pw.SizedBox(height: 8),
+                      _buildPdfRow('Payment For:', paymentFor),
+                    ],
                     if (note.isNotEmpty) ...[
                       pw.SizedBox(height: 8),
                       _buildPdfRow('Note:', note),
@@ -516,23 +761,29 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
               // Amount Paid
               pw.Center(
                 child: pw.Container(
-                  padding: const pw.EdgeInsets.all(20),
+                  padding: const pw.EdgeInsets.all(25),
                   decoration: pw.BoxDecoration(
-                    border: pw.Border.all(width: 3),
-                    borderRadius: pw.BorderRadius.circular(8),
+                    color: PdfColors.blue50,
+                    border: pw.Border.all(width: 2, color: PdfColors.blue),
+                    borderRadius: pw.BorderRadius.circular(12),
                   ),
                   child: pw.Column(
                     children: [
                       pw.Text(
                         'AMOUNT PAID',
-                        style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
-                      ),
-                      pw.SizedBox(height: 10),
-                      pw.Text(
-                        '₦${NumberFormat("#,##0.00").format(amount)}',
                         style: pw.TextStyle(
-                          fontSize: 32,
+                          fontSize: 18,
                           fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.blue900,
+                        ),
+                      ),
+                      pw.SizedBox(height: 15),
+                      pw.Text(
+                        'N ${NumberFormat("#,##0.00").format(amount)}',
+                        style: pw.TextStyle(
+                          fontSize: 36,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.blue900,
                         ),
                       ),
                     ],
@@ -542,39 +793,57 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
 
               pw.SizedBox(height: 30),
 
-              // Balance Summary
+              // Financial Summary
               pw.Container(
-                padding: const pw.EdgeInsets.all(15),
+                padding: const pw.EdgeInsets.all(20),
                 decoration: pw.BoxDecoration(
-                  color: PdfColors.grey200,
-                  border: pw.Border.all(),
-                  borderRadius: pw.BorderRadius.circular(8),
+                  color: PdfColors.grey100,
+                  border: pw.Border.all(width: 1.5, color: PdfColors.grey400),
+                  borderRadius: pw.BorderRadius.circular(12),
                 ),
                 child: pw.Column(
                   children: [
-                    _buildPdfRow(
-                      'Grand Total (Term):',
-                      '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
-                      bold: true,
+                    pw.Center(
+                      child: pw.Text(
+                        'FINANCIAL SUMMARY',
+                        style: pw.TextStyle(
+                          fontSize: 16,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.grey800,
+                        ),
+                      ),
                     ),
-                    pw.SizedBox(height: 8),
+                    pw.SizedBox(height: 15),
+                    _buildPdfRow(
+                      'Total Bills (Term):',
+                      'N ${NumberFormat("#,##0.00").format(_grandTotal)}',
+                      bold: true,
+                      fontSize: 15,
+                    ),
+                    pw.SizedBox(height: 10),
                     _buildPdfRow(
                       'Total Paid (Term):',
-                      '₦${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
+                      'N ${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
                       bold: true,
+                      fontSize: 15,
                     ),
-                    pw.Divider(thickness: 2),
+                    pw.SizedBox(height: 10),
+                    pw.Divider(thickness: 2, color: PdfColors.grey600),
+                    pw.SizedBox(height: 10),
                     _buildPdfRow(
                       'Outstanding Balance:',
-                      '₦${NumberFormat("#,##0.00").format(_outstanding)}',
+                      'N ${NumberFormat("#,##0.00").format(_outstanding)}',
                       bold: true,
-                      fontSize: 16,
+                      fontSize: 18,
                     ),
                   ],
                 ),
               ),
 
               pw.Spacer(),
+
+              // Bank details
+              _buildBankDetailsPdf(),
 
               // Footer
               pw.Divider(),
@@ -634,6 +903,40 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
         ),
       );
     }
+  }
+
+  List<Map<String, dynamic>> _getBankAccounts() {
+    if (_school == null) return [];
+    final accounts = <Map<String, dynamic>>[];
+    for (int i = 1; i <= 3; i++) {
+      final bankName = _school!['bankName$i']?.toString() ?? '';
+      final accNum = _school!['accountNumber$i']?.toString() ?? '';
+      final accName = _school!['accountName$i']?.toString() ?? '';
+      if (bankName.isNotEmpty && accNum.isNotEmpty) {
+        accounts.add({'bankName': bankName, 'accountNumber': accNum, 'accountName': accName});
+      }
+    }
+    return accounts;
+  }
+
+  pw.Widget _buildBankDetailsPdf() {
+    final accounts = _getBankAccounts();
+    if (accounts.isEmpty) return pw.SizedBox();
+    return pw.Column(
+      children: [
+        pw.SizedBox(height: 20),
+        pw.Text('BANK DETAILS', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 8),
+        ...accounts.map((acc) => pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 4),
+          child: pw.Text(
+            '${acc['bankName']} - ${acc['accountNumber']} - ${acc['accountName']}',
+            textAlign: pw.TextAlign.center,
+            style: const pw.TextStyle(fontSize: 11),
+          ),
+        )),
+      ],
+    );
   }
 
   pw.Widget _buildPdfRow(String label, String value, {bool bold = false, double fontSize = 14}) {
@@ -714,7 +1017,73 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
   }
 
   // ========================================
-  // EXPORT AS THERMAL PRINT (with size selection)
+  // DIRECT BLUETOOTH THERMAL PRINTING
+  // ========================================
+  Future<void> _printViaBluetooth(PaperSize paperSize) async {
+    setState(() => _exporting = true);
+
+    try {
+      final schoolName = _school?['name'] ?? "School Name";
+      final schoolAddress = _school?['address'] ?? "";
+      final studentName = "${_student?['surname']} ${_student?['firstName']} ${_student?['otherName'] ?? ''}".trim();
+      final studentClass = "${_student?['className'] ?? 'N/A'} - ${_student?['armName'] ?? 'N/A'}";
+
+      final receiptNo = widget.paymentId.toString();
+      final amountPaid = (_payment?['amount'] as num?)?.toDouble() ?? 0.0;
+      final paymentDate = _payment?['paymentDate']?.toString() ?? '';
+      final paymentMethod = _payment?['method']?.toString() ?? 'Cash';
+      final reference = _payment?['reference']?.toString();
+      final paymentFor = _payment?['paymentFor']?.toString();
+
+      // Print via Bluetooth
+      await ThermalPrinterManager.printPaymentReceipt(
+        schoolName: schoolName,
+        schoolAddress: schoolAddress,
+        studentName: studentName,
+        studentClass: studentClass,
+        receiptNo: receiptNo,
+        amountPaid: amountPaid,
+        paymentDate: paymentDate,
+        paymentMethod: paymentMethod,
+        reference: reference,
+        paymentFor: paymentFor,
+        totalBills: _grandTotal,
+        totalPaid: _totalPaidThisTerm,
+        outstanding: _outstanding,
+        schoolPhone: _school?['phone']?.toString(),
+        bankAccounts: _getBankAccounts(),
+        paperSize: paperSize,
+      );
+
+      // Increment print counter
+      await PrintCounterHelper.incrementReceiptsPrinted();
+
+      setState(() => _exporting = false);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Receipt printed successfully on ${paperSize == PaperSize.mm58 ? "58mm" : "80mm"} paper!'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      setState(() => _exporting = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Print failed: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  // ========================================
+  // EXPORT AS THERMAL PRINT (PDF - Legacy)
   // ========================================
   Future<void> _exportAsThermalPrint(PrinterSize size) async {
     setState(() => _exporting = true);
@@ -853,7 +1222,7 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
                     ),
                     pw.SizedBox(height: size.lineSpacing),
                     pw.Text(
-                      '₦${NumberFormat("#,##0.00").format(amount)}',
+                      'N ${NumberFormat("#,##0.00").format(amount)}',
                       style: pw.TextStyle(
                         fontSize: size.amountFontSize,
                         fontWeight: pw.FontWeight.bold,
@@ -877,21 +1246,21 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
                   children: [
                     _buildThermalRow(
                       'Grand Total (Term):',
-                      '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
+                      'N ${NumberFormat("#,##0.00").format(_grandTotal)}',
                       size,
                       bold: true,
                     ),
                     pw.SizedBox(height: size.lineSpacing),
                     _buildThermalRow(
                       'Total Paid (Term):',
-                      '₦${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
+                      'N ${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
                       size,
                       bold: true,
                     ),
                     pw.Divider(height: size.lineSpacing * 2, thickness: 1),
                     _buildThermalRow(
                       'Outstanding:',
-                      '₦${NumberFormat("#,##0.00").format(_outstanding)}',
+                      'N ${NumberFormat("#,##0.00").format(_outstanding)}',
                       size,
                       bold: true,
                       fontSize: size.fontSize + 1,
@@ -1093,7 +1462,7 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
                   const SizedBox(width: 12),
                   const Expanded(
                     child: Text(
-                      'Choose PDF, JPEG, or Thermal Printer format to share',
+                      'Choose PDF, JPEG, Bluetooth or USB Printer format to share',
                       style: TextStyle(fontSize: 13),
                     ),
                   ),
@@ -1113,8 +1482,9 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
     final parsedDate = DateTime.tryParse(dateStr) ?? DateTime.now();
     final formattedDate = DateFormat("dd MMM yyyy, HH:mm").format(parsedDate);
     final method = _payment?['method']?.toString() ?? "";
+    final paymentFor = _payment?['paymentFor']?.toString() ?? "";
     final note = _payment?['note']?.toString() ?? "";
-    
+
     final schoolName = _school?['name'] ?? "School Name";
     final schoolAddress = _school?['address'] ?? "";
     final schoolPhone = _school?['phone'] ?? "";
@@ -1225,6 +1595,10 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
                 _buildRow('Payment Date:', formattedDate),
                 const SizedBox(height: 8),
                 _buildRow('Payment Method:', method),
+                if (paymentFor.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _buildRow('Payment For:', paymentFor),
+                ],
                 if (note.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   _buildRow('Note:', note),
@@ -1255,7 +1629,7 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '₦${NumberFormat("#,##0.00").format(amount)}',
+                    'N${NumberFormat("#,##0.00").format(amount)}',
                     style: const TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
@@ -1281,19 +1655,19 @@ class _PaymentReceiptScreenState extends State<PaymentReceiptScreen> {
               children: [
                 _buildRow(
                   'Grand Total (Term):',
-                  '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
+                  'N${NumberFormat("#,##0.00").format(_grandTotal)}',
                   bold: true,
                 ),
                 const SizedBox(height: 8),
                 _buildRow(
                   'Total Paid (Term):',
-                  '₦${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
+                  'N${NumberFormat("#,##0.00").format(_totalPaidThisTerm)}',
                   bold: true,
                 ),
                 const Divider(),
                 _buildRow(
                   'Outstanding Balance:',
-                  '₦${NumberFormat("#,##0.00").format(_outstanding)}',
+                  'N${NumberFormat("#,##0.00").format(_outstanding)}',
                   bold: true,
                   color: _outstanding > 0 ? Colors.red : Colors.green,
                 ),

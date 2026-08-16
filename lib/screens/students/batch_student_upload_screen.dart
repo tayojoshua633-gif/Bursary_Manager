@@ -1,10 +1,11 @@
 // lib/screens/students/batch_student_upload_screen.dart
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import '../../db/database_helper.dart';
+import '../../data/database_helper_wrapper.dart';
 import '../../utils/batch_student_upload_helper.dart';
 
 class BatchStudentUploadScreen extends StatefulWidget {
@@ -15,7 +16,7 @@ class BatchStudentUploadScreen extends StatefulWidget {
 }
 
 class _BatchStudentUploadScreenState extends State<BatchStudentUploadScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final BatchStudentUploadHelper _uploadHelper = BatchStudentUploadHelper();
 
   bool _processing = false;
@@ -967,25 +968,60 @@ class _BatchStudentUploadScreenState extends State<BatchStudentUploadScreen> {
 
   Future<void> _downloadTemplate() async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final outputPath = '${dir.path}/student_upload_template.xlsx';
-      
+      // Get public Downloads directory
+      Directory? dir;
+
+      if (Platform.isAndroid) {
+        // For Android, use external storage Downloads folder
+        dir = Directory('/storage/emulated/0/Download');
+
+        // Create directory if it doesn't exist
+        if (!await dir.exists()) {
+          dir = Directory('/storage/emulated/0/Downloads');
+        }
+
+        // Fallback to app directory if external storage not available
+        if (!await dir.exists()) {
+          dir = await getExternalStorageDirectory();
+        }
+      } else {
+        // For other platforms (Windows, iOS, etc.)
+        dir = await getDownloadsDirectory();
+      }
+
+      if (dir == null) {
+        throw Exception('Downloads directory not available');
+      }
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'student_upload_template_$timestamp.xlsx';
+      final outputPath = '${dir.path}/$fileName';
+
       final file = await _uploadHelper.generateTemplate(outputPath);
 
       if (!mounted) return;
 
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        subject: 'Student Upload Template',
-        text: 'Use this template to upload student data',
-      );
-
-      if (!mounted) return;
+      // Show user-friendly path
+      final displayPath = Platform.isAndroid
+          ? 'Internal Storage/Download/$fileName'
+          : file.path;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Template ready to share'),
+        SnackBar(
+          content: Text('Template downloaded to:\n$displayPath'),
           backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Share',
+            textColor: Colors.white,
+            onPressed: () async {
+              await Share.shareXFiles(
+                [XFile(file.path)],
+                subject: 'Student Upload Template',
+                text: 'Use this template to upload student data',
+              );
+            },
+          ),
         ),
       );
     } catch (e) {

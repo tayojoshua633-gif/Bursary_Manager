@@ -1,6 +1,6 @@
 // lib/screens/settings/change_credentials_screen.dart
 import 'package:flutter/material.dart';
-import '../../db/database_helper.dart';
+import '../../data/database_helper_wrapper.dart';
 import '../auth/welcome_screen.dart';
 
 class ChangeCredentialsScreen extends StatefulWidget {
@@ -17,7 +17,7 @@ class ChangeCredentialsScreen extends StatefulWidget {
 }
 
 class _ChangeCredentialsScreenState extends State<ChangeCredentialsScreen> {
-  final _db = DatabaseHelper();
+  final _db = DatabaseHelperWrapper();
   final _currentPasswordController = TextEditingController();
   final _newUsernameController = TextEditingController();
   final _newPasswordController = TextEditingController();
@@ -48,7 +48,8 @@ class _ChangeCredentialsScreenState extends State<ChangeCredentialsScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     // Check if user can change credentials
-    if ((widget.currentUser['canChangeCredentials'] as int) != 1) {
+    final canChange = widget.currentUser['canChangeCredentials'];
+    if (canChange is int && canChange != 1) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('You do not have permission to change credentials'),
@@ -75,8 +76,14 @@ class _ChangeCredentialsScreenState extends State<ChangeCredentialsScreen> {
     final navigator = Navigator.of(context);
 
     try {
+      // Get userId - try multiple field names
+      final userId = widget.currentUser['userId'] ?? widget.currentUser['id'];
+      if (userId == null) {
+        throw Exception('User ID not found');
+      }
+
       final success = await _db.updateUserCredentials(
-        userId: widget.currentUser['id'] as int,
+        userId: userId is int ? userId : int.parse(userId.toString()),
         newUsername: _newUsernameController.text.trim(),
         newPassword: _newPasswordController.text,
       );
@@ -126,7 +133,9 @@ class _ChangeCredentialsScreenState extends State<ChangeCredentialsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final canChange = (widget.currentUser['canChangeCredentials'] as int) == 1;
+    // Safely check canChangeCredentials
+    final canChangeValue = widget.currentUser['canChangeCredentials'];
+    final canChange = canChangeValue == null || (canChangeValue is int && canChangeValue == 1);
     final isSuperAdmin = widget.currentUser['userType'] == 'super_admin';
 
     return Scaffold(

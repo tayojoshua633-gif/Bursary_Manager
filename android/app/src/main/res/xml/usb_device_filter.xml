@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Match any USB device so the app can request permission for
+        any USB thermal printer connected via OTG cable.
+        Vendors can be narrowed later by adding vendorId / productId attrs.
+    -->
+    <usb-device />
+</resources>

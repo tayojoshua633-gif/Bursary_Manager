@@ -51,6 +51,10 @@ class DebtorsPDFGenerator {
           _buildDebtorsTable(debtors),
           pw.SizedBox(height: 20),
 
+          // Bank Details
+          _buildBankDetails(schoolProfile),
+          pw.SizedBox(height: 20),
+
           // Footer
           _buildFooter(),
         ],
@@ -256,7 +260,7 @@ class DebtorsPDFGenerator {
         ),
         pw.SizedBox(height: 4),
         pw.Text(
-          '₦${formatter.format(amount)}',
+          'N${formatter.format(amount)}',
           style: pw.TextStyle(
             fontSize: 11,
             fontWeight: pw.FontWeight.bold,
@@ -316,10 +320,10 @@ class DebtorsPDFGenerator {
                 '${debtor['surname']} ${debtor['firstName']}',
                 alignment: pw.Alignment.centerLeft,
               ),
-              _buildTableCell('₦${formatter.format(totalBill)}'),
-              _buildTableCell('₦${formatter.format(totalPaid)}'),
+              _buildTableCell('N${formatter.format(totalBill)}'),
+              _buildTableCell('N${formatter.format(totalPaid)}'),
               _buildTableCell(
-                '₦${formatter.format(outstanding)}',
+                'N${formatter.format(outstanding)}',
                 textColor: PdfColors.red800,
               ),
               _buildTableCell('${percentPaid.toStringAsFixed(1)}%'),
@@ -362,6 +366,41 @@ class DebtorsPDFGenerator {
         textAlign: alignment == pw.Alignment.centerLeft
             ? pw.TextAlign.left
             : pw.TextAlign.center,
+      ),
+    );
+  }
+
+  static pw.Widget _buildBankDetails(Map<String, dynamic> schoolProfile) {
+    final accounts = <String>[];
+    for (int i = 1; i <= 3; i++) {
+      final bankName = schoolProfile['bankName$i']?.toString() ?? '';
+      final accNum = schoolProfile['accountNumber$i']?.toString() ?? '';
+      final accName = schoolProfile['accountName$i']?.toString() ?? '';
+      if (bankName.isNotEmpty && accNum.isNotEmpty) {
+        accounts.add('$bankName - $accNum - $accName');
+      }
+    }
+    if (accounts.isEmpty) return pw.SizedBox();
+
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(top: 12),
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        color: PdfColors.blue50,
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+        border: pw.Border.all(color: PdfColors.blue200),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text('Bank Account Details:',
+            style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: PdfColors.blue900)),
+          pw.SizedBox(height: 4),
+          ...accounts.map((acc) => pw.Padding(
+            padding: const pw.EdgeInsets.only(bottom: 2),
+            child: pw.Text(acc, style: const pw.TextStyle(fontSize: 9, color: PdfColors.blue800)),
+          )),
+        ],
       ),
     );
   }

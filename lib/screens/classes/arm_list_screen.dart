@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:bursary_manager/db/database_helper.dart';
+import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import 'package:bursary_manager/models/arm.dart';
 import 'arm_form_screen.dart';
 
@@ -13,7 +13,7 @@ class ArmListScreen extends StatefulWidget {
 }
 
 class _ArmListScreenState extends State<ArmListScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   List<Arm> _arms = [];
   bool _loading = true;
 

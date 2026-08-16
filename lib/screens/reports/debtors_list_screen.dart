@@ -2,9 +2,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../../db/database_helper.dart';
+import '../../data/database_helper_wrapper.dart';
+import '../../utils/display_settings_helper.dart';
 import '../../utils/debtors_pdf_generator.dart';
 import '../../utils/debtors_excel_generator.dart';
+import '../../utils/sibling_helper.dart';
+import '../../widgets/sibling_mark.dart';
 import 'package:share_plus/share_plus.dart';
 
 class DebtorsListScreen extends StatefulWidget {
@@ -15,7 +18,7 @@ class DebtorsListScreen extends StatefulWidget {
 }
 
 class _DebtorsListScreenState extends State<DebtorsListScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   bool _loading = true;
   bool _exporting = false;
@@ -30,6 +33,8 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
   double _minPercentage = 50.0; // Default 50%
 
   List<Map<String, dynamic>> _debtors = [];
+  Map<int, String?> _parentPhoneByStudentId = {};
+  Set<String> _siblingPhones = {};
 
   @override
   void initState() {
@@ -62,12 +67,39 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
     try {
       final minPercentage = _filterType == 'percentage' ? _minPercentage : 0.0;
 
-      _debtors = await _db.getDebtorsList(
-        classId: _selectedClassId!,
-        term: _term!,
-        session: _session!,
-        minPercentagePaid: minPercentage,
-      );
+      // If "All Classes" (classId = 0) is selected, fetch debtors for all classes
+      if (_selectedClassId == 0) {
+        _debtors = [];
+        for (final classData in _classes) {
+          final classDebtors = await _db.getDebtorsList(
+            classId: classData['id'],
+            term: _term!,
+            session: _session!,
+            minPercentagePaid: minPercentage,
+          );
+          _debtors.addAll(classDebtors);
+        }
+
+        // Sort by class name, then by student name
+        _debtors.sort((a, b) {
+          final classCompare = (a['className'] ?? '').toString().compareTo((b['className'] ?? '').toString());
+          if (classCompare != 0) return classCompare;
+          return (a['studentName'] ?? '').toString().compareTo((b['studentName'] ?? '').toString());
+        });
+      } else {
+        _debtors = await _db.getDebtorsList(
+          classId: _selectedClassId!,
+          term: _term!,
+          session: _session!,
+          minPercentagePaid: minPercentage,
+        );
+      }
+
+      final activeStudents = await _db.getActiveStudents();
+      _parentPhoneByStudentId = {
+        for (final s in activeStudents) s['id'] as int: s['parentPhone'] as String?,
+      };
+      _siblingPhones = computeSiblingPhones(activeStudents);
 
       setState(() => _loading = false);
 
@@ -91,6 +123,7 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
 
   String _getSelectedClassName() {
     if (_selectedClassId == null) return '';
+    if (_selectedClassId == 0) return 'All Classes';
     final classData = _classes.firstWhere(
       (c) => c['id'] == _selectedClassId,
       orElse: () => {'name': ''},
@@ -241,9 +274,11 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
                 );
               } catch (e) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(scaffoldContext).showSnackBar(
-                  SnackBar(content: Text('Share failed: $e')),
-                );
+                if (scaffoldContext.mounted) {
+                  ScaffoldMessenger.of(scaffoldContext).showSnackBar(
+                    SnackBar(content: Text('Share failed: $e')),
+                  );
+                }
               }
             },
             icon: const Icon(Icons.share),
@@ -296,23 +331,24 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final ds = DisplaySettingsProvider.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Debtors List'),
         actions: [
           if (_debtors.isNotEmpty && !_exporting)
             IconButton(
-              icon: const Icon(Icons.download),
+              icon: Icon(Icons.download, size: ds.iconSize),
               tooltip: 'Export',
               onPressed: _showExportMenu,
             ),
           if (_exporting)
-            const Padding(
-              padding: EdgeInsets.all(16),
+            Padding(
+              padding: EdgeInsets.all(ds.cardPadding),
               child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
+                width: ds.iconSize,
+                height: ds.iconSize,
+                child: const CircularProgressIndicator(
                   strokeWidth: 2,
                   color: Colors.white,
                 ),
@@ -323,7 +359,7 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(ds.cardPadding),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -331,50 +367,50 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
                   Card(
                     color: Colors.blue[50],
                     child: Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: EdgeInsets.all(ds.cardPadding),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             children: [
-                              Icon(Icons.calendar_today, color: Colors.blue[700]),
-                              const SizedBox(width: 8),
-                              const Text(
+                              Icon(Icons.calendar_today, color: Colors.blue[700], size: ds.iconSize),
+                              SizedBox(width: ds.cardPadding * 0.5),
+                              Text(
                                 'Current Period',
                                 style: TextStyle(
-                                  fontSize: 18,
+                                  fontSize: ds.titleFontSize,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
+                          SizedBox(height: ds.cardPadding * 0.5),
                           Text('Term: $_term',
-                              style: const TextStyle(fontSize: 16)),
+                              style: TextStyle(fontSize: ds.bodyFontSize)),
                           Text('Session: $_session',
-                              style: const TextStyle(fontSize: 16)),
+                              style: TextStyle(fontSize: ds.bodyFontSize)),
                         ],
                       ),
                     ),
                   ),
 
-                  const SizedBox(height: 16),
+                  SizedBox(height: ds.cardPadding),
 
                   // Filters Card
                   Card(
                     child: Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: EdgeInsets.all(ds.cardPadding),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
+                          Text(
                             'Filter Options',
                             style: TextStyle(
-                              fontSize: 18,
+                              fontSize: ds.titleFontSize,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          const SizedBox(height: 16),
+                          SizedBox(height: ds.cardPadding),
 
                           // Class Selector
                           DropdownButtonFormField<int>(
@@ -384,12 +420,19 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
                               prefixIcon: Icon(Icons.school),
                             ),
                             initialValue: _selectedClassId,
-                            items: _classes
-                                .map((c) => DropdownMenuItem<int>(
-                                      value: c['id'],
-                                      child: Text(c['name']),
-                                    ))
-                                .toList(),
+                            items: [
+                              // Add "All Classes" option first
+                              const DropdownMenuItem<int>(
+                                value: 0,
+                                child: Text('All Classes'),
+                              ),
+                              // Then add all individual classes
+                              ..._classes
+                                  .map((c) => DropdownMenuItem<int>(
+                                        value: c['id'],
+                                        child: Text(c['name']),
+                                      )),
+                            ],
                             onChanged: (v) {
                               setState(() {
                                 _selectedClassId = v;
@@ -723,8 +766,8 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
         headingRowColor: WidgetStateProperty.all(Colors.grey[200]),
         columns: const [
           DataColumn(label: Text('S/N', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text('Admission No', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Student Name', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('Class/Arm', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Total Bill', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Amount Paid', style: TextStyle(fontWeight: FontWeight.bold))),
           DataColumn(label: Text('Outstanding', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -742,11 +785,30 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
           return DataRow(
             cells: [
               DataCell(Text('${index + 1}')),
-              DataCell(Text(debtor['admissionNo'] ?? '')),
+              DataCell(
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${debtor['surname']} ${debtor['firstName']}',
+                      style: const TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                    SiblingMark(
+                      show: isSiblingPhone(
+                        _parentPhoneByStudentId[debtor['studentId'] as int?],
+                        _siblingPhones,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               DataCell(
                 Text(
-                  '${debtor['surname']} ${debtor['firstName']}',
-                  style: const TextStyle(fontWeight: FontWeight.w500),
+                  '${debtor['className'] ?? ''}${debtor['armName'] != null && debtor['armName'] != '' ? ' - ${debtor['armName']}' : ''}',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey[700],
+                  ),
                 ),
               ),
               DataCell(Text(NumberFormat('#,##0.00').format(totalBill))),

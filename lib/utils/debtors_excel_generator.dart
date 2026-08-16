@@ -190,7 +190,7 @@ class DebtorsExcelGenerator {
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow)).value =
         TextCellValue('Total Bills:');
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow)).value =
-        TextCellValue('₦${formatter.format(totalBills)}');
+        TextCellValue('N${formatter.format(totalBills)}');
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow)).cellStyle =
         CellStyle(
       bold: true,
@@ -200,7 +200,7 @@ class DebtorsExcelGenerator {
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: currentRow)).value =
         TextCellValue('Total Paid:');
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: currentRow)).value =
-        TextCellValue('₦${formatter.format(totalPaid)}');
+        TextCellValue('N${formatter.format(totalPaid)}');
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: currentRow)).cellStyle =
         CellStyle(
       bold: true,
@@ -210,7 +210,7 @@ class DebtorsExcelGenerator {
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: currentRow)).value =
         TextCellValue('Total Outstanding:');
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: currentRow)).value =
-        TextCellValue('₦${formatter.format(totalOutstanding)}');
+        TextCellValue('N${formatter.format(totalOutstanding)}');
     sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: currentRow)).cellStyle =
         CellStyle(
       bold: true,
@@ -229,9 +229,9 @@ class DebtorsExcelGenerator {
       'S/N',
       'Admission No',
       'Student Name',
-      'Total Bill (₦)',
-      'Amount Paid (₦)',
-      'Outstanding (₦)',
+      'Total Bill (N)',
+      'Amount Paid (N)',
+      'Outstanding (N)',
       '% Paid',
     ];
 

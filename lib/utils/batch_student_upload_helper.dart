@@ -1,61 +1,406 @@
 // lib/utils/batch_student_upload_helper.dart
 
 import 'dart:io';
+import 'dart:convert';
+import 'dart:developer' as developer;
 import 'package:excel/excel.dart';
-import '../db/database_helper.dart';
+import 'package:csv/csv.dart';
+import '../data/database_helper_wrapper.dart';
 
-class StudentUploadData {
-  final String surname;
-  final String firstName;
-  final String? otherName;
-  final String admissionNo;
-  final String? guardianName;
-  final String? guardianPhone;
-  final String? guardianEmail;
-  final String? address;
-  final String? gender;
-  final String? dateOfBirth;
-  final int classId;
-  final int armId;
-  final String? status;
-  final int rowNumber; // For error reporting
+class BatchStudentUploadHelper {
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
-  StudentUploadData({
-    required this.surname,
-    required this.firstName,
-    this.otherName,
-    required this.admissionNo,
-    this.guardianName,
-    this.guardianPhone,
-    this.guardianEmail,
-    this.address,
-    this.gender,
-    this.dateOfBirth,
-    required this.classId,
-    required this.armId,
-    this.status = 'Active',
-    required this.rowNumber,
-  });
+  /// Generate Excel template with correct column names
+  Future<File> generateTemplate(String outputPath) async {
+    var excel = Excel.createExcel();
+    Sheet sheet = excel['Students'];
 
-  Map<String, dynamic> toMap() {
-    return {
-      'surname': surname,
-      'firstName': firstName,
-      'otherName': otherName,
-      'admissionNo': admissionNo,
-      'guardianName': guardianName,
-      'guardianPhone': guardianPhone,
-      'guardianEmail': guardianEmail,
-      'address': address,
-      'gender': gender,
-      'dateOfBirth': dateOfBirth,
-      'classId': classId,
-      'armId': armId,
-      'status': status ?? 'Active',
-    };
+    // Header row with correct column names matching database schema
+    sheet.appendRow([
+      TextCellValue('Surname'), TextCellValue('First Name'), TextCellValue('Other Name'), TextCellValue('Admission No'),
+      TextCellValue('Parent Name'), TextCellValue('Parent Phone'), TextCellValue('Parent Email'), TextCellValue('Address'),
+      TextCellValue('Gender'), TextCellValue('Date of Birth'), TextCellValue('Class'), TextCellValue('Arm'), TextCellValue('Status')
+    ]);
+
+    // Example rows
+    sheet.appendRow([
+      TextCellValue('ADINYA'), TextCellValue('SARAH'), TextCellValue('DAWOT'), TextCellValue('2025/0001'),
+      TextCellValue('MR. & MRS. ADINYA'), TextCellValue('08012345678'), TextCellValue('parent@example.com'), TextCellValue('ORE'),
+      TextCellValue('Female'), TextCellValue('2010-05-15'), TextCellValue('JSS 1'), TextCellValue('A'), TextCellValue('Active')
+    ]);
+
+    sheet.appendRow([
+      TextCellValue('AGBOOLA'), TextCellValue('GREAT'), TextCellValue('DAWOT'), TextCellValue('2025/0002'),
+      TextCellValue('MR. & MRS. AGBOOLA'), TextCellValue('08012345678'), TextCellValue('parent@example.com'), TextCellValue('ORE'),
+      TextCellValue('Male'), TextCellValue('2010-05-15'), TextCellValue('JSS 1'), TextCellValue('A'), TextCellValue('Active')
+    ]);
+
+    // Auto-size columns
+    for (var i = 0; i < 13; i++) {
+      sheet.setColumnWidth(i, 20);
+    }
+
+    // Save file
+    var fileBytes = excel.save();
+    File(outputPath)
+      ..createSync(recursive: true)
+      ..writeAsBytesSync(fileBytes!);
+
+    return File(outputPath);
+  }
+
+  /// Parse Excel file
+  Future<List<StudentUploadData>> parseExcelFile(
+    String filePath,
+    Map<String, int> classNameToId,
+    Map<String, Map<int, int>> armNameToId,
+  ) async {
+    var bytes = File(filePath).readAsBytesSync();
+    var excel = Excel.decodeBytes(bytes);
+
+    List<StudentUploadData> students = [];
+
+    for (var table in excel.tables.keys) {
+      var sheet = excel.tables[table]!;
+      
+      // Skip header row (index 0)
+      for (var rowIndex = 1; rowIndex < sheet.maxRows; rowIndex++) {
+        var row = sheet.rows[rowIndex];
+        
+        // Skip empty rows
+        if (row.isEmpty || row.every((cell) => cell == null || cell.value == null)) {
+          continue;
+        }
+
+        try {
+          final surname = _getCellValue(row, 0);
+          final firstName = _getCellValue(row, 1);
+          final otherName = _getCellValue(row, 2);
+          final admissionNo = _getCellValue(row, 3);
+          final parentName = _getCellValue(row, 4);  // Changed from guardianName
+          final parentPhone = _getCellValue(row, 5); // Changed from guardianPhone
+          final parentEmail = _getCellValue(row, 6); // Changed from guardianEmail
+          final address = _getCellValue(row, 7);
+          final gender = _getCellValue(row, 8);
+          final dob = _getCellValue(row, 9);
+          final className = _getCellValue(row, 10);
+          final armName = _getCellValue(row, 11);
+          final status = _getCellValue(row, 12);
+
+          students.add(StudentUploadData(
+            rowNumber: rowIndex + 1,
+            surname: surname,
+            firstName: firstName,
+            otherName: otherName,
+            admissionNo: admissionNo,
+            parentName: parentName,      // Changed from guardianName
+            parentPhone: parentPhone,    // Changed from guardianPhone
+            parentEmail: parentEmail,    // Changed from guardianEmail
+            address: address,
+            gender: gender,
+            dateOfBirth: dob,
+            className: className,
+            armName: armName,
+            status: status,
+            classId: classNameToId[className],
+            armId: armNameToId[armName]?[classNameToId[className]],
+          ));
+        } catch (e) {
+          developer.log('Error parsing row $rowIndex: $e');
+        }
+      }
+    }
+
+    return students;
+  }
+
+  /// Parse CSV file
+  Future<List<StudentUploadData>> parseCsvFile(
+    String filePath,
+    Map<String, int> classNameToId,
+    Map<String, Map<int, int>> armNameToId,
+  ) async {
+    final input = File(filePath).openRead();
+    final fields = await input
+        .transform(utf8.decoder)
+        .transform(const CsvToListConverter())
+        .toList();
+
+    List<StudentUploadData> students = [];
+
+    // Skip header row (index 0)
+    for (var rowIndex = 1; rowIndex < fields.length; rowIndex++) {
+      var row = fields[rowIndex];
+      
+      // Skip empty rows
+      if (row.isEmpty) continue;
+
+      try {
+        final surname = _getCellValueFromList(row, 0);
+        final firstName = _getCellValueFromList(row, 1);
+        final otherName = _getCellValueFromList(row, 2);
+        final admissionNo = _getCellValueFromList(row, 3);
+        final parentName = _getCellValueFromList(row, 4);  // Changed from guardianName
+        final parentPhone = _getCellValueFromList(row, 5); // Changed from guardianPhone
+        final parentEmail = _getCellValueFromList(row, 6); // Changed from guardianEmail
+        final address = _getCellValueFromList(row, 7);
+        final gender = _getCellValueFromList(row, 8);
+        final dob = _getCellValueFromList(row, 9);
+        final className = _getCellValueFromList(row, 10);
+        final armName = _getCellValueFromList(row, 11);
+        final status = _getCellValueFromList(row, 12);
+
+        students.add(StudentUploadData(
+          rowNumber: rowIndex + 1,
+          surname: surname,
+          firstName: firstName,
+          otherName: otherName,
+          admissionNo: admissionNo,
+          parentName: parentName,      // Changed from guardianName
+          parentPhone: parentPhone,    // Changed from guardianPhone
+          parentEmail: parentEmail,    // Changed from guardianEmail
+          address: address,
+          gender: gender,
+          dateOfBirth: dob,
+          className: className,
+          armName: armName,
+          status: status,
+          classId: classNameToId[className],
+          armId: armNameToId[armName]?[classNameToId[className]],
+        ));
+      } catch (e) {
+        developer.log('Error parsing row $rowIndex: $e');
+      }
+    }
+
+    return students;
+  }
+
+  String _getCellValue(List<Data?> row, int index) {
+    if (index >= row.length) return '';
+    final cell = row[index];
+    if (cell == null || cell.value == null) return '';
+    return cell.value.toString().trim();
+  }
+
+  String _getCellValueFromList(List row, int index) {
+    if (index >= row.length) return '';
+    final value = row[index];
+    if (value == null) return '';
+    return value.toString().trim();
+  }
+
+  /// Validate students
+  Future<List<ValidationError>> validateStudents(List<StudentUploadData> students) async {
+    List<ValidationError> errors = [];
+
+    for (var student in students) {
+      // Required fields
+      if (student.surname.isEmpty) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Surname',
+          message: 'Surname is required',
+        ));
+      }
+
+      if (student.firstName.isEmpty) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'First Name',
+          message: 'First Name is required',
+        ));
+      }
+
+      if (student.admissionNo.isEmpty) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Admission No',
+          message: 'Admission No is required',
+        ));
+      }
+
+      if (student.parentName.isEmpty) {  // Changed from guardianName
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Parent Name',  // Changed from 'Guardian Name'
+          message: 'Parent Name is required',
+        ));
+      }
+
+      if (student.parentPhone.isEmpty) {  // Changed from guardianPhone
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Parent Phone',  // Changed from 'Guardian Phone'
+          message: 'Parent Phone is required',
+        ));
+      }
+
+      if (student.address.isEmpty) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Address',
+          message: 'Address is required',
+        ));
+      }
+
+      // Gender validation
+      if (student.gender.isEmpty) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Gender',
+          message: 'Gender is required',
+        ));
+      } else if (!['Male', 'Female'].contains(student.gender)) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Gender',
+          message: 'Gender must be Male or Female',
+        ));
+      }
+
+      // Date of Birth validation
+      if (student.dateOfBirth.isEmpty) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Date of Birth',
+          message: 'Date of Birth is required',
+        ));
+      } else {
+        try {
+          DateTime.parse(student.dateOfBirth);
+        } catch (e) {
+          errors.add(ValidationError(
+            rowNumber: student.rowNumber,
+            field: 'Date of Birth',
+            message: 'Invalid date format. Use YYYY-MM-DD',
+          ));
+        }
+      }
+
+      // Class validation
+      if (student.className.isEmpty) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Class',
+          message: 'Class is required',
+        ));
+      } else if (student.classId == null) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Class',
+          message: 'Class "${student.className}" not found in database',
+        ));
+      }
+
+      // Arm validation
+      if (student.armName.isEmpty) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Arm',
+          message: 'Arm is required',
+        ));
+      } else if (student.armId == null && student.classId != null) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Arm',
+          message: 'Arm "${student.armName}" not found for class "${student.className}"',
+        ));
+      }
+
+      // Status validation
+      if (student.status.isNotEmpty && !['Active', 'Inactive'].contains(student.status)) {
+        errors.add(ValidationError(
+          rowNumber: student.rowNumber,
+          field: 'Status',
+          message: 'Status must be Active or Inactive',
+        ));
+      }
+    }
+
+    return errors;
+  }
+
+  /// Import students to database
+  Future<BatchUploadResult> importStudents(List<StudentUploadData> students) async {
+    int successCount = 0;
+    List<String> failedRows = [];
+
+    for (var student in students) {
+      try {
+        // Map to database column names
+        final studentMap = {
+          'admissionNo': student.admissionNo,
+          'surname': student.surname,
+          'firstName': student.firstName,
+          'otherName': student.otherName,
+          'gender': student.gender,
+          'dob': student.dateOfBirth,
+          'classId': student.classId,
+          'armId': student.armId,
+          'address': student.address,
+          'parentName': student.parentName,      // Correct column name
+          'parentPhone': student.parentPhone,    // Correct column name
+          'parentEmail': student.parentEmail.isEmpty ? null : student.parentEmail,  // Correct column name
+          'isActive': student.status.isEmpty || student.status == 'Active' ? 1 : 0,
+        };
+
+        await _db.insertStudent(studentMap);
+        successCount++;
+      } catch (e) {
+        failedRows.add('Row ${student.rowNumber}: ${e.toString()}');
+      }
+    }
+
+    return BatchUploadResult(
+      totalRows: students.length,
+      successCount: successCount,
+      failedCount: students.length - successCount,
+      failedRows: failedRows,
+    );
   }
 }
 
+/// Student upload data model
+class StudentUploadData {
+  final int rowNumber;
+  final String surname;
+  final String firstName;
+  final String otherName;
+  final String admissionNo;
+  final String parentName;      // Changed from guardianName
+  final String parentPhone;    // Changed from guardianPhone
+  final String parentEmail;    // Changed from guardianEmail
+  final String address;
+  final String gender;
+  final String dateOfBirth;
+  final String className;
+  final String armName;
+  final String status;
+  final int? classId;
+  final int? armId;
+
+  StudentUploadData({
+    required this.rowNumber,
+    required this.surname,
+    required this.firstName,
+    required this.otherName,
+    required this.admissionNo,
+    required this.parentName,      // Changed from guardianName
+    required this.parentPhone,    // Changed from guardianPhone
+    required this.parentEmail,    // Changed from guardianEmail
+    required this.address,
+    required this.gender,
+    required this.dateOfBirth,
+    required this.className,
+    required this.armName,
+    required this.status,
+    this.classId,
+    this.armId,
+  });
+}
+
+/// Validation error model
 class ValidationError {
   final int rowNumber;
   final String field;
@@ -66,460 +411,26 @@ class ValidationError {
     required this.field,
     required this.message,
   });
-
-  @override
-  String toString() => 'Row $rowNumber: $field - $message';
 }
 
+/// Batch upload result
 class BatchUploadResult {
   final int totalRows;
   final int successCount;
-  final int failureCount;
-  final List<ValidationError> errors;
+  final int failedCount;
+  final List<String> failedRows;
   final List<String> duplicates;
+  final List<ValidationError> errors;
 
   BatchUploadResult({
     required this.totalRows,
     required this.successCount,
-    required this.failureCount,
-    required this.errors,
-    required this.duplicates,
+    required this.failedCount,
+    required this.failedRows,
+    this.duplicates = const [],
+    this.errors = const [],
   });
-}
 
-class BatchStudentUploadHelper {
-  final DatabaseHelper _db = DatabaseHelper();
-
-  // ========================================
-  // PARSE EXCEL FILE
-  // ========================================
-  Future<List<StudentUploadData>> parseExcelFile(
-    String filePath,
-    Map<String, int> classNameToId,
-    Map<String, Map<int, int>> armNameToId, // armName -> {classId: armId}
-  ) async {
-    final file = File(filePath);
-    final bytes = await file.readAsBytes();
-    final excel = Excel.decodeBytes(bytes);
-
-    final List<StudentUploadData> students = [];
-    
-    for (var table in excel.tables.keys) {
-      final sheet = excel.tables[table]!;
-      
-      // Skip header row (row 0)
-      for (var rowIndex = 1; rowIndex < sheet.maxRows; rowIndex++) {
-        final row = sheet.rows[rowIndex];
-        
-        // Skip empty rows
-        if (_isRowEmpty(row)) continue;
-
-        try {
-          final student = _parseRow(
-            row,
-            rowIndex + 1, // +1 for 1-based row numbering
-            classNameToId,
-            armNameToId,
-          );
-          students.add(student);
-        } catch (e) {
-          // Skip invalid rows, will be caught in validation
-          debugPrint('Error parsing row ${rowIndex + 1}: $e');
-        }
-      }
-    }
-
-    return students;
-  }
-
-  // ========================================
-  // PARSE CSV FILE
-  // ========================================
-  Future<List<StudentUploadData>> parseCsvFile(
-    String filePath,
-    Map<String, int> classNameToId,
-    Map<String, Map<int, int>> armNameToId,
-  ) async {
-    final file = File(filePath);
-    final csvString = await file.readAsString();
-    
-    // Simple CSV parser (handles basic cases)
-    final lines = csvString.split('\n');
-    final List<StudentUploadData> students = [];
-    
-    // Skip header row (row 0)
-    for (var rowIndex = 1; rowIndex < lines.length; rowIndex++) {
-      final line = lines[rowIndex].trim();
-      
-      // Skip empty lines
-      if (line.isEmpty) continue;
-      
-      // Split by comma (basic CSV parsing)
-      final row = line.split(',').map((cell) => cell.trim()).toList();
-      
-      // Skip empty rows
-      if (row.every((cell) => cell.isEmpty)) continue;
-
-      try {
-        final student = _parseCsvRow(
-          row,
-          rowIndex + 1,
-          classNameToId,
-          armNameToId,
-        );
-        students.add(student);
-      } catch (e) {
-        debugPrint('Error parsing row ${rowIndex + 1}: $e');
-      }
-    }
-
-    return students;
-  }
-
-  // ========================================
-  // VALIDATE STUDENTS
-  // ========================================
-  Future<List<ValidationError>> validateStudents(
-    List<StudentUploadData> students,
-  ) async {
-    final List<ValidationError> errors = [];
-    final Set<String> admissionNumbers = {};
-    
-    final db = await _db.database;
-
-    for (var student in students) {
-      // Required field validation
-      if (student.surname.trim().isEmpty) {
-        errors.add(ValidationError(
-          rowNumber: student.rowNumber,
-          field: 'Surname',
-          message: 'Surname is required',
-        ));
-      }
-
-      if (student.firstName.trim().isEmpty) {
-        errors.add(ValidationError(
-          rowNumber: student.rowNumber,
-          field: 'First Name',
-          message: 'First name is required',
-        ));
-      }
-
-      if (student.admissionNo.trim().isEmpty) {
-        errors.add(ValidationError(
-          rowNumber: student.rowNumber,
-          field: 'Admission No',
-          message: 'Admission number is required',
-        ));
-      } else {
-        // Check for duplicates in the file
-        if (admissionNumbers.contains(student.admissionNo)) {
-          errors.add(ValidationError(
-            rowNumber: student.rowNumber,
-            field: 'Admission No',
-            message: 'Duplicate admission number in file',
-          ));
-        }
-        admissionNumbers.add(student.admissionNo);
-
-        // Check if admission number already exists in database
-        final existing = await db.query(
-          'students',
-          where: 'admissionNo = ?',
-          whereArgs: [student.admissionNo],
-          limit: 1,
-        );
-        
-        if (existing.isNotEmpty) {
-          errors.add(ValidationError(
-            rowNumber: student.rowNumber,
-            field: 'Admission No',
-            message: 'Admission number already exists in database',
-          ));
-        }
-      }
-
-      // Class ID validation
-      if (student.classId <= 0) {
-        errors.add(ValidationError(
-          rowNumber: student.rowNumber,
-          field: 'Class',
-          message: 'Invalid class name',
-        ));
-      }
-
-      // Arm ID validation
-      if (student.armId <= 0) {
-        errors.add(ValidationError(
-          rowNumber: student.rowNumber,
-          field: 'Arm',
-          message: 'Invalid arm name',
-        ));
-      }
-
-      // Gender validation (optional but if provided, must be valid)
-      if (student.gender != null && 
-          student.gender!.isNotEmpty && 
-          !['Male', 'Female', 'M', 'F'].contains(student.gender)) {
-        errors.add(ValidationError(
-          rowNumber: student.rowNumber,
-          field: 'Gender',
-          message: 'Gender must be Male/Female or M/F',
-        ));
-      }
-
-      // Phone validation (optional but if provided, must be valid format)
-      if (student.guardianPhone != null && student.guardianPhone!.isNotEmpty) {
-        final phone = student.guardianPhone!.replaceAll(RegExp(r'[^\d]'), '');
-        if (phone.length < 10 || phone.length > 15) {
-          errors.add(ValidationError(
-            rowNumber: student.rowNumber,
-            field: 'Guardian Phone',
-            message: 'Invalid phone number format',
-          ));
-        }
-      }
-    }
-
-    return errors;
-  }
-
-  // ========================================
-  // IMPORT STUDENTS
-  // ========================================
-  Future<BatchUploadResult> importStudents(
-    List<StudentUploadData> students,
-  ) async {
-    int successCount = 0;
-    int failureCount = 0;
-    final List<ValidationError> errors = [];
-    final List<String> duplicates = [];
-    
-    final db = await _db.database;
-
-    for (var student in students) {
-      try {
-        // Check for duplicates again (just to be safe)
-        final existing = await db.query(
-          'students',
-          where: 'admissionNo = ?',
-          whereArgs: [student.admissionNo],
-          limit: 1,
-        );
-        
-        if (existing.isNotEmpty) {
-          duplicates.add('Row ${student.rowNumber}: ${student.admissionNo}');
-          failureCount++;
-          continue;
-        }
-
-        // Normalize gender
-        String? normalizedGender = student.gender;
-        if (normalizedGender != null && normalizedGender.isNotEmpty) {
-          normalizedGender = normalizedGender.toUpperCase().startsWith('M') ? 'Male' : 'Female';
-        }
-
-        // Insert student
-        final studentData = student.toMap();
-        studentData['gender'] = normalizedGender;
-        
-        await db.insert('students', studentData);
-        successCount++;
-      } catch (e) {
-        errors.add(ValidationError(
-          rowNumber: student.rowNumber,
-          field: 'Database',
-          message: 'Error inserting: ${e.toString()}',
-        ));
-        failureCount++;
-      }
-    }
-
-    return BatchUploadResult(
-      totalRows: students.length,
-      successCount: successCount,
-      failureCount: failureCount,
-      errors: errors,
-      duplicates: duplicates,
-    );
-  }
-
-  // ========================================
-  // HELPER METHODS
-  // ========================================
-  bool _isRowEmpty(List<Data?> row) {
-    return row.every((cell) => cell == null || cell.value == null || cell.value.toString().trim().isEmpty);
-  }
-
-  StudentUploadData _parseRow(
-    List<Data?> row,
-    int rowNumber,
-    Map<String, int> classNameToId,
-    Map<String, Map<int, int>> armNameToId,
-  ) {
-    String getCellValue(int index) {
-      if (index >= row.length) return '';
-      final cell = row[index];
-      if (cell == null || cell.value == null) return '';
-      return cell.value.toString().trim();
-    }
-
-    final surname = getCellValue(0);
-    final firstName = getCellValue(1);
-    final otherName = getCellValue(2);
-    final admissionNo = getCellValue(3);
-    final className = getCellValue(4);
-    final armName = getCellValue(5);
-    final guardianName = getCellValue(6);
-    final guardianPhone = getCellValue(7);
-    final guardianEmail = getCellValue(8);
-    final address = getCellValue(9);
-    final gender = getCellValue(10);
-    final dateOfBirth = getCellValue(11);
-
-    // Get class ID
-    final classId = classNameToId[className] ?? -1;
-    
-    // Get arm ID
-    int armId = -1;
-    if (classId > 0 && armNameToId.containsKey(armName)) {
-      armId = armNameToId[armName]![classId] ?? -1;
-    }
-
-    return StudentUploadData(
-      surname: surname,
-      firstName: firstName,
-      otherName: otherName.isEmpty ? null : otherName,
-      admissionNo: admissionNo,
-      guardianName: guardianName.isEmpty ? null : guardianName,
-      guardianPhone: guardianPhone.isEmpty ? null : guardianPhone,
-      guardianEmail: guardianEmail.isEmpty ? null : guardianEmail,
-      address: address.isEmpty ? null : address,
-      gender: gender.isEmpty ? null : gender,
-      dateOfBirth: dateOfBirth.isEmpty ? null : dateOfBirth,
-      classId: classId,
-      armId: armId,
-      rowNumber: rowNumber,
-    );
-  }
-
-  StudentUploadData _parseCsvRow(
-    List<String> row,
-    int rowNumber,
-    Map<String, int> classNameToId,
-    Map<String, Map<int, int>> armNameToId,
-  ) {
-    String getCellValue(int index) {
-      if (index >= row.length) return '';
-      return row[index].trim();
-    }
-
-    final surname = getCellValue(0);
-    final firstName = getCellValue(1);
-    final otherName = getCellValue(2);
-    final admissionNo = getCellValue(3);
-    final className = getCellValue(4);
-    final armName = getCellValue(5);
-    final guardianName = getCellValue(6);
-    final guardianPhone = getCellValue(7);
-    final guardianEmail = getCellValue(8);
-    final address = getCellValue(9);
-    final gender = getCellValue(10);
-    final dateOfBirth = getCellValue(11);
-
-    final classId = classNameToId[className] ?? -1;
-    
-    int armId = -1;
-    if (classId > 0 && armNameToId.containsKey(armName)) {
-      armId = armNameToId[armName]![classId] ?? -1;
-    }
-
-    return StudentUploadData(
-      surname: surname,
-      firstName: firstName,
-      otherName: otherName.isEmpty ? null : otherName,
-      admissionNo: admissionNo,
-      guardianName: guardianName.isEmpty ? null : guardianName,
-      guardianPhone: guardianPhone.isEmpty ? null : guardianPhone,
-      guardianEmail: guardianEmail.isEmpty ? null : guardianEmail,
-      address: address.isEmpty ? null : address,
-      gender: gender.isEmpty ? null : gender,
-      dateOfBirth: dateOfBirth.isEmpty ? null : dateOfBirth,
-      classId: classId,
-      armId: armId,
-      rowNumber: rowNumber,
-    );
-  }
-
-  // ========================================
-  // GENERATE TEMPLATE
-  // ========================================
-  Future<File> generateTemplate(String outputPath) async {
-    final excel = Excel.createExcel();
-    final sheet = excel['Students'];
-
-    // Headers
-    final headers = [
-      'Surname*',
-      'First Name*',
-      'Other Name',
-      'Admission No*',
-      'Class*',
-      'Arm*',
-      'Guardian Name',
-      'Guardian Phone',
-      'Guardian Email',
-      'Address',
-      'Gender (M/F)',
-      'Date of Birth (YYYY-MM-DD)',
-    ];
-
-    for (var i = 0; i < headers.length; i++) {
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
-        ..value = TextCellValue(headers[i])
-        ..cellStyle = CellStyle(
-          bold: true,
-          backgroundColorHex: ExcelColor.blue,
-          fontColorHex: ExcelColor.white,
-        );
-    }
-
-    // Sample data row
-    final sampleData = [
-      'Doe',
-      'John',
-      'Michael',
-      'STU001',
-      'JSS 1',
-      'A',
-      'Mr. John Doe Sr.',
-      '08012345678',
-      'parent@example.com',
-      '123 Main Street, Lagos',
-      'M',
-      '2010-05-15',
-    ];
-
-    for (var i = 0; i < sampleData.length; i++) {
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 1)).value = 
-        TextCellValue(sampleData[i]);
-    }
-
-    // Save file
-    final fileBytes = excel.save();
-    final file = File(outputPath);
-    await file.writeAsBytes(fileBytes!);
-    
-    return file;
-  }
-}
-
-// Simple debug print function
-void debugPrint(String message) {
-  // Only print in debug mode
-  assert(() {
-    // ignore: avoid_print
-    print(message);
-    return true;
-  }());
+  // Convenience getter for compatibility
+  int get failureCount => failedCount;
 }

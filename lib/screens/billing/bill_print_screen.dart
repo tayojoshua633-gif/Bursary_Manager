@@ -11,8 +11,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import '../../db/database_helper.dart';
+import '../../data/database_helper_wrapper.dart';
 import '../../utils/printer_settings_helper.dart';  // NEW IMPORT
+import '../../utils/thermal_printer_manager.dart';
+import '../../utils/print_counter_helper.dart';
+import '../../screens/settings/thermal_printer_screen.dart';
+import '../../screens/settings/usb_printer_screen.dart';
+import '../../utils/usb_printer_manager.dart';
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 
 class BillPrintScreen extends StatefulWidget {
   final int billId;
@@ -35,7 +41,7 @@ class BillPrintScreen extends StatefulWidget {
 }
 
 class _BillPrintScreenState extends State<BillPrintScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final GlobalKey _billKey = GlobalKey();
 
   bool _loading = true;
@@ -49,6 +55,8 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
   double _previousBalance = 0.0;
   double _subtotal = 0.0;
   double _grandTotal = 0.0;
+  double _totalPaid = 0.0;
+  double _outstanding = 0.0;
 
   @override
   void initState() {
@@ -109,14 +117,34 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
         };
       }).toList();
 
-      _previousBalance = (_bill!['previousBalance'] as num?)?.toDouble() ?? 0.0;
-      _grandTotal = (_bill!['totalAmount'] as num?)?.toDouble() ?? 0.0;
-      
+      // Calculate fresh previous balance
+      _previousBalance = await _db.computeOutstandingBeforeTerm(
+        widget.studentId,
+        term: widget.term,
+        session: widget.session,
+      );
+
       _subtotal = _breakdown.fold(
         0.0,
         (sum, item) => sum + ((item['amount'] as num?)?.toDouble() ?? 0.0),
       );
+
+      // Grand total = fresh previous balance + current term fee subtotal
+      _grandTotal = _previousBalance + _subtotal;
     }
+
+    // Calculate total paid for this term
+    final payments = await _db.getPayments(
+      widget.studentId,
+      term: widget.term,
+      session: widget.session,
+    );
+    _totalPaid = payments.fold<double>(
+      0.0,
+      (sum, p) => sum + ((p['amount'] as num?)?.toDouble() ?? 0.0),
+    );
+
+    _outstanding = _grandTotal - _totalPaid;
 
     if (mounted) setState(() => _loading = false);
   }
@@ -172,15 +200,29 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
 
             const SizedBox(height: 12),
 
-            // Option 3: Thermal Printer
+            // Option 3: Thermal Printer (Bluetooth)
             _buildExportOption(
               icon: Icons.print,
               iconColor: Colors.orange,
               title: 'Thermal Printer',
-              subtitle: 'Select size and print',
+              subtitle: 'Bluetooth — select size and print',
               onTap: () {
                 Navigator.pop(context);
                 _showThermalPrinterSizeDialog();
+              },
+            ),
+
+            const SizedBox(height: 12),
+
+            // Option 4: USB Printer
+            _buildExportOption(
+              icon: Icons.usb,
+              iconColor: Colors.deepPurple,
+              title: 'USB Printer',
+              subtitle: 'OTG cable — direct USB print',
+              onTap: () {
+                Navigator.pop(context);
+                _showUsbPrinterSizeDialog();
               },
             ),
           ],
@@ -252,60 +294,100 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
   }
 
   // ========================================
-  // NEW: THERMAL PRINTER SIZE SELECTION DIALOG
+  // THERMAL PRINTER SIZE SELECTION DIALOG (Bluetooth Direct Print)
   // ========================================
-  void _showThermalPrinterSizeDialog() {
+  Future<void> _showThermalPrinterSizeDialog() async {
+    // Check if printer is connected
+    if (!ThermalPrinterManager.isConnected) {
+      if (!mounted) return;
+
+      // Show message and navigate to printer connection screen
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please connect to a thermal printer first'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      // Navigate to thermal printer connection screen
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ThermalPrinterScreen()),
+      );
+
+      // Check again if printer is connected after returning
+      if (!ThermalPrinterManager.isConnected) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Printer not connected. Bill printing cancelled.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!mounted) return;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.straighten, color: Colors.orange),
-            SizedBox(width: 8),
-            Text('Select Paper Size'),
+            const Icon(Icons.print, color: Colors.orange),
+            const SizedBox(width: 8),
+            const Text('Print to Thermal Printer'),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'CONNECTED',
+                style: TextStyle(fontSize: 10, color: Colors.white),
+              ),
+            ),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(
+              'Connected to: ${ThermalPrinterManager.connectedPrinter?.platformName ?? "Unknown"}',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
             const Text(
-              'Choose your thermal printer paper size:',
+              'Select paper size:',
               style: TextStyle(fontSize: 14, color: Colors.grey),
             ),
             const SizedBox(height: 16),
 
             // 58mm Option
-            _buildSizeOption(
-              size: PrinterSettingsHelper.size58mm,
-              isRecommended: false,
+            _buildBluetoothSizeOption(
+              title: '58mm Paper',
+              subtitle: 'Standard thermal receipt size',
+              paperSize: PaperSize.mm58,
               onTap: () {
                 Navigator.pop(context);
-                _exportAsThermalPrint(PrinterSettingsHelper.size58mm);
+                _printViaBluetooth(PaperSize.mm58);
               },
             ),
 
             const SizedBox(height: 12),
 
             // 80mm Option (Recommended)
-            _buildSizeOption(
-              size: PrinterSettingsHelper.size80mm,
+            _buildBluetoothSizeOption(
+              title: '80mm Paper',
+              subtitle: 'Wider format (Recommended)',
+              paperSize: PaperSize.mm80,
               isRecommended: true,
               onTap: () {
                 Navigator.pop(context);
-                _exportAsThermalPrint(PrinterSettingsHelper.size80mm);
-              },
-            ),
-
-            const SizedBox(height: 12),
-
-            // 110mm Option
-            _buildSizeOption(
-              size: PrinterSettingsHelper.size110mm,
-              isRecommended: false,
-              onTap: () {
-                Navigator.pop(context);
-                _exportAsThermalPrint(PrinterSettingsHelper.size110mm);
+                _printViaBluetooth(PaperSize.mm80);
               },
             ),
           ],
@@ -316,6 +398,81 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
             child: const Text('Cancel'),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildBluetoothSizeOption({
+    required String title,
+    required String subtitle,
+    required PaperSize paperSize,
+    bool isRecommended = false,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isRecommended ? Colors.orange : Colors.grey.shade300,
+            width: isRecommended ? 2 : 1,
+          ),
+          borderRadius: BorderRadius.circular(8),
+          color: isRecommended ? Colors.orange.shade50 : null,
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.receipt_long,
+              color: isRecommended ? Colors.orange : Colors.grey.shade600,
+              size: 32,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: isRecommended ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                      if (isRecommended) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.orange,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'RECOMMENDED',
+                            style: TextStyle(fontSize: 9, color: Colors.white),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey.shade400),
+          ],
+        ),
       ),
     );
   }
@@ -484,30 +641,6 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
 
               pw.SizedBox(height: 20),
 
-              // Previous Balance
-              if (_previousBalance > 0) ...[
-                pw.Container(
-                  padding: const pw.EdgeInsets.all(12),
-                  decoration: const pw.BoxDecoration(
-                    color: PdfColors.orange100,
-                  ),
-                  child: pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                    children: [
-                      pw.Text(
-                        'Previous Outstanding Balance',
-                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                      ),
-                      pw.Text(
-                        '₦${NumberFormat("#,##0.00").format(_previousBalance)}',
-                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ),
-                pw.SizedBox(height: 20),
-              ],
-
               // Fee Breakdown Table
               pw.Text(
                 'Fee Breakdown',
@@ -532,7 +665,7 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
                       pw.Padding(
                         padding: const pw.EdgeInsets.all(10),
                         child: pw.Text(
-                          'Amount (₦)',
+                          'Amount (N)',
                           textAlign: pw.TextAlign.right,
                           style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                         ),
@@ -558,43 +691,125 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
                 ],
               ),
 
-              pw.SizedBox(height: 30),
+              pw.SizedBox(height: 20),
 
-              // Totals
+              // Subtotal, Previous Balance, and Total Amount Due
               pw.Container(
                 padding: const pw.EdgeInsets.all(15),
                 decoration: pw.BoxDecoration(
-                  border: pw.Border.all(width: 2),
-                  color: PdfColors.grey200,
+                  border: pw.Border.all(width: 1.5, color: PdfColors.grey400),
                   borderRadius: pw.BorderRadius.circular(8),
                 ),
                 child: pw.Column(
                   children: [
-                    _buildPdfRow(
-                      'Subtotal:',
-                      '₦${NumberFormat("#,##0.00").format(_subtotal)}',
-                      bold: true,
+                    // Subtotal row
+                    pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: [
+                        pw.Text(
+                          'Subtotal (Current Term Fees):',
+                          style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+                        ),
+                        pw.Text(
+                          'N ${NumberFormat("#,##0.00").format(_subtotal)}',
+                          style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+                        ),
+                      ],
                     ),
-                    if (_previousBalance > 0) ...[
-                      pw.SizedBox(height: 8),
-                      _buildPdfRow(
-                        'Previous Balance:',
-                        '₦${NumberFormat("#,##0.00").format(_previousBalance)}',
-                        bold: true,
+
+                    // Previous Balance/Credit row (if any)
+                    if (_previousBalance != 0) ...[
+                      pw.SizedBox(height: 10),
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text(
+                            _previousBalance > 0 ? 'Previous Outstanding Balance:' : 'Previous Credit:',
+                            style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: _previousBalance > 0 ? PdfColors.orange700 : PdfColors.green700),
+                          ),
+                          pw.Text(
+                            'N ${NumberFormat("#,##0.00").format(_previousBalance.abs())}',
+                            style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: _previousBalance > 0 ? PdfColors.orange700 : PdfColors.green700),
+                          ),
+                        ],
                       ),
                     ],
-                    pw.Divider(thickness: 2),
+
+                    pw.SizedBox(height: 10),
+                    pw.Divider(thickness: 2, color: PdfColors.indigo),
+                    pw.SizedBox(height: 10),
+
+                    // Total Amount Due row
+                    pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: [
+                        pw.Text(
+                          'TOTAL AMOUNT DUE:',
+                          style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.indigo900),
+                        ),
+                        pw.Text(
+                          'N ${NumberFormat("#,##0.00").format(_grandTotal)}',
+                          style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.indigo900),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              pw.SizedBox(height: 30),
+
+              // Financial Summary
+              pw.Container(
+                padding: const pw.EdgeInsets.all(20),
+                decoration: pw.BoxDecoration(
+                  color: PdfColors.grey100,
+                  border: pw.Border.all(width: 1.5, color: PdfColors.grey400),
+                  borderRadius: pw.BorderRadius.circular(12),
+                ),
+                child: pw.Column(
+                  children: [
+                    pw.Center(
+                      child: pw.Text(
+                        'FINANCIAL SUMMARY',
+                        style: pw.TextStyle(
+                          fontSize: 16,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.grey800,
+                        ),
+                      ),
+                    ),
+                    pw.SizedBox(height: 15),
                     _buildPdfRow(
-                      'TOTAL AMOUNT DUE:',
-                      '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
+                      'Total Bills (Term):',
+                      'N ${NumberFormat("#,##0.00").format(_grandTotal)}',
                       bold: true,
-                      fontSize: 16,
+                      fontSize: 15,
+                    ),
+                    pw.SizedBox(height: 10),
+                    _buildPdfRow(
+                      'Total Paid (Term):',
+                      'N ${NumberFormat("#,##0.00").format(_totalPaid)}',
+                      bold: true,
+                      fontSize: 15,
+                    ),
+                    pw.SizedBox(height: 10),
+                    pw.Divider(thickness: 2, color: PdfColors.grey600),
+                    pw.SizedBox(height: 10),
+                    _buildPdfRow(
+                      'Outstanding Balance:',
+                      'N ${NumberFormat("#,##0.00").format(_outstanding)}',
+                      bold: true,
+                      fontSize: 18,
                     ),
                   ],
                 ),
               ),
 
               pw.Spacer(),
+
+              // Bank details
+              _buildBankDetailsPdf(),
 
               // Footer
               pw.Divider(),
@@ -656,6 +871,63 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
         ),
       );
     }
+  }
+
+  List<Map<String, dynamic>> _getBankAccounts() {
+    if (_school == null) return [];
+    final accounts = <Map<String, dynamic>>[];
+    for (int i = 1; i <= 3; i++) {
+      final bankName = _school!['bankName$i']?.toString() ?? '';
+      final accNum = _school!['accountNumber$i']?.toString() ?? '';
+      final accName = _school!['accountName$i']?.toString() ?? '';
+      if (bankName.isNotEmpty && accNum.isNotEmpty) {
+        accounts.add({'bankName': bankName, 'accountNumber': accNum, 'accountName': accName});
+      }
+    }
+    return accounts;
+  }
+
+  pw.Widget _buildBankDetailsPdf() {
+    final accounts = _getBankAccounts();
+    if (accounts.isEmpty) return pw.SizedBox();
+
+    return pw.Column(
+      children: [
+        pw.SizedBox(height: 20),
+        pw.Text('BANK DETAILS', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 8),
+        ...accounts.map((acc) => pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 4),
+          child: pw.Text(
+            '${acc['bankName']} - ${acc['accountNumber']} - ${acc['accountName']}',
+            textAlign: pw.TextAlign.center,
+            style: const pw.TextStyle(fontSize: 11),
+          ),
+        )),
+      ],
+    );
+  }
+
+  pw.Widget _buildBankDetailsThermal(PrinterSize size) {
+    final accounts = _getBankAccounts();
+    if (accounts.isEmpty) return pw.SizedBox();
+
+    return pw.Column(
+      children: [
+        pw.SizedBox(height: size.lineSpacing * 2),
+        pw.Text('BANK DETAILS', style: pw.TextStyle(fontSize: size.fontSize, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: size.lineSpacing),
+        ...accounts.map((acc) => pw.Padding(
+          padding: pw.EdgeInsets.only(bottom: size.lineSpacing),
+          child: pw.Column(
+            children: [
+              pw.Text(acc['bankName'], textAlign: pw.TextAlign.center, style: pw.TextStyle(fontSize: size.fontSize, fontWeight: pw.FontWeight.bold)),
+              pw.Text('${acc['accountNumber']} - ${acc['accountName']}', textAlign: pw.TextAlign.center, style: pw.TextStyle(fontSize: size.fontSize - 1)),
+            ],
+          ),
+        )),
+      ],
+    );
   }
 
   pw.Widget _buildPdfRow(String label, String value, {bool bold = false, double fontSize = 14}) {
@@ -737,7 +1009,231 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
   }
 
   // ========================================
-  // EXPORT AS THERMAL PRINT (with size selection)
+  // DIRECT BLUETOOTH THERMAL PRINTING
+  // ========================================
+  Future<void> _printViaBluetooth(PaperSize paperSize) async {
+    setState(() => _exporting = true);
+
+    try {
+      final schoolName = _school?['name'] ?? "School Name";
+      final schoolAddress = _school?['address'] ?? "";
+      final studentClass = "${_student?['className'] ?? 'N/A'} - ${_student?['armName'] ?? 'N/A'}";
+
+      // Prepare fee items for thermal printer
+      final feeItems = <Map<String, dynamic>>[];
+
+      // Add previous balance as first item if it exists
+      if (_previousBalance > 0) {
+        feeItems.add({
+          'name': 'Previous Balance',
+          'amount': _previousBalance,
+        });
+      }
+
+      // Add all fee breakdown items
+      feeItems.addAll(_breakdown.map((item) {
+        final label = item['label']?.toString() ?? 'Fee';
+        final amount = (item['amount'] as num?)?.toDouble() ?? 0.0;
+        return {
+          'name': label,
+          'amount': amount,
+        };
+      }).toList());
+
+      // Print via Bluetooth
+      await ThermalPrinterManager.printBill(
+        schoolName: schoolName,
+        schoolAddress: schoolAddress,
+        studentName: widget.studentName,
+        studentClass: studentClass,
+        term: widget.term,
+        feeItems: feeItems,
+        total: _grandTotal,
+        billDate: DateFormat('dd/MM/yyyy').format(DateTime.now()),
+        schoolPhone: _school?['phone']?.toString(),
+        bankAccounts: _getBankAccounts(),
+        paperSize: paperSize,
+      );
+
+      // Increment print counter
+      await PrintCounterHelper.incrementBillsPrinted();
+
+      setState(() => _exporting = false);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Bill printed successfully on ${paperSize == PaperSize.mm58 ? "58mm" : "80mm"} paper!'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      setState(() => _exporting = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Print failed: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  // ========================================
+  // USB THERMAL PRINTING
+  // ========================================
+  Future<void> _showUsbPrinterSizeDialog() async {
+    if (!UsbPrinterManager.isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please connect a USB printer first'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const UsbPrinterScreen()),
+      );
+      if (!UsbPrinterManager.isConnected) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No USB printer connected. Print cancelled.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!mounted) return;
+    final deviceName =
+        UsbPrinterManager.connectedDevice?['productName']?.toString() ?? 'USB Printer';
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.usb, color: Colors.deepPurple),
+            const SizedBox(width: 8),
+            const Text('Print via USB'),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text('CONNECTED',
+                  style: TextStyle(fontSize: 10, color: Colors.white)),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Connected to: $deviceName',
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            const Text('Select paper size:',
+                style: TextStyle(fontSize: 14, color: Colors.grey)),
+            const SizedBox(height: 16),
+            _buildBluetoothSizeOption(
+              title: '58mm Paper',
+              subtitle: 'Standard thermal receipt size',
+              paperSize: PaperSize.mm58,
+              onTap: () {
+                Navigator.pop(context);
+                _printViaUsb(PaperSize.mm58);
+              },
+            ),
+            const SizedBox(height: 12),
+            _buildBluetoothSizeOption(
+              title: '80mm Paper',
+              subtitle: 'Wider format (Recommended)',
+              paperSize: PaperSize.mm80,
+              isRecommended: true,
+              onTap: () {
+                Navigator.pop(context);
+                _printViaUsb(PaperSize.mm80);
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _printViaUsb(PaperSize paperSize) async {
+    setState(() => _exporting = true);
+    try {
+      final schoolName = _school?['name'] ?? 'School Name';
+      final schoolAddress = _school?['address'] ?? '';
+      final studentClass =
+          '${_student?['className'] ?? 'N/A'} - ${_student?['armName'] ?? 'N/A'}';
+
+      final feeItems = <Map<String, dynamic>>[];
+      if (_previousBalance > 0) {
+        feeItems.add({'name': 'Previous Balance', 'amount': _previousBalance});
+      }
+      feeItems.addAll(_breakdown.map((item) => {
+            'name': item['label']?.toString() ?? 'Fee',
+            'amount': (item['amount'] as num?)?.toDouble() ?? 0.0,
+          }));
+
+      await UsbPrinterManager.printBill(
+        schoolName: schoolName,
+        schoolAddress: schoolAddress,
+        studentName: widget.studentName,
+        studentClass: studentClass,
+        term: widget.term,
+        feeItems: feeItems,
+        total: _grandTotal,
+        billDate: DateFormat('dd/MM/yyyy').format(DateTime.now()),
+        schoolPhone: _school?['phone']?.toString(),
+        bankAccounts: _getBankAccounts(),
+        paperSize: paperSize,
+      );
+
+      await PrintCounterHelper.incrementBillsPrinted();
+      setState(() => _exporting = false);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Bill printed via USB on ${paperSize == PaperSize.mm58 ? "58mm" : "80mm"} paper!'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      setState(() => _exporting = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('USB print failed: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  // ========================================
+  // EXPORT AS THERMAL PRINT (PDF - Legacy, kept for compatibility)
   // ========================================
   Future<void> _exportAsThermalPrint(PrinterSize size) async {
     setState(() => _exporting = true);
@@ -828,22 +1324,6 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
               pw.Divider(thickness: 1),
               pw.SizedBox(height: size.lineSpacing),
 
-              // Previous Balance
-              if (_previousBalance > 0) ...[
-                pw.Container(
-                  width: double.infinity,
-                  padding: pw.EdgeInsets.all(size.margin / 2),
-                  decoration: const pw.BoxDecoration(color: PdfColors.grey200),
-                  child: _buildThermalRow(
-                    'Previous Balance:',
-                    '₦${NumberFormat("#,##0.00").format(_previousBalance)}',
-                    size,
-                    bold: true,
-                  ),
-                ),
-                pw.SizedBox(height: size.lineSpacing * 2),
-              ],
-
               // Fee Breakdown
               pw.Container(
                 width: double.infinity,
@@ -866,7 +1346,7 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
                         margin: pw.EdgeInsets.only(bottom: size.lineSpacing),
                         child: _buildThermalRow(
                           label,
-                          '₦${NumberFormat("#,##0.00").format(amount)}',
+                          'N ${NumberFormat("#,##0.00").format(amount)}',
                           size,
                         ),
                       );
@@ -888,15 +1368,15 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
                   children: [
                     _buildThermalRow(
                       'Subtotal:',
-                      '₦${NumberFormat("#,##0.00").format(_subtotal)}',
+                      'N ${NumberFormat("#,##0.00").format(_subtotal)}',
                       size,
                       bold: true,
                     ),
-                    if (_previousBalance > 0) ...[
+                    if (_previousBalance != 0) ...[
                       pw.SizedBox(height: size.lineSpacing),
                       _buildThermalRow(
-                        'Previous:',
-                        '₦${NumberFormat("#,##0.00").format(_previousBalance)}',
+                        _previousBalance > 0 ? 'Previous:' : 'Credit:',
+                        'N ${NumberFormat("#,##0.00").format(_previousBalance.abs())}',
                         size,
                         bold: true,
                       ),
@@ -904,7 +1384,7 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
                     pw.Divider(height: size.lineSpacing * 2, thickness: 1),
                     _buildThermalRow(
                       'TOTAL DUE:',
-                      '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
+                      'N ${NumberFormat("#,##0.00").format(_grandTotal)}',
                       size,
                       bold: true,
                       fontSize: size.fontSize + 1,
@@ -914,6 +1394,9 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
               ),
 
               pw.SizedBox(height: size.lineSpacing * 3),
+
+              // Bank details
+              _buildBankDetailsThermal(size),
 
               // Footer
               pw.Divider(thickness: 1),
@@ -1067,40 +1550,6 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
                           const SizedBox(height: 24),
                           _buildStudentInfo(),
                           const SizedBox(height: 16),
-                          if (_previousBalance > 0) ...[
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.orange.shade50,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.orange.shade200),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(Icons.warning, color: Colors.orange.shade700, size: 20),
-                                      const SizedBox(width: 8),
-                                      const Text(
-                                        'Previous Outstanding Balance',
-                                        style: TextStyle(fontWeight: FontWeight.bold),
-                                      ),
-                                    ],
-                                  ),
-                                  Text(
-                                    '₦${NumberFormat("#,##0.00").format(_previousBalance)}',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.orange.shade700,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                          ],
                           _buildFeeBreakdown(),
                           const SizedBox(height: 24),
                           _buildTotals(),
@@ -1128,6 +1577,45 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
                               ],
                             ),
                           ),
+
+                          const SizedBox(height: 30),
+
+                          // Large Export Button
+                          SizedBox(
+                            width: double.infinity,
+                            height: 56,
+                            child: ElevatedButton.icon(
+                              onPressed: _exporting ? null : _showExportOptionsDialog,
+                              icon: _exporting
+                                  ? const SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.share, size: 28),
+                              label: Text(
+                                _exporting ? 'Exporting...' : 'Export & Share Bill',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.indigo,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                elevation: 4,
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(height: 20),
                         ],
                       ),
                     ),
@@ -1219,7 +1707,7 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
                 Padding(
                   padding: EdgeInsets.all(10),
                   child: Text(
-                    'Amount (₦)',
+                    'Amount (N)',
                     textAlign: TextAlign.right,
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
@@ -1265,21 +1753,22 @@ class _BillPrintScreenState extends State<BillPrintScreen> {
         children: [
           _buildInfoRow(
             'Subtotal:',
-            '₦${NumberFormat("#,##0.00").format(_subtotal)}',
+            'N${NumberFormat("#,##0.00").format(_subtotal)}',
             bold: true,
           ),
-          if (_previousBalance > 0) ...[
+          if (_previousBalance != 0) ...[
             const SizedBox(height: 8),
             _buildInfoRow(
-              'Previous Balance:',
-              '₦${NumberFormat("#,##0.00").format(_previousBalance)}',
+              _previousBalance > 0 ? 'Previous Balance:' : 'Previous Credit:',
+              'N${NumberFormat("#,##0.00").format(_previousBalance.abs())}',
               bold: true,
+              color: _previousBalance > 0 ? Colors.orange.shade700 : Colors.green.shade700,
             ),
           ],
           const Divider(),
           _buildInfoRow(
             'TOTAL AMOUNT DUE:',
-            '₦${NumberFormat("#,##0.00").format(_grandTotal)}',
+            'N${NumberFormat("#,##0.00").format(_grandTotal)}',
             bold: true,
             color: Colors.indigo,
             fontSize: 16,

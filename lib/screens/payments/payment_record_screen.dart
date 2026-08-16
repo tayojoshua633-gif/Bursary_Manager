@@ -2,8 +2,15 @@
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../../db/database_helper.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../data/database_helper_wrapper.dart';
 import 'payment_receipt_screen.dart';
+import '../../utils/backup_reminder_helper.dart';
+import '../../utils/cloud_sync_helper.dart';
+import '../../utils/display_settings_helper.dart';
+import '../../utils/navigation_helper.dart';
+import '../../widgets/sibling_mark.dart';
+import '../students/siblings_information_screen.dart';
 
 class PaymentRecordScreen extends StatefulWidget {
   final int studentId;
@@ -20,11 +27,14 @@ class PaymentRecordScreen extends StatefulWidget {
 }
 
 class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   bool _loading = true;
 
   Map<String, dynamic>? _student;
+  // Populated when this student shares a parent phone with other active
+  // students, so we can nudge staff toward the consolidated Family Payment.
+  Map<String, dynamic>? _siblingGroup;
   String _term = "";
   String _session = "";
 
@@ -46,10 +56,165 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
   // Payment methods
   final List<String> _methods = ["Cash", "Transfer", "POS"];
 
+  // Payment For
+  static const String _kPaymentPurposesKey = 'payment_purposes';
+  static const String _defaultPurpose = 'School Fees';
+  List<String> _paymentPurposes = [_defaultPurpose, 'Tuition Fee'];
+  String _selectedPaymentFor = _defaultPurpose;
+  Map<String, dynamic>? _currentUser;
+
   @override
   void initState() {
     super.initState();
+    _loadCurrentUser();
     _loadData();
+    _loadPaymentPurposes();
+  }
+
+  Future<void> _loadPaymentPurposes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getStringList(_kPaymentPurposesKey);
+    if (stored != null && stored.isNotEmpty) {
+      // Ensure "School Fees" is always first, even for existing saved lists
+      final merged = [
+        _defaultPurpose,
+        ...stored.where((p) => p != _defaultPurpose),
+      ];
+      setState(() {
+        _paymentPurposes = merged;
+        _selectedPaymentFor = _defaultPurpose;
+      });
+      // Persist the merged list so it's consistent on next load
+      await prefs.setStringList(_kPaymentPurposesKey, merged);
+    }
+  }
+
+  Future<void> _addPaymentPurpose(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || _paymentPurposes.contains(trimmed)) return;
+    final prefs = await SharedPreferences.getInstance();
+    final updated = [..._paymentPurposes, trimmed];
+    await prefs.setStringList(_kPaymentPurposesKey, updated);
+    setState(() {
+      _paymentPurposes = updated;
+      _selectedPaymentFor = trimmed;
+    });
+  }
+
+  Future<void> _removePaymentPurpose(String name) async {
+    if (name == _defaultPurpose) return;
+    final prefs = await SharedPreferences.getInstance();
+    final updated = _paymentPurposes.where((p) => p != name).toList();
+    await prefs.setStringList(_kPaymentPurposesKey, updated);
+    setState(() {
+      _paymentPurposes = updated;
+      if (_selectedPaymentFor == name) _selectedPaymentFor = _defaultPurpose;
+    });
+  }
+
+  void _showManagePurposesDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDState) => AlertDialog(
+          title: const Text("Manage Payment Purposes"),
+          contentPadding: const EdgeInsets.fromLTRB(12, 16, 12, 0),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: _paymentPurposes.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final purpose = _paymentPurposes[i];
+                final isDefault = purpose == _defaultPurpose;
+                return ListTile(
+                  dense: true,
+                  leading: Icon(
+                    Icons.label_outline,
+                    size: 18,
+                    color: isDefault ? Colors.green.shade700 : Colors.grey.shade600,
+                  ),
+                  title: Text(
+                    purpose,
+                    style: TextStyle(
+                      fontWeight: isDefault ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                  trailing: isDefault
+                      ? Tooltip(
+                          message: 'Default — cannot remove',
+                          child: Icon(Icons.lock_outline, size: 18, color: Colors.grey.shade400),
+                        )
+                      : IconButton(
+                          icon: const Icon(Icons.close, color: Colors.red),
+                          tooltip: 'Remove',
+                          onPressed: () async {
+                            await _removePaymentPurpose(purpose);
+                            setDState(() {});
+                          },
+                        ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Done"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAddPurposeDialog() async {
+    final ctrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Add Payment Purpose"),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: "Purpose name",
+            hintText: "e.g. Development Levy",
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Add"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await _addPaymentPurpose(ctrl.text);
+  }
+
+  Future<void> _loadCurrentUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userType = prefs.getString('userType') ?? 'bursar';
+    final userId = prefs.getInt('userId') ?? 0;
+    final username = prefs.getString('username') ?? 'User';
+
+    if (mounted) {
+      setState(() {
+        _currentUser = {
+          'id': userId,
+          'userType': userType,
+          'username': username,
+        };
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -76,21 +241,61 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
       _student = studentRows.first;
     }
 
+    // Detect siblings (same parentPhone, other active students) so we can
+    // surface the Family Payment nudge.
+    final parentPhone = _student?['parentPhone'] as String?;
+    if (parentPhone != null && parentPhone.trim().isNotEmpty) {
+      final siblingRows = await db.rawQuery('''
+        SELECT
+          s.id, s.surname, s.firstName, s.otherName, s.gender,
+          s.parentPhone, s.parentName,
+          c.name as className, a.name as armName
+        FROM students s
+        LEFT JOIN classes c ON s.classId = c.id
+        LEFT JOIN arms a ON s.armId = a.id
+        WHERE s.isActive = 1 AND s.parentPhone = ?
+        ORDER BY s.surname, s.firstName
+      ''', [parentPhone]);
+
+      _siblingGroup = siblingRows.length > 1
+          ? {
+              'parentPhone': parentPhone,
+              'parentName': siblingRows.first['parentName'] ?? 'Parent',
+              'students':
+                  siblingRows.map((s) => Map<String, dynamic>.from(s)).toList(),
+            }
+          : null;
+    } else {
+      _siblingGroup = null;
+    }
+
     _term = await _db.getActiveTerm();
     _session = (await _db.getActiveSession())?['sessionName'] ?? "";
 
+    // ALWAYS calculate previous balance fresh (same as Bill Generate Screen)
+    // This ensures it reflects any updates made to previous term bills/payments
+    _previousBalance = await _db.computeOutstandingBeforeTerm(
+      widget.studentId,
+      term: _term,
+      session: _session,
+    );
+
     // Get current term bill
     final bill = await _db.getBillForStudent(widget.studentId, _term, _session);
-    
+
     if (bill != null) {
-      // Grand Total = totalAmount (already includes previousBalance)
-      _grandTotal = (bill['totalAmount'] as num?)?.toDouble() ?? 0.0;
-      _previousBalance = (bill['previousBalance'] as num?)?.toDouble() ?? 0.0;
-      // Current Term Bill = Grand Total - Previous Balance
-      _currentTermBill = _grandTotal - _previousBalance;
+      // Get stored bill total and calculate current term fees
+      final storedTotal = (bill['totalAmount'] as num?)?.toDouble() ?? 0.0;
+      final storedPrevBalance = (bill['previousBalance'] as num?)?.toDouble() ?? 0.0;
+
+      // Current Term Bill = what was billed for current term only (excluding old previous balance)
+      _currentTermBill = storedTotal - storedPrevBalance;
+
+      // Grand Total = Fresh Previous Balance + Current Term Fees
+      _grandTotal = _previousBalance + _currentTermBill;
     } else {
-      _grandTotal = 0.0;
-      _previousBalance = 0.0;
+      // No bill exists yet
+      _grandTotal = _previousBalance;
       _currentTermBill = 0.0;
     }
 
@@ -111,6 +316,21 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
 
 
     if (mounted) setState(() => _loading = false);
+  }
+
+  // ---------------------------------------------------------------------------
+  Future<void> _goToFamilyPayment() async {
+    if (_siblingGroup == null) return;
+    await NavigationHelper.pushWithSidebar(
+      context,
+      page: SiblingsInformationScreen(
+        siblingGroup: _siblingGroup!,
+        groupColor: Colors.teal.shade700,
+      ),
+      currentUser: _currentUser ?? {},
+      pageId: 'student_management/siblings',
+    );
+    if (mounted) _loadData();
   }
 
   // ---------------------------------------------------------------------------
@@ -153,12 +373,18 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
       'paymentDate': _selectedDate.toIso8601String(),
       'term': _term,
       'session': _session,
+      'paymentFor': _selectedPaymentFor,
     };
 
     int paymentId = 0;
 
     try {
       paymentId = await _db.insertPayment(payment);
+
+      // Track activity for backup reminder
+      await BackupReminderHelper.incrementTransactionCount();
+      // Fire-and-forget: silently sync to Google Drive if auto-backup is on
+      CloudSyncHelper.triggerAutoBackup();
 
       if (!mounted) return;
 
@@ -170,19 +396,25 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
         ),
       );
 
+      // Capture route reference before await to detect sidebar navigation
+      final currentRoute = ModalRoute.of(context);
+
       // OPEN RECEIPT PAGE
-      await Navigator.push(
+      await NavigationHelper.pushWithSidebar(
         context,
-        MaterialPageRoute(
-          builder: (_) => PaymentReceiptScreen(
-            paymentId: paymentId,
-            studentId: widget.studentId,
-          ),
+        page: PaymentReceiptScreen(
+          paymentId: paymentId,
+          studentId: widget.studentId,
         ),
+        currentUser: _currentUser ?? {},
+        pageId: 'bills_payment/payments',
       );
 
       // After returning from receipt, close this screen too
-      if (mounted) Navigator.pop(context, true);
+      // Skip if our route was already popped (e.g. sidebar navigated home)
+      if (mounted && currentRoute?.isActive == true) {
+        Navigator.pop(context, true);
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -194,16 +426,24 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
   // ---------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
+    final ds = DisplaySettingsProvider.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text("Record Payment — ${widget.studentName}"),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Record Payment — "),
+            Flexible(child: Text(widget.studentName, overflow: TextOverflow.ellipsis)),
+            SiblingMark(show: _siblingGroup != null),
+          ],
+        ),
         backgroundColor: Colors.green,
         foregroundColor: Colors.white,
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(ds.cardPadding),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -216,16 +456,25 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
                         backgroundColor: Colors.blue.shade700,
                         child: const Icon(Icons.person, color: Colors.white),
                       ),
-                      title: Text(
-                        widget.studentName,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
+                      title: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              widget.studentName,
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: ds.titleFontSize,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          SiblingMark(show: _siblingGroup != null),
+                        ],
                       ),
                       subtitle: Text(
                         "${_student?['className'] ?? 'No Class'} - ${_student?['armName'] ?? 'No Arm'}",
-                        style: const TextStyle(fontSize: 14),
+                        style: TextStyle(fontSize: ds.bodyFontSize),
                       ),
                       trailing: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -248,6 +497,54 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
                   ),
 
                   const SizedBox(height: 16),
+
+                  // Family Payment nudge — shown only when this student has siblings
+                  if (_siblingGroup != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.teal.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.family_restroom, color: Colors.teal.shade700),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'This student has siblings',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    color: Colors.teal.shade800,
+                                  ),
+                                ),
+                                Text(
+                                  'Use Family Payment for a better-organized, consolidated record.',
+                                  style: TextStyle(
+                                      fontSize: 11, color: Colors.teal.shade700),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: _goToFamilyPayment,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.teal.shade700,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text('Family Payment'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
 
                   // Term/Session Info
                   Row(
@@ -304,232 +601,428 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
 
                   const SizedBox(height: 20),
 
-                  // Financial Summary Header
-                  const Row(
-                    children: [
-                      Icon(Icons.account_balance_wallet, color: Colors.indigo),
-                      SizedBox(width: 8),
-                      Text(
-                        "Current Term Financial Summary",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                  // ── FINANCIAL SUMMARY SECTION ──────────────────────────────
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.indigo.shade200),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.indigo.shade50,
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
                         ),
-                      ),
-                    ],
-                  ),
-                  const Divider(),
-                  const SizedBox(height: 8),
-
-                  // Previous Balance
-                  _infoCard(
-                    "Previous Balance",
-                    _previousBalance,
-                    Colors.orange,
-                    Icons.history,
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Current Term Bill
-                  _infoCard(
-                    "Current Term Fees",
-                    _currentTermBill,
-                    Colors.blue,
-                    Icons.receipt_long,
-                  ),
-                  const SizedBox(height: 8),
-
-                  const Divider(thickness: 1),
-                  const SizedBox(height: 8),
-
-                  // Grand Total (Current Term)
-                  _infoCard(
-                    "Grand Total (This Term)",
-                    _grandTotal,
-                    Colors.purple,
-                    Icons.summarize,
-                    subtitle: "Previous + Current Fees",
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Payments This Term
-                  _infoCard(
-                    "Paid This Term",
-                    _paymentsThisTerm,
-                    Colors.green,
-                    Icons.payment,
-                  ),
-                  const SizedBox(height: 8),
-
-                  const Divider(thickness: 2),
-                  const SizedBox(height: 8),
-
-                  // CORRECTED Outstanding Balance (Current Term)
-                  Card(
-                    elevation: 3,
-                    color: _outstanding > 0 ? Colors.red.shade50 : Colors.green.shade50,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
+                      ],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Solid indigo header strip
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                          color: Colors.indigo.shade700,
+                          child: Row(
                             children: [
-                              Icon(
-                                _outstanding > 0 ? Icons.warning : Icons.check_circle,
-                                color: _outstanding > 0 ? Colors.red.shade700 : Colors.green.shade700,
-                                size: 28,
-                              ),
-                              const SizedBox(width: 8),
+                              const Icon(Icons.account_balance_wallet, color: Colors.white, size: 22),
+                              const SizedBox(width: 10),
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   const Text(
-                                    "Outstanding (This Term)",
+                                    "FINANCIAL SUMMARY",
                                     style: TextStyle(
-                                      fontSize: 16,
+                                      color: Colors.white,
+                                      fontSize: 15,
                                       fontWeight: FontWeight.bold,
+                                      letterSpacing: 0.6,
                                     ),
                                   ),
-                                  const SizedBox(height: 2),
                                   Text(
-                                    "Grand Total - Paid This Term",
+                                    "Current Term Overview",
                                     style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.grey.shade600,
+                                      color: Colors.indigo.shade100,
+                                      fontSize: 12,
                                     ),
                                   ),
                                 ],
                               ),
                             ],
                           ),
-                          Text(
-                            "₦${NumberFormat("#,##0.00").format(_outstanding)}",
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: _outstanding > 0 ? Colors.red.shade700 : Colors.green.shade700,
+                        ),
+
+                        // Body
+                        Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            children: [
+                              _infoCard(
+                                "Previous Balance",
+                                _previousBalance,
+                                Colors.orange,
+                                Icons.history,
+                              ),
+                              const SizedBox(height: 8),
+                              _infoCard(
+                                "Current Term Fees",
+                                _currentTermBill,
+                                Colors.blue,
+                                Icons.receipt_long,
+                              ),
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                child: Divider(thickness: 1),
+                              ),
+                              _infoCard(
+                                "Grand Total (This Term)",
+                                _grandTotal,
+                                Colors.purple,
+                                Icons.summarize,
+                                subtitle: "Previous + Current Fees",
+                              ),
+                              const SizedBox(height: 8),
+                              _infoCard(
+                                "Paid This Term",
+                                _paymentsThisTerm,
+                                Colors.green,
+                                Icons.payment,
+                              ),
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                child: Divider(thickness: 2),
+                              ),
+
+                              // Outstanding balance
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: _outstanding > 0
+                                      ? Colors.red.shade50
+                                      : Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: _outstanding > 0
+                                        ? Colors.red.shade200
+                                        : Colors.green.shade200,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          _outstanding > 0
+                                              ? Icons.warning_rounded
+                                              : Icons.check_circle,
+                                          color: _outstanding > 0
+                                              ? Colors.red.shade700
+                                              : Colors.green.shade700,
+                                          size: 26,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              "Outstanding (This Term)",
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            Text(
+                                              "Grand Total − Paid This Term",
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.grey.shade600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                    Text(
+                                      "₦${NumberFormat("#,##0.00").format(_outstanding)}",
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: _outstanding > 0
+                                            ? Colors.red.shade700
+                                            : Colors.green.shade700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ── Section Divider ─────────────────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 28),
+                    child: Row(
+                      children: [
+                        Expanded(child: Divider(thickness: 1.5, color: Colors.grey.shade300)),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade700,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Text(
+                              "RECORD PAYMENT",
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                                letterSpacing: 0.8,
+                              ),
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-
-                  const SizedBox(height: 24),
-
-                  // Payment Form Header
-                  const Row(
-                    children: [
-                      Icon(Icons.add_card, color: Colors.green),
-                      SizedBox(width: 8),
-                      Text(
-                        "Record New Payment",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
                         ),
-                      ),
-                    ],
-                  ),
-                  const Divider(),
-                  const SizedBox(height: 12),
-
-                  // Amount Field
-                  TextField(
-                    controller: _amountCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: InputDecoration(
-                      labelText: "Amount Paid",
-                      prefixText: "₦",
-                      prefixIcon: const Icon(Icons.money),
-                      border: const OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.green.shade50,
+                        Expanded(child: Divider(thickness: 1.5, color: Colors.grey.shade300)),
+                      ],
                     ),
                   ),
 
-                  const SizedBox(height: 16),
-
-                  // Payment Method Dropdown
-                  DropdownButtonFormField<String>(
-                    decoration: InputDecoration(
-                      labelText: "Payment Method",
-                      prefixIcon: const Icon(Icons.payment),
-                      border: const OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.grey.shade50,
-                    ),
-                    items: _methods
-                        .map((m) =>
-                            DropdownMenuItem<String>(value: m, child: Text(m)))
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedMethod = v),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Payment Date Field
-                  TextFormField(
-                    readOnly: true,
-                    decoration: InputDecoration(
-                      labelText: "Payment Date",
-                      prefixIcon: const Icon(Icons.calendar_today),
-                      border: const OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.grey.shade50,
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.edit_calendar),
-                        onPressed: _pickDate,
-                      ),
-                    ),
-                    controller: TextEditingController(
-                      text: DateFormat("EEEE, MMM dd, yyyy").format(_selectedDate),
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Note Field
-                  TextField(
-                    controller: _noteCtrl,
-                    maxLines: 3,
-                    decoration: InputDecoration(
-                      labelText: "Note (Optional)",
-                      prefixIcon: const Icon(Icons.note),
-                      border: const OutlineInputBorder(),
-                      filled: true,
-                      fillColor: Colors.grey.shade50,
-                      hintText: "Enter any additional notes...",
-                    ),
-                  ),
-
-                  const SizedBox(height: 24),
-
-                  // Save Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.save, size: 24),
-                      label: const Text(
-                        "Save Payment",
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                  // ── RECORD NEW PAYMENT SECTION ──────────────────────────────
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.green.shade300),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.green.shade100,
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
                         ),
-                      ),
-                      onPressed: _savePayment,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
-                      ),
+                      ],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Solid green header strip
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                          color: Colors.green.shade700,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.add_card, color: Colors.white, size: 22),
+                              const SizedBox(width: 10),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    "RECORD NEW PAYMENT",
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 0.6,
+                                    ),
+                                  ),
+                                  Text(
+                                    "Enter payment details below",
+                                    style: TextStyle(
+                                      color: Colors.green.shade100,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Form body
+                        Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Amount Field
+                              TextField(
+                                controller: _amountCtrl,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(decimal: true),
+                                decoration: InputDecoration(
+                                  labelText: "Amount Paid",
+                                  prefixText: "₦",
+                                  prefixIcon: const Icon(Icons.money),
+                                  border: const OutlineInputBorder(),
+                                  filled: true,
+                                  fillColor: Colors.green.shade50,
+                                ),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Payment For
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: DropdownButtonFormField<String>(
+                                      initialValue: _selectedPaymentFor,
+                                      decoration: InputDecoration(
+                                        labelText: "Payment For",
+                                        prefixIcon: const Icon(Icons.label_outline),
+                                        border: const OutlineInputBorder(),
+                                        filled: true,
+                                        fillColor: Colors.green.shade50,
+                                      ),
+                                      items: _paymentPurposes
+                                          .map((p) => DropdownMenuItem<String>(
+                                                value: p,
+                                                child: Text(p),
+                                              ))
+                                          .toList(),
+                                      onChanged: (v) =>
+                                          setState(() => _selectedPaymentFor = v!),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Tooltip(
+                                    message: "Add new purpose",
+                                    child: InkWell(
+                                      onTap: _showAddPurposeDialog,
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Container(
+                                        margin: const EdgeInsets.only(top: 4),
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green.shade700,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: const Icon(Icons.add,
+                                            color: Colors.white, size: 22),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Tooltip(
+                                    message: "Manage purposes",
+                                    child: InkWell(
+                                      onTap: _showManagePurposesDialog,
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Container(
+                                        margin: const EdgeInsets.only(top: 4),
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.shade600,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: const Icon(Icons.edit_note,
+                                            color: Colors.white, size: 22),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Payment Method Dropdown
+                              DropdownButtonFormField<String>(
+                                decoration: InputDecoration(
+                                  labelText: "Payment Method",
+                                  prefixIcon: const Icon(Icons.payment),
+                                  border: const OutlineInputBorder(),
+                                  filled: true,
+                                  fillColor: Colors.grey.shade50,
+                                ),
+                                items: _methods
+                                    .map((m) => DropdownMenuItem<String>(
+                                        value: m, child: Text(m)))
+                                    .toList(),
+                                onChanged: (v) => setState(() => _selectedMethod = v),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Payment Date Field
+                              TextFormField(
+                                readOnly: true,
+                                decoration: InputDecoration(
+                                  labelText: "Payment Date",
+                                  prefixIcon: const Icon(Icons.calendar_today),
+                                  border: const OutlineInputBorder(),
+                                  filled: true,
+                                  fillColor: Colors.grey.shade50,
+                                  suffixIcon: IconButton(
+                                    icon: const Icon(Icons.edit_calendar),
+                                    onPressed: _pickDate,
+                                  ),
+                                ),
+                                controller: TextEditingController(
+                                  text: DateFormat("EEEE, MMM dd, yyyy")
+                                      .format(_selectedDate),
+                                ),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Note Field
+                              TextField(
+                                controller: _noteCtrl,
+                                maxLines: 3,
+                                decoration: InputDecoration(
+                                  labelText: "Note (Optional)",
+                                  prefixIcon: const Icon(Icons.note),
+                                  border: const OutlineInputBorder(),
+                                  filled: true,
+                                  fillColor: Colors.grey.shade50,
+                                  hintText: "Enter any additional notes...",
+                                ),
+                              ),
+
+                              const SizedBox(height: 24),
+
+                              // Save Button
+                              SizedBox(
+                                width: double.infinity,
+                                height: 56,
+                                child: ElevatedButton.icon(
+                                  icon: const Icon(Icons.save, size: 26),
+                                  label: const Text(
+                                    "Save Payment & Print Receipt",
+                                    style: TextStyle(
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  onPressed: _savePayment,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green.shade700,
+                                    foregroundColor: Colors.white,
+                                    elevation: 4,
+                                    shadowColor: Colors.green.shade300,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
 
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 20),
                 ],
               ),
             ),

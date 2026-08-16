@@ -1,0 +1,53 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tylyr\\\\bursary_manager\\\\lib\" -Recurse -Filter \"*.dart\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(PowerShell -Command \"Select-String -Path 'C:\\\\Users\\\\tylyr\\\\bursary_manager_desktop\\\\lib\\\\db\\\\database_helper.dart' -Pattern 'getTotalBillsForTermSession' -Context 5 | Select-Object -First 50\")",
+      "Bash(not exist *)",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"c:\\\\Users\\\\tylyr\\\\bursary_manager\\\\android\\\\app\\\\src\\\\main\\\\res\\\\xml\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tylyr\\\\bursary_manager\\\\lib\" -Recurse -Directory)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\tylyr\\\\bursary_manager_desktop\\\\lib\\\\screens\\\\settings\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object Name)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\tylyr\\\\bursary_manager_desktop\\\\lib\" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer } | Select-Object FullName)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\tylyr\\\\bursary_manager_desktop\" -Force -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object Name | Sort-Object Name)",
+      "PowerShell(\\(Get-ChildItem -Path \"C:\\\\Users\\\\tylyr\\\\bursary_manager_desktop\\\\lib\\\\screens\\\\settings\" -File -ErrorAction SilentlyContinue\\) | Select-Object Name | ForEach-Object { $_.Name })",
+      "PowerShell(\\(Get-ChildItem -Path \"C:\\\\Users\\\\tylyr\\\\bursary_manager_desktop\\\\lib\\\\utils\" -File -ErrorAction SilentlyContinue\\) | Select-Object Name | ForEach-Object { $_.Name })",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tylyr\\\\bursary_manager\" -Recurse -Directory)",
+      "Bash(Select-Object -First 20)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\tylyr\\\\bursary_manager\" -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\tylyr\\\\bursary_manager\\\\lib\\\\screens\" -Recurse | Where-Object { $_.Name -match \"\\(register|add|edit|new\\)\" } | Select-Object -ExpandProperty FullName)",
+      "Read(//c/Users/tylyr/bursary_manager/lib/screens/**)",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_1_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_2_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_3_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_v2_1_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_v2_2_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_v2_3_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_v3_1_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_v3_2_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_v3_3_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_v4_2_per_page.pdf\")",
+      "PowerShell(Start-Process \"C:\\\\Users\\\\tylyr\\\\Desktop\\\\debt_sample_v4_3_per_page.pdf\")",
+      "PowerShell(if \\(-not \\(Test-Path \"c:\\\\Users\\\\tylyr\\\\bursary_manager\\\\lib\\\\screens\\\\web\"\\)\\) { New-Item -ItemType Directory -Path \"c:\\\\Users\\\\tylyr\\\\bursary_manager\\\\lib\\\\screens\\\\web\" })",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\tylyr\\\\bursary_manager_desktop\" -Directory)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\tylyr\\\\school_software_website\" -Recurse -Force)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(Sort-Object FullName)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\tylyr\\\\bursary_manager\\\\lib\\\\screens\" -Recurse -Filter \"*.dart\")",
+      "PowerShell(if \\($?\\) { \"Mobile data folder exists\" } else { \"No data folder in mobile app\" })",
+      "Bash(flutter devices *)",
+      "Bash(flutter install *)",
+      "Bash(find ~/.pub-cache -iname \"drive_v3.dart\" 2>/dev/null | head -1 *)",
+      "Read(//c//**)",
+      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"Path\", \"User\"\\) -split \";\" | Select-String \"platform-tools\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\tylyr\\bursary_manager_desktop\\lib\\data",
+      "C:\\Users\\tylyr\\bursary_manager_desktop\\lib\\screens\\settings",
+      "C:\\Users\\tylyr\\bursary_manager_desktop\\lib\\screens\\students",
+      "C:\\Users\\tylyr\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\\flutter_usb_printer-0.1.0+1",
+      "C:\\Users\\tylyr\\bursary_manager\\packages\\flutter_usb_printer"
+    ]
+  }
+}

@@ -1,6 +1,8 @@
 // lib/screens/students/student_promotion_screen.dart
 import 'package:flutter/material.dart';
-import 'package:bursary_manager/db/database_helper.dart';
+import 'package:bursary_manager/data/database_helper_wrapper.dart';
+import '../../utils/sibling_helper.dart';
+import '../../widgets/sibling_mark.dart';
 
 class StudentPromotionScreen extends StatefulWidget {
   const StudentPromotionScreen({super.key});
@@ -10,7 +12,7 @@ class StudentPromotionScreen extends StatefulWidget {
 }
 
 class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   List<Map<String, dynamic>> _classes = [];
   List<Map<String, dynamic>> _sourceArms = [];
@@ -23,6 +25,7 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
   int? _targetArmId;
 
   Set<int> _selectedStudents = {};
+  Set<String> _siblingPhones = {};
   bool _selectAll = false;
   bool _loading = true;
   bool _loadingStudents = false;
@@ -92,10 +95,12 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
     query += ' ORDER BY s.surname ASC, s.firstName ASC';
 
     final students = await db.rawQuery(query, args);
+    final siblingPhones = computeSiblingPhones(await _db.getActiveStudents());
 
     if (mounted) {
       setState(() {
         _students = students;
+        _siblingPhones = siblingPhones;
         _selectedStudents.clear();
         _selectAll = false;
         _loadingStudents = false;
@@ -194,6 +199,7 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
       );
 
       final db = await _db.database;
+      int billsGeneratedCount = 0;
 
       // Perform bulk update
       for (final studentId in _selectedStudents) {
@@ -216,6 +222,14 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
           'toArmId': _targetArmId,
           'promotionDate': DateTime.now().toIso8601String(),
         });
+
+        // AUTO-GENERATE BILL FOR NEW CLASS
+        try {
+          final billGenerated = await _autoGenerateBillForStudent(studentId, _targetClassId!);
+          if (billGenerated) billsGeneratedCount++;
+        } catch (e) {
+          debugPrint('Failed to auto-generate bill for student $studentId: $e');
+        }
       }
 
       if (!mounted) return;
@@ -223,8 +237,12 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Successfully promoted ${_selectedStudents.length} student(s)'),
+          content: Text(
+            'Successfully promoted ${_selectedStudents.length} student(s)\n'
+            '${billsGeneratedCount > 0 ? 'Bills auto-generated for $billsGeneratedCount student(s)' : 'No fees assigned to target class'}',
+          ),
           backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
         ),
       );
 
@@ -236,6 +254,76 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error promoting students: $e')),
       );
+    }
+  }
+
+  // ----------------------------------------------------------
+  // AUTO-GENERATE BILL FOR PROMOTED STUDENT
+  // ----------------------------------------------------------
+  Future<bool> _autoGenerateBillForStudent(int studentId, int classId) async {
+    try {
+      // Get active term and session
+      final activeTerm = await _db.getActiveTerm();
+      final activeSession = (await _db.getActiveSession())?['sessionName'] ?? "";
+
+      if (activeTerm.isEmpty || activeSession.isEmpty) {
+        debugPrint('No active term/session - skipping auto-bill generation');
+        return false;
+      }
+
+      // Check if class has assigned fees for this term/session
+      final classFees = await _db.getClassFees(
+        classId,
+        activeTerm,
+        activeSession,
+      );
+
+      if (classFees.isEmpty) {
+        debugPrint('No fees assigned to target class - skipping auto-bill generation');
+        return false;
+      }
+
+      // Calculate previous balance
+      final previousBalance = await _db.computeOutstandingBeforeTerm(
+        studentId,
+        term: activeTerm,
+        session: activeSession,
+      );
+
+      // Calculate total amount from class fees
+      final subtotal = classFees.fold<double>(
+        0.0,
+        (sum, fee) => sum + ((fee['amount'] as num?)?.toDouble() ?? 0.0),
+      );
+      final grandTotal = subtotal + previousBalance;
+
+      // Create bill data
+      final bill = {
+        'studentId': studentId,
+        'totalAmount': grandTotal,
+        'previousBalance': previousBalance,
+        'term': activeTerm,
+        'session': activeSession,
+        'billDate': DateTime.now().toIso8601String(),
+      };
+
+      // Create breakdown data
+      final breakdown = classFees.map((fee) {
+        return {
+          'feeItemId': fee['feeItemId'],
+          'amount': fee['amount'],
+          'label': '', // Will be populated from fee_items table
+        };
+      }).toList();
+
+      // Insert or update bill
+      await _db.insertStudentBill(bill, breakdown);
+
+      debugPrint('Auto-generated bill for promoted student $studentId to class $classId');
+      return true;
+    } catch (e) {
+      debugPrint('Error auto-generating bill: $e');
+      return false;
     }
   }
 
@@ -460,7 +548,7 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: _students.length,
-                        separatorBuilder: (_, __) => Divider(
+                        separatorBuilder: (_, _) => Divider(
                           height: 1,
                           color: Colors.grey.shade200,
                         ),
@@ -473,7 +561,18 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
                           return CheckboxListTile(
                             value: isSelected,
                             onChanged: (_) => _toggleStudent(studentId),
-                            title: Text(name),
+                            title: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(child: Text(name, overflow: TextOverflow.ellipsis)),
+                                SiblingMark(
+                                  show: isSiblingPhone(
+                                    student['parentPhone'] as String?,
+                                    _siblingPhones,
+                                  ),
+                                ),
+                              ],
+                            ),
                             subtitle: Text(
                               'Adm No: ${student['admissionNo']}\n'
                               '${student['className']} - ${student['armName']}',

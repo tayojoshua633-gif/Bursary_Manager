@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../db/database_helper.dart';
+import '../../data/database_helper_wrapper.dart';
 import 'fee_class_assignment_screen.dart';
 
 class FeeItemListScreen extends StatefulWidget {
@@ -10,7 +10,7 @@ class FeeItemListScreen extends StatefulWidget {
 }
 
 class _FeeItemListScreenState extends State<FeeItemListScreen> {
-  final DatabaseHelper _db = DatabaseHelper();
+  final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final TextEditingController _nameCtrl = TextEditingController();
 
   List<Map<String, dynamic>> _items = [];
@@ -115,11 +115,95 @@ class _FeeItemListScreenState extends State<FeeItemListScreen> {
     }
   }
 
+  /// Groups of tables that reference a fee item, mapped to a
+  /// human-readable label so usage can be reported to the user.
+  static const Map<String, String> _feeItemUsageTables = {
+    'Assigned to classes (fee structure)': 'class_fees',
+    'Billed to students': 'student_fee_breakdown',
+    'Fee priority settings': 'fee_priority',
+  };
+
+  Future<Map<String, int>> _getFeeItemUsage(int feeItemId) async {
+    final db = await _db.database;
+    final Map<String, int> usage = {};
+
+    for (final entry in _feeItemUsageTables.entries) {
+      final result = await db.rawQuery(
+        'SELECT COUNT(*) AS c FROM ${entry.value} WHERE feeItemId = ?',
+        [feeItemId],
+      );
+      final count = (result.first['c'] as int?) ?? 0;
+      if (count > 0) {
+        usage[entry.key] = count;
+      }
+    }
+
+    return usage;
+  }
+
   // ----------------------------------------------------------
   // DELETE ITEM
   // ----------------------------------------------------------
   Future<void> _deleteItem(int id, String itemName) async {
     final messenger = ScaffoldMessenger.of(context);
+
+    final usage = await _getFeeItemUsage(id);
+    if (usage.isNotEmpty) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.block, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Cannot Delete Fee Item'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '"$itemName" cannot be deleted because it contains the following records:',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              ...usage.entries.map(
+                (e) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.fiber_manual_record, size: 8),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text('${e.key} (${e.value})')),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Deleting a fee item that is still assigned or billed would '
+                'disconnect those class fee assignments and student bills '
+                'from any fee item, corrupting your records. Remove the '
+                'assignments/bills first, or leave this item in place.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -194,6 +278,201 @@ class _FeeItemListScreenState extends State<FeeItemListScreen> {
     );
   }
 
+  // ----------------------------------------------------------
+  // IMPORT FROM PREVIOUS SESSION/TERM
+  // ----------------------------------------------------------
+  Future<void> _importFromPreviousPeriod() async {
+    final sessions = await _db.getAllSessions();
+    final terms = ['1st Term', '2nd Term', '3rd Term'];
+
+    if (sessions.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No previous sessions available')),
+      );
+      return;
+    }
+
+    // Step 1: Pick source period
+    if (!mounted) return;
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (_) => _ImportPeriodDialog(
+        sessions: sessions,
+        terms: terms,
+        currentTerm: _term,
+        currentSession: _session,
+      ),
+    );
+    if (result == null) return;
+
+    final selectedTerm = result['term']!;
+    final selectedSession = result['session']!;
+
+    // Step 2: Load fee items from that period
+    final previousItems = await _db.getFeeItems(
+      term: selectedTerm,
+      session: selectedSession,
+    );
+
+    // Step 3: Load ALL class fee assignments from that period
+    final Map<int, String> feeItemNameMap = {};
+    for (final item in previousItems) {
+      feeItemNameMap[item['id'] as int] = item['name'] as String? ?? '';
+    }
+    final allClasses = await _db.getClasses();
+    final allArms = await _db.getArms();
+    final Map<int, String> classNameMap = {
+      for (final c in allClasses) c['id'] as int: c['name'] as String? ?? ''
+    };
+    final Map<int, String> armNameMap = {
+      for (final a in allArms) a['id'] as int: a['name'] as String? ?? ''
+    };
+    final Map<int, List<Map<String, dynamic>>> classToArms = {};
+    for (final a in allArms) {
+      final cid = a['classId'] as int;
+      classToArms.putIfAbsent(cid, () => []);
+      classToArms[cid]!.add(a);
+    }
+    final List<Map<String, dynamic>> previousAssignments = [];
+    for (final cls in allClasses) {
+      final classId = cls['id'] as int;
+      final className = classNameMap[classId] ?? '';
+      final noArmFees = await _db.getClassFees(classId, selectedTerm, selectedSession);
+      for (final fee in noArmFees) {
+        final feeItemId = fee['feeItemId'] as int;
+        previousAssignments.add({
+          'classId': classId,
+          'feeItemId': feeItemId,
+          'amount': fee['amount'],
+          'armId': 0,
+          'className': className,
+          'feeItemName': feeItemNameMap[feeItemId] ?? '',
+          'armName': null,
+        });
+      }
+      for (final arm in classToArms[classId] ?? []) {
+        final armId = arm['id'] as int;
+        final armFees = await _db.getClassFees(classId, selectedTerm, selectedSession, armId: armId);
+        for (final fee in armFees) {
+          final feeItemId = fee['feeItemId'] as int;
+          previousAssignments.add({
+            'classId': classId,
+            'feeItemId': feeItemId,
+            'amount': fee['amount'],
+            'armId': armId,
+            'className': className,
+            'feeItemName': feeItemNameMap[feeItemId] ?? '',
+            'armName': armNameMap[armId] ?? '',
+          });
+        }
+      }
+    }
+
+    if (previousItems.isEmpty && previousAssignments.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Nothing found in $selectedTerm, $selectedSession'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Step 4: Push preview screen; wait for user confirmation
+    if (!mounted) return;
+    final confirmed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _ImportPreviewScreen(
+          fromTerm: selectedTerm,
+          fromSession: selectedSession,
+          toTerm: _term ?? '',
+          toSession: _session ?? '',
+          feeItems: previousItems,
+          classAssignments: previousAssignments,
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+
+    // Step 5: Import fee items, tracking old-id → new-id mapping
+    final existingItems = await _db.getFeeItems(term: _term, session: _session);
+    final Map<int, int> oldToNewId = {};
+
+    for (final item in previousItems) {
+      final oldId = item['id'] as int;
+      final existing = existingItems.cast<Map<String, dynamic>?>().firstWhere(
+        (e) => e!['name'] == item['name'],
+        orElse: () => null,
+      );
+      if (existing == null) {
+        final newId = await _db.insertFeeItem({
+          'name': item['name'],
+          'defaultAmount': item['defaultAmount'],
+          'description': item['description'],
+          'term': _term,
+          'session': _session,
+        });
+        oldToNewId[oldId] = newId;
+      } else {
+        oldToNewId[oldId] = existing['id'] as int;
+      }
+    }
+
+    // Step 6: Import class fee assignments grouped by class+arm
+    final Map<String, List<Map<String, dynamic>>> grouped = {};
+    for (final a in previousAssignments) {
+      final key = '${a['classId']}-${a['armId']}';
+      grouped.putIfAbsent(key, () => []);
+      grouped[key]!.add(Map<String, dynamic>.from(a));
+    }
+
+    for (final entry in grouped.entries) {
+      final rows = entry.value;
+      final classId = rows.first['classId'] as int;
+      final rawArmId = rows.first['armId'];
+      final armId = (rawArmId == null || rawArmId == 0) ? null : rawArmId as int;
+
+      final newRows = <Map<String, dynamic>>[];
+      for (final a in rows) {
+        final oldFeeItemId = a['feeItemId'] as int;
+        final newFeeItemId = oldToNewId[oldFeeItemId];
+        if (newFeeItemId == null) continue;
+        newRows.add({
+          'classId': classId,
+          'feeItemId': newFeeItemId,
+          'amount': a['amount'],
+          'term': _term,
+          'session': _session,
+        });
+      }
+
+      if (newRows.isNotEmpty) {
+        await _db.replaceClassFeesFor(
+          classId, _term!, _session!, newRows,
+          armId: armId,
+        );
+      }
+    }
+
+    await _load();
+
+    if (!mounted) return;
+    final itemCount = oldToNewId.length;
+    final assignmentCount = grouped.length;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Import complete: $itemCount fee item(s) and $assignmentCount class assignment(s) imported',
+        ),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _nameCtrl.dispose();
@@ -210,24 +489,6 @@ class _FeeItemListScreenState extends State<FeeItemListScreen> {
         title: const Text("Fee Items"),
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.assignment),
-            onPressed: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const FeeClassAssignmentScreen(),
-                ),
-              );
-              
-              if (result == true && mounted) {
-                _load();
-              }
-            },
-            tooltip: 'Assign Fees to Class',
-          ),
-        ],
       ),
 
       floatingActionButton: FloatingActionButton(
@@ -391,8 +652,69 @@ class _FeeItemListScreenState extends State<FeeItemListScreen> {
                       ),
                     ),
                   ),
-                  
+
                   const SizedBox(height: 16),
+
+                  // Import from Previous Session/Term Button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _importFromPreviousPeriod,
+                      icon: const Icon(Icons.file_download, size: 24),
+                      label: const Text(
+                        'Import Fee Items & Fee Assignments from Previous Session/Term',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade600,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        elevation: 3,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Assign Fees to Class Button - Large and Prominent
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const FeeClassAssignmentScreen(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.assignment, size: 28),
+                      label: const Text(
+                        'Assign Fees to Class',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.indigo,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 20),
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 24),
 
                   // Fee Items Header
                   Row(
@@ -408,7 +730,7 @@ class _FeeItemListScreenState extends State<FeeItemListScreen> {
                       ),
                     ],
                   ),
-                  
+
                   const Divider(),
 
                   // Empty State
@@ -504,6 +826,463 @@ class _FeeItemListScreenState extends State<FeeItemListScreen> {
                 ],
               ),
             ),
+    );
+  }
+}
+
+// ----------------------------------------------------------
+// IMPORT PERIOD SELECTION DIALOG
+// ----------------------------------------------------------
+class _ImportPeriodDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> sessions;
+  final List<String> terms;
+  final String? currentTerm;
+  final String? currentSession;
+
+  const _ImportPeriodDialog({
+    required this.sessions,
+    required this.terms,
+    this.currentTerm,
+    this.currentSession,
+  });
+
+  @override
+  State<_ImportPeriodDialog> createState() => _ImportPeriodDialogState();
+}
+
+class _ImportPeriodDialogState extends State<_ImportPeriodDialog> {
+  String? _selectedSession;
+  String? _selectedTerm;
+
+  @override
+  void initState() {
+    super.initState();
+    // Default to first available session and term, excluding current
+    if (widget.sessions.isNotEmpty) {
+      _selectedSession = widget.sessions.first['sessionName'];
+    }
+    if (widget.terms.isNotEmpty) {
+      _selectedTerm = widget.terms.first;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.file_download, color: Colors.green),
+          SizedBox(width: 8),
+          Text('Import from Previous Period'),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Current Period: ${widget.currentTerm} | ${widget.currentSession}',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.blue.shade700,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Select period to import from:',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: _selectedSession,
+            decoration: const InputDecoration(
+              labelText: 'Session',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.calendar_today),
+            ),
+            items: widget.sessions.map((session) {
+              final sessionName = session['sessionName'] as String;
+              return DropdownMenuItem(
+                value: sessionName,
+                child: Text(sessionName),
+              );
+            }).toList(),
+            onChanged: (value) {
+              setState(() => _selectedSession = value);
+            },
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: _selectedTerm,
+            decoration: const InputDecoration(
+              labelText: 'Term',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.event),
+            ),
+            items: widget.terms.map((term) {
+              return DropdownMenuItem(
+                value: term,
+                child: Text(term),
+              );
+            }).toList(),
+            onChanged: (value) {
+              setState(() => _selectedTerm = value);
+            },
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, size: 16, color: Colors.blue.shade700),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Fee items will be copied to the current period',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            if (_selectedSession != null && _selectedTerm != null) {
+              Navigator.pop(context, {
+                'session': _selectedSession!,
+                'term': _selectedTerm!,
+              });
+            }
+          },
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+          child: const Text('Next'),
+        ),
+      ],
+    );
+  }
+}
+
+// ----------------------------------------------------------
+// IMPORT PREVIEW SCREEN
+// ----------------------------------------------------------
+class _ImportPreviewScreen extends StatelessWidget {
+  final String fromTerm;
+  final String fromSession;
+  final String toTerm;
+  final String toSession;
+  final List<Map<String, dynamic>> feeItems;
+  final List<Map<String, dynamic>> classAssignments;
+
+  const _ImportPreviewScreen({
+    required this.fromTerm,
+    required this.fromSession,
+    required this.toTerm,
+    required this.toSession,
+    required this.feeItems,
+    required this.classAssignments,
+  });
+
+  String _fmt(dynamic amount) {
+    final val = (amount as num?)?.toDouble() ?? 0.0;
+    final parts = val.toStringAsFixed(0).split('');
+    final buffer = StringBuffer();
+    for (int i = 0; i < parts.length; i++) {
+      if (i > 0 && (parts.length - i) % 3 == 0) buffer.write(',');
+      buffer.write(parts[i]);
+    }
+    return '₦$buffer';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Group class assignments by "ClassName" or "ClassName — ArmName"
+    final Map<String, List<Map<String, dynamic>>> grouped = {};
+    for (final a in classAssignments) {
+      final className = a['className'] as String? ?? 'Unknown';
+      final armName = a['armName'] as String?;
+      final key = (armName != null && armName.isNotEmpty)
+          ? '$className — $armName'
+          : className;
+      grouped.putIfAbsent(key, () => []);
+      grouped[key]!.add(a);
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Import Preview'),
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    side: BorderSide(color: Colors.grey.shade400),
+                  ),
+                  child: const Text('Cancel', style: TextStyle(fontSize: 15)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(context, true),
+                  icon: const Icon(Icons.download_done),
+                  label: const Text(
+                    'Import All',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green.shade600,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // Period info card
+          Card(
+            color: Colors.indigo.shade50,
+            elevation: 2,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.swap_horiz, color: Colors.indigo.shade700),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Import Summary',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Icon(Icons.arrow_circle_right, size: 16, color: Colors.grey.shade600),
+                      const SizedBox(width: 6),
+                      Text(
+                        'From: $fromTerm  |  $fromSession',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.arrow_circle_right, size: 16, color: Colors.indigo.shade600),
+                      const SizedBox(width: 6),
+                      Text(
+                        'To:      $toTerm  |  $toSession',
+                        style: TextStyle(
+                          color: Colors.indigo.shade700,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade100,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '${feeItems.length} fee item(s)  •  ${grouped.length} class assignment(s)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue.shade900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Fee Items section
+          if (feeItems.isNotEmpty) ...[
+            Row(
+              children: [
+                Icon(Icons.receipt_long, color: Colors.indigo.shade700),
+                const SizedBox(width: 8),
+                Text(
+                  'Fee Items (${feeItems.length})',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const Divider(),
+            ...feeItems.map((item) {
+              final name = item['name'] as String? ?? '';
+              final defaultAmount = item['defaultAmount'];
+              return Card(
+                margin: const EdgeInsets.only(bottom: 6),
+                elevation: 1,
+                child: ListTile(
+                  dense: true,
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.indigo.shade100,
+                    radius: 18,
+                    child: Icon(Icons.attach_money,
+                        color: Colors.indigo.shade700, size: 18),
+                  ),
+                  title: Text(name,
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  trailing: Text(
+                    _fmt(defaultAmount),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green.shade700,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              );
+            }),
+            const SizedBox(height: 20),
+          ],
+
+          // Fee Assignments per Class/Arm section
+          if (grouped.isNotEmpty) ...[
+            Row(
+              children: [
+                Icon(Icons.school, color: Colors.indigo.shade700),
+                const SizedBox(width: 8),
+                Text(
+                  'Fee Assignments (${grouped.length} class/arm)',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const Divider(),
+            ...grouped.entries.map((entry) {
+              final label = entry.key;
+              final rows = entry.value;
+              final total = rows.fold<double>(
+                0,
+                (sum, a) => sum + ((a['amount'] as num?)?.toDouble() ?? 0),
+              );
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                elevation: 2,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Class/arm header
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.indigo.shade50,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(10)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.class_,
+                              size: 18, color: Colors.indigo.shade700),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              label,
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.indigo.shade900,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade100,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Total: ${_fmt(total)}',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                                color: Colors.green.shade800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Individual fee rows
+                    ...rows.map((a) {
+                      final feeName =
+                          a['feeItemName'] as String? ?? 'Unknown';
+                      final amount = a['amount'];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 7),
+                        child: Row(
+                          children: [
+                            Icon(Icons.chevron_right,
+                                size: 16, color: Colors.grey.shade500),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(feeName,
+                                  style: const TextStyle(fontSize: 13)),
+                            ),
+                            Text(
+                              _fmt(amount),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w600, fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    const SizedBox(height: 6),
+                  ],
+                ),
+              );
+            }),
+          ],
+
+          const SizedBox(height: 16),
+        ],
+      ),
     );
   }
 }
