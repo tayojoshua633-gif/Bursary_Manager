@@ -1,5 +1,6 @@
 // lib/utils/permission_helper.dart
 import '../data/database_helper_wrapper.dart';
+import 'school_sync_registry.dart';
 
 class PermissionHelper {
   static final _db = DatabaseHelperWrapper();
@@ -12,6 +13,18 @@ class PermissionHelper {
     Map<String, dynamic> currentUser,
     String module,
   ) async {
+    if (await SchoolSyncRegistry.isReadOnlyMode()) {
+      // Every role sees every page on Read-Only devices, same as admin —
+      // the permissions table being checked belongs to whichever linked
+      // school is active, not this device's own role configuration, so
+      // per-role lookups there don't mean anything. Actual edits are still
+      // blocked separately by WriteGuard on the mutating screens themselves.
+      // data_management (destructive tools) and user_management stay
+      // developer-only, matching the carve-out admin/super_admin get
+      // outside Read-Only mode.
+      return module != 'user_management' && module != 'data_management';
+    }
+
     final userType = currentUser['userType'] as String;
 
     // Developer role has unrestricted access to everything (superior to super_admin)

@@ -1,2 +1,2 @@
-﻿const String kAppVersion = '15.3.0';
+﻿const String kAppVersion = '15.4.0';
 

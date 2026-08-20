@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:bursary_manager/data/database_helper_wrapper.dart';
+import 'package:bursary_manager/utils/active_session_term_notifier.dart';
 import 'package:sqflite/sqflite.dart';
 
 class SessionTermManagementScreen extends StatefulWidget {
@@ -399,6 +400,7 @@ class _SessionTermManagementScreenState
       }
 
       await _loadAll();
+      ActiveSessionTermNotifier.notifyChanged();
 
       if (mounted) {
         final sessionName = _sessions.firstWhere(

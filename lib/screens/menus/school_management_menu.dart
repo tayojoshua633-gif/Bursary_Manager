@@ -4,6 +4,7 @@ import '../../utils/permission_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../navigation/sidebar_scaffold.dart';
 import '../school_profile/school_profile_screen.dart';
+import '../school_profile/sync_key_screen.dart';
 import '../classes/class_list_screen.dart';
 import '../sessions/session_term_management_screen.dart';
 
@@ -58,6 +59,16 @@ class SchoolManagementMenu extends StatelessWidget {
             color: Colors.purple,
             page: const SessionTermManagementScreen(),
             pageId: 'school_management/session_term',
+          ),
+          _permissionMenuCard(
+            context,
+            module: 'sync_key_management',
+            title: 'Read-Only Access',
+            subtitle: 'Sync keys for viewer devices',
+            icon: Icons.key_outlined,
+            color: Colors.teal,
+            page: const SyncKeyScreen(),
+            pageId: 'school_management/sync_key',
           ),
         ],
       ),

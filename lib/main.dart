@@ -1,5 +1,6 @@
 // lib/main.dart
 
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,7 +13,8 @@ import 'screens/auth/mode_selection_screen.dart';
 import 'screens/client/client_connection_screen.dart';
 import 'screens/client/client_login_screen.dart';
 import 'utils/license_checker.dart';
-import 'utils/cloud_sync_helper.dart';
+import 'utils/school_sync_client.dart';
+import 'utils/auto_sync_service.dart';
 import 'utils/display_settings_helper.dart';
 import 'utils/app_uptime.dart';
 import 'navigation/sidebar_state_provider.dart';
@@ -336,10 +338,12 @@ class _SplashScreenState extends State<SplashScreen> {
           'id': userId,
         };
 
-        final wasRestored = await CloudSyncHelper.triggerAutoRestoreOnLaunch();
-        if (wasRestored) {
-          debugPrint('✅ CloudSync: auto-restore completed on launch');
+        try {
+          await SchoolSyncClient.refreshAllOnLaunch();
+        } catch (e) {
+          debugPrint('⚠️ School sync refresh-on-launch failed: $e');
         }
+        unawaited(AutoSyncService.start());
 
         _pendingNav = () => Navigator.pushReplacement(
           context,
@@ -347,10 +351,7 @@ class _SplashScreenState extends State<SplashScreen> {
             builder: (context) => SidebarScaffold(
               currentUser: currentUser,
               currentPageId: 'home',
-              child: HomeScreen(
-                currentUser: currentUser,
-                cloudSyncRestored: wasRestored,
-              ),
+              child: HomeScreen(currentUser: currentUser),
             ),
           ),
         );

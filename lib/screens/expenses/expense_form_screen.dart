@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../utils/write_guard.dart';
 
 class ExpenseFormScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -56,6 +57,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
 
     final expense = widget.expense;
     _amountCtrl = TextEditingController(

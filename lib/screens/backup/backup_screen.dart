@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/navigation_helper.dart';
-import '../../utils/cloud_sync_helper.dart';
+import '../../utils/school_sync_registry.dart';
 import 'backup_reminder_settings_screen.dart';
 import 'offline_backup_screen.dart';
 import 'online_backup_screen.dart';
@@ -30,7 +30,7 @@ class _BackupScreenState extends State<BackupScreen> {
     final userType = prefs.getString('userType') ?? 'bursar';
     final userId = prefs.getInt('userId') ?? 0;
     final username = prefs.getString('username') ?? 'User';
-    final readOnly = await CloudSyncHelper.isReadOnlyMode();
+    final readOnly = await SchoolSyncRegistry.isReadOnlyMode();
 
     if (mounted) {
       setState(() {

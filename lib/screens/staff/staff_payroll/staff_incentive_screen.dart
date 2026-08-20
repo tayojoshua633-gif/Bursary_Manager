@@ -7,6 +7,7 @@ import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../models/staff_incentive.dart';
 import '../../../utils/staff_incentive_pdf_generator.dart';
+import '../../../utils/write_guard.dart';
 
 class StaffIncentiveScreen extends StatefulWidget {
   const StaffIncentiveScreen({super.key});
@@ -37,6 +38,7 @@ class _StaffIncentiveScreenState extends State<StaffIncentiveScreen> with Single
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
     _tabController = TabController(length: 2, vsync: this);
     _selectedMonth = _currentMonth;
     _loadData();

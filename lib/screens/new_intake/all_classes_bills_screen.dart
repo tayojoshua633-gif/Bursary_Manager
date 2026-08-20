@@ -11,10 +11,13 @@ class AllClassesBillsScreen extends StatefulWidget {
 }
 
 class _AllClassesBillsScreenState extends State<AllClassesBillsScreen> {
+  static const List<String> _terms = ['1st Term', '2nd Term', '3rd Term'];
+
   final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   String? _activeTerm;
   String? _activeSession;
+  List<Map<String, dynamic>> _sessions = [];
   bool _loading = true;
   bool _exporting = false;
 
@@ -42,8 +45,9 @@ class _AllClassesBillsScreenState extends State<AllClassesBillsScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
 
-    _activeTerm = await _db.getActiveTerm();
-    _activeSession = (await _db.getActiveSession())?['sessionName'] ?? "";
+    _activeTerm ??= await _db.getActiveTerm();
+    _activeSession ??= (await _db.getActiveSession())?['sessionName'] ?? "";
+    _sessions = await _db.getAllSessions();
     _schoolProfile = await _db.getSchoolProfile();
 
     // Load all classes
@@ -138,6 +142,18 @@ class _AllClassesBillsScreenState extends State<AllClassesBillsScreen> {
     }
   }
 
+  void _onTermChanged(String? term) {
+    if (term == null) return;
+    setState(() => _activeTerm = term);
+    _load();
+  }
+
+  void _onSessionChanged(String? session) {
+    if (session == null) return;
+    setState(() => _activeSession = session);
+    _load();
+  }
+
   void _categorizeClasses() {
     _prePrimaryClasses = [];
     _primaryClasses = [];
@@ -217,14 +233,43 @@ class _AllClassesBillsScreenState extends State<AllClassesBillsScreen> {
                               color: Colors.deepOrange.shade900,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 12),
                           Row(
                             children: [
-                              Icon(Icons.event, size: 18, color: Colors.deepOrange.shade700),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Term: $_activeTerm | Session: $_activeSession',
-                                style: const TextStyle(fontWeight: FontWeight.w600),
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: _activeSession,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Session',
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                    filled: true,
+                                    fillColor: Colors.white,
+                                  ),
+                                  items: _sessions
+                                      .map((s) => s['sessionName'] as String)
+                                      .toSet()
+                                      .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+                                      .toList(),
+                                  onChanged: _onSessionChanged,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: _activeTerm,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Term',
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                    filled: true,
+                                    fillColor: Colors.white,
+                                  ),
+                                  items: _terms
+                                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                                      .toList(),
+                                  onChanged: _onTermChanged,
+                                ),
                               ),
                             ],
                           ),

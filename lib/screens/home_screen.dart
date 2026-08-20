@@ -26,7 +26,13 @@ import 'menus/preferences_menu.dart';
 import 'menus/staff_management_menu.dart';
 import '../server/server.dart';
 import '../widgets/network_status_indicator.dart';
-import '../utils/cloud_sync_helper.dart';
+import '../db/database_helper.dart';
+import '../utils/school_sync_registry.dart';
+import '../utils/school_sync_client.dart';
+import '../utils/central_backup_helper.dart';
+import '../utils/permission_helper.dart';
+import 'reports/unified_report_screen.dart';
+import '../utils/active_session_term_notifier.dart';
 import 'guide/app_guide_screen.dart';
 import 'examinations/examination_menu_screen.dart';
 import 'web/web_view_screen.dart';
@@ -44,23 +50,24 @@ import 'backup/backup_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
-  final bool cloudSyncRestored;
 
   const HomeScreen({
     super.key,
     required this.currentUser,
-    this.cloudSyncRestored = false,
   });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String _appMode = 'standalone';
   bool _isReadOnlyMode = false;
-  bool _cloudSyncAvailable = false;
   bool _isSyncing = false;
+
+  List<LinkedSchool> _linkedSchools = [];
+  String? _activeSchoolId;
+  TabController? _schoolTabController;
 
   String? _activeSession;
   String? _activeTerm;
@@ -73,9 +80,11 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadAppMode();
+    _loadLinkedSchools();
     _loadActiveSessionTerm();
     _loadLicenseStatus();
     _loadCurrentTier();
+    ActiveSessionTermNotifier.listenable.addListener(_loadActiveSessionTerm);
     _uptimeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       setState(() => _uptimeText = AppUptime.format());
@@ -84,44 +93,68 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       WhatsNewDialog.maybeShow(context);
     });
-    if (widget.cloudSyncRestored) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.cloud_done, color: Colors.white, size: 18),
-                SizedBox(width: 10),
-                Text('Data synced from Google Drive'),
-              ],
-            ),
-            backgroundColor: Colors.teal.shade700,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      });
-    }
   }
 
   @override
   void dispose() {
+    ActiveSessionTermNotifier.listenable.removeListener(_loadActiveSessionTerm);
     _uptimeTimer?.cancel();
+    _schoolTabController?.dispose();
     super.dispose();
   }
 
   Future<void> _loadAppMode() async {
     final prefs = await SharedPreferences.getInstance();
-    final results = await Future.wait<bool>([
-      CloudSyncHelper.isReadOnlyMode(),
-      CloudSyncHelper.isAvailable(),
-    ]);
     if (!mounted) return;
     setState(() {
       _appMode = prefs.getString('app_mode') ?? 'standalone';
-      _isReadOnlyMode = results[0];
-      _cloudSyncAvailable = results[1];
     });
+  }
+
+  /// A device is Read-Only purely by having ≥1 linked school — see
+  /// SchoolSyncRegistry.isReadOnlyMode(). Reloads the tab list and rebuilds
+  /// the TabController whenever the set of linked schools changes (add,
+  /// remove, or on first load).
+  Future<void> _loadLinkedSchools() async {
+    final schools = await SchoolSyncRegistry.getAll();
+    final activeId = await SchoolSyncRegistry.getActiveId();
+    if (!mounted) return;
+    setState(() {
+      _linkedSchools = schools;
+      _isReadOnlyMode = schools.isNotEmpty;
+      _activeSchoolId = schools.isEmpty
+          ? null
+          : (schools.any((s) => s.id == activeId) ? activeId : schools.first.id);
+      _rebuildSchoolTabController();
+    });
+  }
+
+  void _rebuildSchoolTabController() {
+    _schoolTabController?.dispose();
+    if (_linkedSchools.isEmpty) {
+      _schoolTabController = null;
+      return;
+    }
+    final initialIndex = _activeSchoolId == null
+        ? 0
+        : _linkedSchools.indexWhere((s) => s.id == _activeSchoolId).clamp(0, _linkedSchools.length - 1);
+    _schoolTabController = TabController(
+      length: _linkedSchools.length,
+      vsync: this,
+      initialIndex: initialIndex < 0 ? 0 : initialIndex,
+    );
+  }
+
+  /// Switches the active local database to [school] — instant, offline, no
+  /// network involved. Refreshing a school's data happens separately, via
+  /// pull-to-refresh or the sync button.
+  Future<void> _switchToSchool(LinkedSchool school) async {
+    if (school.id == _activeSchoolId) return;
+    setState(() => _activeSchoolId = school.id);
+    await DatabaseHelper().switchDatabase(school.dbFileName);
+    await SchoolSyncRegistry.setActiveId(school.id);
+    if (!mounted) return;
+    await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus(), _loadCurrentTier()]);
   }
 
   Future<void> _loadActiveSessionTerm() async {
@@ -158,19 +191,28 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// Manual sync: restore on read-only devices, backup on write devices.
+  /// Manual sync: refreshes the active school on Read-Only devices, pushes
+  /// this device's own data to the central server on Write devices.
   Future<void> _triggerManualSync() async {
     if (_isSyncing) return;
     setState(() => _isSyncing = true);
 
-    final result = _isReadOnlyMode
-        ? await CloudSyncHelper.manualRestore()
-        : await CloudSyncHelper.manualBackup();
+    Map<String, dynamic> result;
+    if (_isReadOnlyMode) {
+      final active = _linkedSchools.where((s) => s.id == _activeSchoolId).firstOrNull;
+      if (active == null) {
+        result = {'success': false, 'message': 'No school selected.'};
+      } else {
+        result = await SchoolSyncClient.refreshSchool(active, makeActive: true);
+      }
+    } else {
+      result = await CentralBackupHelper.triggerAutoUpload();
+    }
 
     if (!mounted) return;
 
     if (result['success'] == true && _isReadOnlyMode) {
-      await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus()]);
+      await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus(), _loadCurrentTier()]);
       if (!mounted) return;
     }
 
@@ -367,7 +409,7 @@ class _HomeScreenState extends State<HomeScreen> {
               )
             : page,
       ),
-    ).then((_) => _loadActiveSessionTerm());
+    ).then((_) => Future.wait([_loadActiveSessionTerm(), _loadLinkedSchools()]));
   }
 
   @override
@@ -394,6 +436,15 @@ class _HomeScreenState extends State<HomeScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
+          // Explicit solid color + transparent surface tint so the sync
+          // button and user card (both styled for a dark bar) stay readable
+          // at all times — Material 3's default AppBar surface is near-white
+          // and only picks up a tint (making white content legible) once
+          // content scrolls under it.
+          backgroundColor: Colors.indigo.shade700,
+          foregroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          elevation: 2,
           title: Text(
             _currentTier == null
                 ? 'School Bursary Manager $kAppVersion'
@@ -422,8 +473,9 @@ class _HomeScreenState extends State<HomeScreen> {
             //   },
             // ),
 
-            // CloudSync button — visible when signed in to Google
-            if (_cloudSyncAvailable)
+            // Sync button — write devices can always push; read-only devices
+            // only once a school is selected to refresh.
+            if (!_isReadOnlyMode || _activeSchoolId != null)
               Padding(
                 padding: const EdgeInsets.only(right: 4),
                 child: _isSyncing
@@ -446,8 +498,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: Colors.white,
                         ),
                         tooltip: _isReadOnlyMode
-                            ? 'Sync from Drive'
-                            : 'Backup to Drive',
+                            ? 'Sync active school'
+                            : 'Push to central backup',
                         onPressed: _triggerManualSync,
                       ),
               ),
@@ -634,116 +686,119 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-            // Quick Access Bar
-            Container(
-              padding: EdgeInsets.symmetric(
-                horizontal: ds.cardPadding,
-                vertical: ds.cardPadding * 0.75,
+            // Quick Access Bar — replaced by a school switcher in Read-Only mode
+            if (_isReadOnlyMode)
+              _buildSchoolTabBar(ds)
+            else
+              Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: ds.cardPadding,
+                  vertical: ds.cardPadding * 0.75,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withValues(alpha: 0.2),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _quickAccessItem(
+                      context,
+                      icon: Icons.person_add,
+                      label: 'Register',
+                      color: Colors.green,
+                      onTap: () => _navigateWithSidebar(
+                        context,
+                        const StudentFormScreen(),
+                        'student_management/students',
+                      ),
+                    ),
+                    _quickAccessItem(
+                      context,
+                      icon: Icons.people,
+                      label: 'Students',
+                      color: Colors.blue,
+                      onTap: () => _navigateWithSidebar(
+                        context,
+                        const StudentListScreen(),
+                        'student_management/students',
+                      ),
+                    ),
+                    _quickAccessItem(
+                      context,
+                      icon: Icons.receipt_long,
+                      label: 'Bill',
+                      color: Colors.teal,
+                      onTap: () => _navigateWithSidebar(
+                        context,
+                        const BillStudentSelectScreen(),
+                        'bills_payment/student_bills',
+                      ),
+                    ),
+                    _quickAccessItem(
+                      context,
+                      icon: Icons.payment,
+                      label: 'Payment',
+                      color: Colors.indigo,
+                      onTap: () => _navigateWithSidebar(
+                        context,
+                        const PaymentStudentSelectScreen(),
+                        'bills_payment/payments',
+                      ),
+                    ),
+                    _quickAccessItem(
+                      context,
+                      icon: Icons.point_of_sale,
+                      label: 'Sale',
+                      color: Colors.orange,
+                      onTap: () => _navigateWithSidebar(
+                        context,
+                        const BuyerSelectionScreen(),
+                        'stock_sales/sales',
+                      ),
+                    ),
+                    _quickAccessItem(
+                      context,
+                      icon: Icons.money_off,
+                      label: 'Expense',
+                      color: Colors.purple,
+                      onTap: () => _navigateWithSidebar(
+                        context,
+                        ExpenseFormScreen(currentUser: widget.currentUser),
+                        'expenditure/record',
+                      ),
+                    ),
+                    _quickAccessItem(
+                      context,
+                      icon: Icons.assessment,
+                      label: 'Daily',
+                      color: Colors.deepOrange,
+                      onTap: () => _navigateWithSidebar(
+                        context,
+                        const DailyReportScreen(),
+                        'reports/daily',
+                      ),
+                    ),
+                    _quickAccessItem(
+                      context,
+                      icon: Icons.backup,
+                      label: 'Backup',
+                      color: Colors.blueGrey,
+                      onTap: () => _navigateWithSidebar(
+                        context,
+                        const BackupScreen(),
+                        'preferences/backup',
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withValues(alpha: 0.2),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _quickAccessItem(
-                    context,
-                    icon: Icons.person_add,
-                    label: 'Register',
-                    color: Colors.green,
-                    onTap: () => _navigateWithSidebar(
-                      context,
-                      const StudentFormScreen(),
-                      'student_management/students',
-                    ),
-                  ),
-                  _quickAccessItem(
-                    context,
-                    icon: Icons.people,
-                    label: 'Students',
-                    color: Colors.blue,
-                    onTap: () => _navigateWithSidebar(
-                      context,
-                      const StudentListScreen(),
-                      'student_management/students',
-                    ),
-                  ),
-                  _quickAccessItem(
-                    context,
-                    icon: Icons.receipt_long,
-                    label: 'Bill',
-                    color: Colors.teal,
-                    onTap: () => _navigateWithSidebar(
-                      context,
-                      const BillStudentSelectScreen(),
-                      'bills_payment/student_bills',
-                    ),
-                  ),
-                  _quickAccessItem(
-                    context,
-                    icon: Icons.payment,
-                    label: 'Payment',
-                    color: Colors.indigo,
-                    onTap: () => _navigateWithSidebar(
-                      context,
-                      const PaymentStudentSelectScreen(),
-                      'bills_payment/payments',
-                    ),
-                  ),
-                  _quickAccessItem(
-                    context,
-                    icon: Icons.point_of_sale,
-                    label: 'Sale',
-                    color: Colors.orange,
-                    onTap: () => _navigateWithSidebar(
-                      context,
-                      const BuyerSelectionScreen(),
-                      'stock_sales/sales',
-                    ),
-                  ),
-                  _quickAccessItem(
-                    context,
-                    icon: Icons.money_off,
-                    label: 'Expense',
-                    color: Colors.purple,
-                    onTap: () => _navigateWithSidebar(
-                      context,
-                      ExpenseFormScreen(currentUser: widget.currentUser),
-                      'expenditure/record',
-                    ),
-                  ),
-                  _quickAccessItem(
-                    context,
-                    icon: Icons.assessment,
-                    label: 'Daily',
-                    color: Colors.deepOrange,
-                    onTap: () => _navigateWithSidebar(
-                      context,
-                      const DailyReportScreen(),
-                      'reports/daily',
-                    ),
-                  ),
-                  _quickAccessItem(
-                    context,
-                    icon: Icons.backup,
-                    label: 'Backup',
-                    color: Colors.blueGrey,
-                    onTap: () => _navigateWithSidebar(
-                      context,
-                      const BackupScreen(),
-                      'preferences/backup',
-                    ),
-                  ),
-                ],
-              ),
-            ),
 
             // Session/Term Strip
             Container(
@@ -1009,6 +1064,117 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Replaces the Quick Access Bar in Read-Only mode: one tab per linked
+  /// school, plus an "Add School" affordance. Empty state (no schools yet)
+  /// shows a prompt instead of an empty tab strip.
+  Widget _buildSchoolTabBar(DisplaySettings ds) {
+    if (_linkedSchools.isEmpty) {
+      return Container(
+        width: double.infinity,
+        color: Colors.white,
+        padding: EdgeInsets.symmetric(
+          horizontal: ds.cardPadding,
+          vertical: ds.cardPadding,
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.school_outlined, color: Colors.grey.shade400),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'No schools linked yet — add one from Linked Schools in Preferences.',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      color: Colors.white,
+      decoration: BoxDecoration(
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withValues(alpha: 0.2),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+              decoration: BoxDecoration(
+                color: Colors.indigo.shade50,
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: TabBar(
+                controller: _schoolTabController,
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                indicator: BoxDecoration(
+                  color: Colors.indigo.shade700,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                indicatorSize: TabBarIndicatorSize.tab,
+                labelColor: Colors.white,
+                unselectedLabelColor: Colors.indigo.shade700,
+                labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                dividerColor: Colors.transparent,
+                onTap: (index) => _switchToSchool(_linkedSchools[index]),
+                tabs: _linkedSchools
+                    .map((s) => Tab(
+                          child: Text(
+                            s.displayLabel,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ))
+                    .toList(),
+              ),
+            ),
+          ),
+          if (_linkedSchools.length > 1) _buildUnifiedReportButton(),
+        ],
+      ),
+    );
+  }
+
+  /// Only shown once >1 school is linked AND the user holds all three
+  /// report permissions individually — a role denied one of Daily/Custom/
+  /// Termly Report shouldn't see that category's data leak through here.
+  Widget _buildUnifiedReportButton() {
+    return FutureBuilder<bool>(
+      future: _hasUnifiedReportPermission(),
+      builder: (context, snapshot) {
+        if (snapshot.data != true) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: IconButton(
+            icon: const Icon(Icons.dashboard_customize_outlined, color: Colors.indigo),
+            tooltip: 'Unified Report (all schools)',
+            onPressed: () => _navigateWithSidebar(
+              context,
+              const UnifiedReportScreen(),
+              null,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<bool> _hasUnifiedReportPermission() async {
+    final results = await Future.wait([
+      PermissionHelper.hasPermission(widget.currentUser, 'daily_report'),
+      PermissionHelper.hasPermission(widget.currentUser, 'custom_report'),
+      PermissionHelper.hasPermission(widget.currentUser, 'termly_report'),
+    ]);
+    return results.every((r) => r);
+  }
+
   Widget _quickAccessItem(
     BuildContext context, {
     required IconData icon,
@@ -1087,7 +1253,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     )
                   : page,
             ),
-          ).then((_) => _loadActiveSessionTerm());
+          ).then((_) => Future.wait([_loadActiveSessionTerm(), _loadLinkedSchools()]));
         },
         child: Container(
           padding: EdgeInsets.all(ds.cardPadding),

@@ -3,6 +3,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../utils/report_data/daily_custom_report_loader.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/thermal_printer_manager.dart';
 import '../../utils/usb_printer_manager.dart';
@@ -152,313 +153,35 @@ class CustomReportScreenState extends State<CustomReportScreen>
 
     setState(() => loading = true);
 
-    activeTerm = await db.getActiveTerm();
-    activeSession = (await db.getActiveSession())?['sessionName'];
-    _school = await db.getSchoolProfile();
+    final r = await loadDailyCustomReportData(startDate: _startDate, endDate: _endDate);
 
-    final startStr = _formatDate(_startDate);
-    final endStr = _formatDate(_endDate);
+    activeTerm = r.activeTerm;
+    activeSession = r.activeSession;
+    _school = r.school;
 
-    final database = await db.database;
-    final raw = await database.rawQuery('''
-      SELECT
-        p.*,
-        s.surname,
-        s.firstName,
-        s.admissionNo,
-        c.name as className,
-        a.name as armName
-      FROM payments p
-      INNER JOIN students s ON p.studentId = s.id
-      LEFT JOIN classes c ON s.classId = c.id
-      LEFT JOIN arms a ON s.armId = a.id
-      WHERE date(p.paymentDate) BETWEEN ? AND ?
-      ORDER BY p.paymentDate DESC
-    ''', [startStr, endStr]);
-
-    cashTotal = 0;
-    posTotal = 0;
-    transferTotal = 0;
-    paymentDetails = [];
+    cashTotal = r.cashTotal;
+    posTotal = r.posTotal;
+    transferTotal = r.transferTotal;
+    totalIncome = r.totalIncome;
+    paymentDetails = r.paymentDetails;
     _paymentTabIndex = 0;
     _methodTabIndex = 0;
 
-    for (var p in raw) {
-      final paymentTerm = p['term']?.toString() ?? '';
-      final paymentSession = p['session']?.toString() ?? '';
+    expenseCashTotal = r.expenseCashTotal;
+    expensePosTotal = r.expensePosTotal;
+    expenseTransferTotal = r.expenseTransferTotal;
+    totalExpenses = r.totalExpenses;
+    expenseCategoryTotals = r.expenseCategoryTotals;
+    expenseDetails = r.expenseDetails;
 
-      if (activeTerm != null && activeSession != null) {
-        if (paymentTerm != activeTerm || paymentSession != activeSession) {
-          continue;
-        }
-      }
-
-      final method = (p['method'] ?? '').toString().toUpperCase();
-      final amount = (p['amount'] is num)
-          ? p['amount'] as num
-          : double.tryParse(p['amount'].toString()) ?? 0.0;
-
-      paymentDetails.add({
-        'paymentId': p['id'],
-        'studentId': p['studentId'],
-        'studentName': '${p['surname']} ${p['firstName']}',
-        'admissionNo': p['admissionNo'],
-        'className': p['className'] ?? 'N/A',
-        'armName': p['armName'] ?? 'N/A',
-        'method': method,
-        'amount': amount,
-        'paymentDate': p['paymentDate'],
-        'term': p['term'],
-        'session': p['session'],
-        'paymentFor': p['paymentFor']?.toString() ?? 'School Fees',
-      });
-
-      if (method == 'CASH') {
-        cashTotal += amount;
-      } else if (method == 'POS') {
-        posTotal += amount;
-      } else if (method == 'TRANSFER' || method == 'BANK TRANSFER') {
-        transferTotal += amount;
-      }
-    }
-
-    totalIncome = cashTotal + posTotal + transferTotal;
-
-    // Expenses
-    expenseCashTotal = 0;
-    expensePosTotal = 0;
-    expenseTransferTotal = 0;
-    expenseDetails = [];
-    expenseCategoryTotals = {};
-
-    try {
-      final expensesRaw = await database.rawQuery('''
-        SELECT * FROM expenses
-        WHERE date(expenseDate) BETWEEN ? AND ?
-        ORDER BY expenseDate DESC
-      ''', [startStr, endStr]);
-
-      for (var e in expensesRaw) {
-        final expenseTerm = e['term']?.toString() ?? '';
-        final expenseSession = e['session']?.toString() ?? '';
-
-        if (activeTerm != null && activeSession != null) {
-          if (expenseTerm != activeTerm || expenseSession != activeSession) {
-            continue;
-          }
-        }
-
-        final method = (e['paymentMethod'] ?? '').toString().toUpperCase();
-        final amount = (e['amount'] is num)
-            ? (e['amount'] as num).toDouble()
-            : double.tryParse(e['amount'].toString()) ?? 0.0;
-
-        final category = (e['category'] ?? 'Uncategorized').toString();
-        final customCategory = e['customCategory']?.toString();
-        final displayCategory = category == 'Other' && customCategory != null
-            ? 'Other: $customCategory'
-            : category;
-
-        expenseDetails.add({
-          'description': e['description'],
-          'category': displayCategory,
-          'recipient': e['recipient'],
-          'method': method,
-          'amount': amount,
-          'expenseDate': e['expenseDate'],
-        });
-
-        if (method == 'CASH') {
-          expenseCashTotal += amount;
-        } else if (method == 'POS') {
-          expensePosTotal += amount;
-        } else if (method == 'TRANSFER' || method == 'BANK TRANSFER') {
-          expenseTransferTotal += amount;
-        }
-
-        expenseCategoryTotals[displayCategory] =
-            (expenseCategoryTotals[displayCategory] ?? 0) + amount;
-      }
-
-      totalExpenses = expenseCashTotal + expensePosTotal + expenseTransferTotal;
-    } catch (e) {
-      print('Error loading expenses: $e');
-      totalExpenses = 0;
-    }
-
-    // Stock & Sales
-    try {
-      salesCashTotal = 0;
-      salesPosTotal = 0;
-      salesTransferTotal = 0;
-      totalSales = 0;
-      totalSalesDebt = 0;
-      salesDetails = [];
-      stockSummary = [];
-      salesDebtors = [];
-
-      final salesRaw = await database.rawQuery('''
-        SELECT
-          s.*,
-          COALESCE(si.itemName, s.itemName) as itemName,
-          si.costPrice,
-          si.currentQuantity as currentStockQuantity
-        FROM sales s
-        LEFT JOIN stock_items si ON s.stockItemId = si.id AND s.stockItemId > 0
-        WHERE date(s.saleDate) BETWEEN ? AND ?
-        ORDER BY s.saleDate DESC
-      ''', [startStr, endStr]);
-
-      Map<String, Map<String, dynamic>> salesByBuyer = {};
-      Map<int, Map<String, dynamic>> stockMovement = {};
-
-      for (var sale in salesRaw) {
-        final saleTerm = sale['term']?.toString() ?? '';
-        final saleSession = sale['session']?.toString() ?? '';
-
-        if ((activeTerm?.isNotEmpty ?? false) &&
-            (activeSession?.isNotEmpty ?? false)) {
-          if (saleTerm != activeTerm || saleSession != activeSession) {
-            continue;
-          }
-        }
-
-        final qty = (sale['quantity'] as int);
-        if (qty == 0) continue;
-
-        final method = (sale['paymentMethod'] ?? '').toString().toUpperCase();
-        final totalAmount = (sale['totalAmount'] as num).toDouble();
-        final amountPaid = (sale['amountPaid'] as num).toDouble();
-        final paymentStatus = sale['paymentStatus']?.toString() ?? 'Unpaid';
-        final stockItemId = sale['stockItemId'] as int;
-        final itemName = sale['itemName']?.toString() ?? 'Unknown Item';
-        final buyerName = sale['buyerName']?.toString() ?? 'Unknown';
-        final buyerType = sale['buyerType']?.toString() ?? '';
-        final currentStockQty = (sale['currentStockQuantity'] as int?) ?? 0;
-
-        final isCustomItem = sale['isCustomItem'] == 1 || stockItemId == 0;
-
-        final buyerKey = '$buyerName|$buyerType';
-        if (!salesByBuyer.containsKey(buyerKey)) {
-          salesByBuyer[buyerKey] = {
-            'buyerName': buyerName,
-            'buyerType': buyerType,
-            'items': <Map<String, dynamic>>[],
-            'totalQtySold': 0,
-            'totalAmount': 0.0,
-            'totalPaid': 0.0,
-            'paymentStatus': paymentStatus,
-          };
-        }
-
-        salesByBuyer[buyerKey]!['items'].add({
-          'itemName': itemName,
-          'quantity': qty,
-          'unitPrice': (sale['unitPrice'] as num).toDouble(),
-          'isCustomItem': isCustomItem,
-        });
-        salesByBuyer[buyerKey]!['totalQtySold'] += qty;
-        salesByBuyer[buyerKey]!['totalAmount'] += totalAmount;
-        salesByBuyer[buyerKey]!['totalPaid'] += amountPaid;
-
-        if (!isCustomItem && stockItemId > 0) {
-          if (!stockMovement.containsKey(stockItemId)) {
-            stockMovement[stockItemId] = {
-              'itemName': itemName,
-              'qtySold': 0,
-              'currentQuantity': currentStockQty,
-            };
-          }
-          stockMovement[stockItemId]!['qtySold'] += qty;
-        }
-
-        if (method == 'CASH') {
-          salesCashTotal += amountPaid;
-        } else if (method == 'POS') {
-          salesPosTotal += amountPaid;
-        } else if (method == 'TRANSFER' || method == 'BANK TRANSFER') {
-          salesTransferTotal += amountPaid;
-        }
-
-        totalSales += amountPaid;
-      }
-
-      salesDetails = salesByBuyer.values.toList();
-
-      final allStockItems = await database.query('stock_items', orderBy: 'itemName');
-
-      stockSummary = allStockItems.map((stockItem) {
-        final stockItemId = stockItem['id'] as int;
-        final itemName = stockItem['itemName']?.toString() ?? 'Unknown';
-        final currentQty = (stockItem['currentQuantity'] as int?) ?? 0;
-
-        final qtySold = stockMovement.containsKey(stockItemId)
-            ? (stockMovement[stockItemId]!['qtySold'] as int)
-            : 0;
-
-        final beginningQty = currentQty + qtySold;
-
-        return {
-          'itemName': itemName,
-          'beginningQuantity': beginningQty,
-          'qtySold': qtySold,
-          'remainingQuantity': currentQty,
-        };
-      }).toList();
-
-      final debtorsRaw = await database.rawQuery('''
-        SELECT DISTINCT
-          sd.buyerName,
-          sd.buyerType,
-          sd.studentId,
-          sd.totalAmount,
-          sd.amountPaid,
-          sd.outstandingBalance
-        FROM sales_debtors sd
-        INNER JOIN sales s ON sd.buyerName = s.buyerName AND sd.buyerType = s.buyerType
-        WHERE date(s.saleDate) BETWEEN ? AND ? AND s.quantity > 0 AND sd.outstandingBalance > 0
-      ''', [startStr, endStr]);
-
-      for (var debtor in debtorsRaw) {
-        final buyerName = debtor['buyerName']?.toString() ?? 'Unknown';
-        final buyerType = debtor['buyerType']?.toString() ?? '';
-
-        final debtorSalesRaw = await database.rawQuery('''
-          SELECT COALESCE(si.itemName, s.itemName) as itemName, s.quantity, s.stockItemId, s.isCustomItem
-          FROM sales s
-          LEFT JOIN stock_items si ON s.stockItemId = si.id AND s.stockItemId > 0
-          WHERE s.buyerName = ? AND s.buyerType = ? AND date(s.saleDate) BETWEEN ? AND ? AND s.quantity > 0
-        ''', [buyerName, buyerType, startStr, endStr]);
-
-        final itemsList = debtorSalesRaw.map((item) {
-          final itemName = item['itemName']?.toString() ?? '';
-          final qty = item['quantity'] as int;
-          final isCustomItem = item['isCustomItem'] == 1 || item['stockItemId'] == 0;
-          return isCustomItem ? '$itemName [Custom] (x$qty)' : '$itemName (x$qty)';
-        }).join(', ');
-
-        salesDebtors.add({
-          'buyerName': buyerName,
-          'buyerType': buyerType,
-          'itemsPurchased': itemsList,
-          'totalAmount': (debtor['totalAmount'] as num).toDouble(),
-          'totalPaid': (debtor['amountPaid'] as num).toDouble(),
-          'outstandingBalance': (debtor['outstandingBalance'] as num).toDouble(),
-        });
-
-        totalSalesDebt += (debtor['outstandingBalance'] as num).toDouble();
-      }
-    } catch (e) {
-      print('Error loading stock & sales data: $e');
-      salesCashTotal = 0;
-      salesPosTotal = 0;
-      salesTransferTotal = 0;
-      totalSales = 0;
-      totalSalesDebt = 0;
-      salesDetails = [];
-      stockSummary = [];
-      salesDebtors = [];
-    }
+    salesCashTotal = r.salesCashTotal;
+    salesPosTotal = r.salesPosTotal;
+    salesTransferTotal = r.salesTransferTotal;
+    totalSales = r.totalSales;
+    totalSalesDebt = r.totalSalesDebt;
+    salesDetails = r.salesDetails;
+    stockSummary = r.stockSummary;
+    salesDebtors = r.salesDebtors;
 
     if (mounted) {
       setState(() => loading = false);
@@ -496,10 +219,6 @@ class CustomReportScreenState extends State<CustomReportScreen>
       }).toList();
     }
     return result;
-  }
-
-  String _formatDate(DateTime d) {
-    return "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
   }
 
   String get _rangeLabel {

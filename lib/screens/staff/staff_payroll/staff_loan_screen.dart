@@ -8,6 +8,7 @@ import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../models/staff_loan.dart';
 import '../../../utils/staff_loan_pdf_generator.dart';
+import '../../../utils/write_guard.dart';
 
 class StaffLoanScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -44,6 +45,7 @@ class _StaffLoanScreenState extends State<StaffLoanScreen> with SingleTickerProv
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
     _tabController = TabController(length: 2, vsync: this);
     _loadData();
   }

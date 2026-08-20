@@ -24,12 +24,15 @@ class ViewTermBillsScreen extends StatefulWidget {
 }
 
 class _ViewTermBillsScreenState extends State<ViewTermBillsScreen> {
+  static const List<String> _terms = ['1st Term', '2nd Term', '3rd Term'];
+
   final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final GlobalKey _billKey = GlobalKey();
 
   List<Map<String, dynamic>> _classes = [];
   List<Map<String, dynamic>> _arms = [];
   List<Map<String, dynamic>> _feeItems = [];
+  List<Map<String, dynamic>> _sessions = [];
 
   String? _activeTerm;
   String? _activeSession;
@@ -64,10 +67,23 @@ class _ViewTermBillsScreenState extends State<ViewTermBillsScreen> {
 
     _activeTerm = await _db.getActiveTerm();
     _activeSession = (await _db.getActiveSession())?['sessionName'] ?? "";
+    _sessions = await _db.getAllSessions();
     _classes = await _db.getClasses();
     _schoolProfile = await _db.getSchoolProfile();
 
     if (mounted) setState(() => _loading = false);
+  }
+
+  void _onTermChanged(String? term) {
+    if (term == null) return;
+    setState(() => _activeTerm = term);
+    if (_selectedClassId != null) _loadBillsForSelection();
+  }
+
+  void _onSessionChanged(String? session) {
+    if (session == null) return;
+    setState(() => _activeSession = session);
+    if (_selectedClassId != null) _loadBillsForSelection();
   }
 
   Future<void> _onClassChanged(int? classId) async {
@@ -843,13 +859,41 @@ class _ViewTermBillsScreenState extends State<ViewTermBillsScreen> {
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.calendar_today, size: 16, color: Colors.indigo.shade700),
-                          const SizedBox(width: 8),
-                          Text(
-                            '$_activeTerm | $_activeSession',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.indigo.shade800,
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _activeSession,
+                              decoration: InputDecoration(
+                                labelText: 'Session',
+                                isDense: true,
+                                border: const OutlineInputBorder(),
+                                prefixIcon: const Icon(Icons.calendar_today, size: 18),
+                                filled: true,
+                                fillColor: Colors.white,
+                              ),
+                              items: _sessions
+                                  .map((s) => s['sessionName'] as String)
+                                  .toSet()
+                                  .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+                                  .toList(),
+                              onChanged: _onSessionChanged,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _activeTerm,
+                              decoration: InputDecoration(
+                                labelText: 'Term',
+                                isDense: true,
+                                border: const OutlineInputBorder(),
+                                prefixIcon: const Icon(Icons.event, size: 18),
+                                filled: true,
+                                fillColor: Colors.white,
+                              ),
+                              items: _terms
+                                  .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                                  .toList(),
+                              onChanged: _onTermChanged,
                             ),
                           ),
                         ],

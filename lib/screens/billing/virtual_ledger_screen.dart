@@ -17,6 +17,8 @@ class VirtualLedgerScreen extends StatefulWidget {
 }
 
 class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
+  static const List<String> _terms = ['1st Term', '2nd Term', '3rd Term'];
+
   final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
 
   bool _loading = true;
@@ -25,6 +27,7 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
 
   String? _term;
   String? _session;
+  List<Map<String, dynamic>> _sessions = [];
 
   List<Map<String, dynamic>> _classes = [];
   int _selectedClassId = 0; // 0 = All Classes
@@ -49,9 +52,24 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
     _term = await _db.getActiveTerm();
     final sessionData = await _db.getActiveSession();
     _session = sessionData?['sessionName'] ?? '';
+    _sessions = await _db.getAllSessions();
     _classes = await _db.getClasses();
 
     setState(() => _loading = false);
+  }
+
+  void _onTermChanged(String? term) {
+    setState(() {
+      _term = term;
+      _ledger = [];
+    });
+  }
+
+  void _onSessionChanged(String? session) {
+    setState(() {
+      _session = session;
+      _ledger = [];
+    });
   }
 
   Future<void> _generateLedger() async {
@@ -332,7 +350,7 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
                               Icon(Icons.calendar_today, color: Colors.blue[700], size: ds.iconSize),
                               SizedBox(width: ds.cardPadding * 0.5),
                               Text(
-                                'Current Period',
+                                'Period',
                                 style: TextStyle(
                                   fontSize: ds.titleFontSize,
                                   fontWeight: FontWeight.bold,
@@ -340,9 +358,42 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
                               ),
                             ],
                           ),
-                          SizedBox(height: ds.cardPadding * 0.5),
-                          Text('Term: $_term', style: TextStyle(fontSize: ds.bodyFontSize)),
-                          Text('Session: $_session', style: TextStyle(fontSize: ds.bodyFontSize)),
+                          SizedBox(height: ds.cardPadding),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: _session,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Session',
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  items: _sessions
+                                      .map((s) => s['sessionName'] as String)
+                                      .toSet()
+                                      .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+                                      .toList(),
+                                  onChanged: _onSessionChanged,
+                                ),
+                              ),
+                              SizedBox(width: ds.cardPadding * 0.5),
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: _term,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Term',
+                                    isDense: true,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  items: _terms
+                                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                                      .toList(),
+                                  onChanged: _onTermChanged,
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),

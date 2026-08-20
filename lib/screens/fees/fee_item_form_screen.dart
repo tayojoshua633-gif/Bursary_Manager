@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../utils/write_guard.dart';
 
 class FeeItemFormScreen extends StatefulWidget {
   final Map<String, dynamic>? item; // null = new, not null = edit
@@ -24,6 +25,7 @@ class _FeeItemFormScreenState extends State<FeeItemFormScreen> {
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
     _initData();
   }
 

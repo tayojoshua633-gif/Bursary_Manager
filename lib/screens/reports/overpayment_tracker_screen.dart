@@ -14,12 +14,15 @@ class OverpaymentTrackerScreen extends StatefulWidget {
 }
 
 class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
+  static const List<String> _terms = ['1st Term', '2nd Term', '3rd Term'];
+
   final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final TextEditingController _searchCtrl = TextEditingController();
 
   List<Map<String, dynamic>> _overpayments = [];
   List<Map<String, dynamic>> _allOverpayments = [];
   List<Map<String, dynamic>> _classes = [];
+  List<Map<String, dynamic>> _sessions = [];
 
   bool _loading = true;
   int? _selectedClassFilter; // null means "All Classes"
@@ -44,10 +47,11 @@ class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
     if (mounted) setState(() => _loading = true);
 
     try {
-      // Get current term and session
-      activeTerm = await _db.getActiveTerm();
+      // Get current term and session (only used as defaults on first load)
+      activeTerm ??= await _db.getActiveTerm();
       final sessionData = await _db.getActiveSession();
-      activeSession = sessionData?['sessionName'] ?? '';
+      activeSession ??= sessionData?['sessionName'] ?? '';
+      _sessions = await _db.getAllSessions();
 
       // Get school profile
       school = await _db.getSchoolProfile();
@@ -150,6 +154,18 @@ class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
     }
   }
 
+  void _onTermChanged(String? term) {
+    if (term == null) return;
+    setState(() => activeTerm = term);
+    _loadOverpayments();
+  }
+
+  void _onSessionChanged(String? session) {
+    if (session == null) return;
+    setState(() => activeSession = session);
+    _loadOverpayments();
+  }
+
   void _applyFilters() {
     final keyword = _searchCtrl.text.trim();
 
@@ -242,17 +258,7 @@ class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Overpayment Tracker'),
-            if (activeTerm != null && activeSession != null)
-              Text(
-                '$activeTerm - $activeSession',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
-              ),
-          ],
-        ),
+        title: const Text('Overpayment Tracker'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -265,6 +271,46 @@ class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
+                // Session/Term filter
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          initialValue: activeSession,
+                          decoration: const InputDecoration(
+                            labelText: 'Session',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          items: _sessions
+                              .map((s) => s['sessionName'] as String)
+                              .toSet()
+                              .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+                              .toList(),
+                          onChanged: _onSessionChanged,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          initialValue: activeTerm,
+                          decoration: const InputDecoration(
+                            labelText: 'Term',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          items: _terms
+                              .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                              .toList(),
+                          onChanged: _onTermChanged,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
                 // Search bar
                 Padding(
                   padding: const EdgeInsets.all(16.0),

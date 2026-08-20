@@ -6,9 +6,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
 import 'payment_receipt_screen.dart';
 import '../../utils/backup_reminder_helper.dart';
-import '../../utils/cloud_sync_helper.dart';
+import '../../utils/central_backup_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/navigation_helper.dart';
+import '../../utils/write_guard.dart';
 import '../../widgets/sibling_mark.dart';
 import '../students/siblings_information_screen.dart';
 
@@ -66,6 +67,7 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
     _loadCurrentUser();
     _loadData();
     _loadPaymentPurposes();
@@ -383,8 +385,8 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
 
       // Track activity for backup reminder
       await BackupReminderHelper.incrementTransactionCount();
-      // Fire-and-forget: silently sync to Google Drive if auto-backup is on
-      CloudSyncHelper.triggerAutoBackup();
+      // Fire-and-forget: silently push to the central backup server
+      CentralBackupHelper.triggerAutoUpload();
 
       if (!mounted) return;
 

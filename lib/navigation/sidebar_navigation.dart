@@ -1,6 +1,8 @@
 // lib/navigation/sidebar_navigation.dart
 import 'package:flutter/material.dart';
 import '../data/database_helper_wrapper.dart';
+import '../main.dart' show appRouteObserver;
+import '../utils/active_session_term_notifier.dart';
 import '../utils/display_settings_helper.dart';
 import '../utils/permission_helper.dart';
 import 'menu_data.dart';
@@ -23,34 +25,56 @@ class SidebarNavigation extends StatefulWidget {
   State<SidebarNavigation> createState() => _SidebarNavigationState();
 }
 
-class _SidebarNavigationState extends State<SidebarNavigation> {
+class _SidebarNavigationState extends State<SidebarNavigation> with RouteAware {
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _itemKeys = {};
   String? _lastScrolledPageId;
 
-  String _term = '';
-  String _session = '';
+  String? _activeSession;
+  String? _activeTerm;
 
   @override
   void initState() {
     super.initState();
-    _loadTermSession();
+    _loadActiveSessionTerm();
+    // Covers the case where the screen that changes the term sits in the
+    // same route as this sidebar (e.g. Session/Term Management pushed
+    // alongside it) — a plain RouteAware pop/push never fires there.
+    ActiveSessionTermNotifier.listenable.addListener(_loadActiveSessionTerm);
   }
 
-  Future<void> _loadTermSession() async {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    appRouteObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  /// Called when a page pushed above this one is popped — refresh so the
+  /// session/term stays in sync with changes made on the popped page (e.g.
+  /// switching the active term in Session/Term Management).
+  @override
+  void didPopNext() {
+    _loadActiveSessionTerm();
+  }
+
+  Future<void> _loadActiveSessionTerm() async {
     final db = DatabaseHelperWrapper();
-    final term = await db.getActiveTerm();
-    final sessionData = await db.getActiveSession();
-    if (mounted) {
-      setState(() {
-        _term = term;
-        _session = sessionData?['sessionName'] ?? '';
-      });
-    }
+    final results = await Future.wait([
+      db.getActiveSession(),
+      db.getActiveTerm(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      final session = results[0] as Map<String, dynamic>?;
+      _activeSession = session?['sessionName'] as String?;
+      _activeTerm = results[1] as String?;
+    });
   }
 
   @override
   void dispose() {
+    ActiveSessionTermNotifier.listenable.removeListener(_loadActiveSessionTerm);
+    appRouteObserver.unsubscribe(this);
     _scrollController.dispose();
     super.dispose();
   }
@@ -131,8 +155,10 @@ class _SidebarNavigationState extends State<SidebarNavigation> {
           // Header with app name and collapse toggle
           _buildHeader(context, sidebarState, ds, isCollapsed),
 
-          // Active term / session badge
-          _buildTermBadge(isCollapsed),
+          // Current session/term — mirrors the strip on the home screen so
+          // it stays visible no matter where the user is in the app.
+          if (!isCollapsed && (_activeSession != null || _activeTerm != null))
+            _buildSessionTermStrip(),
 
           // Scrollable menu items
           Expanded(
@@ -235,49 +261,41 @@ class _SidebarNavigationState extends State<SidebarNavigation> {
     );
   }
 
-  Widget _buildTermBadge(bool isCollapsed) {
-    if (_term.isEmpty && _session.isEmpty) return const SizedBox.shrink();
+  Widget _buildSessionTermStrip() {
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.symmetric(
-        horizontal: isCollapsed ? 4 : 12,
-        vertical: 6,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
+        color: Colors.white.withValues(alpha: 0.05),
         border: Border(
           bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
         ),
       ),
-      child: isCollapsed
-          ? Tooltip(
-              message: '$_term\n$_session',
-              child: const Icon(Icons.calendar_today,
-                  size: 16, color: Color(0xFF60A5FA)),
-            )
-          : Row(
-              children: [
-                const Icon(Icons.calendar_today,
-                    size: 13, color: Color(0xFF60A5FA)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    _term.isNotEmpty && _session.isNotEmpty
-                        ? '$_term  ·  $_session'
-                        : _term.isNotEmpty
-                            ? _term
-                            : _session,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF93C5FD),
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
+      child: Row(
+        children: [
+          Icon(
+            Icons.calendar_today,
+            size: 13,
+            color: Colors.blue.shade200,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              [
+                if (_activeSession != null) _activeSession!,
+                if (_activeTerm != null) _activeTerm!,
+              ].join('  •  '),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.blue.shade100,
+                letterSpacing: 0.2,
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
+          ),
+        ],
+      ),
     );
   }
 

@@ -20,10 +20,15 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
   final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
   final NumberFormat _currencyFormat = NumberFormat('#,##0.00');
 
+  static const List<String> _terms = ['1st Term', '2nd Term', '3rd Term'];
+
   List<Map<String, dynamic>> _expenses = [];
   final Map<int, Map<String, dynamic>> _lastEditByExpenseId = {};
   String? _activeTerm;
   String? _activeSession;
+  List<Map<String, dynamic>> _sessions = [];
+  String? _selectedTerm;
+  String? _selectedSession;
   bool _loading = true;
   final Map<String, double> _categoryTotals = {};
   double _totalExpenses = 0;
@@ -159,12 +164,15 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
       _activeTerm = await _db.getActiveTerm();
       final sessionData = await _db.getActiveSession();
       _activeSession = sessionData?['sessionName'];
+      _sessions = await _db.getAllSessions();
+      _selectedTerm ??= _activeTerm;
+      _selectedSession ??= _activeSession;
 
       final (startDate, endDate) = _getDateRange();
 
       _expenses = await _db.getAllExpenses(
-        term: _activeTerm,
-        session: _activeSession,
+        term: _selectedTerm,
+        session: _selectedSession,
         startDate: startDate,
         endDate: endDate,
       );
@@ -213,6 +221,16 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
     }
 
     _updateCategoryTabs();
+  }
+
+  void _setTerm(String? term) {
+    setState(() => _selectedTerm = term);
+    _loadExpenses();
+  }
+
+  void _setSession(String? session) {
+    setState(() => _selectedSession = session);
+    _loadExpenses();
   }
 
   void _setFilter(DateFilter filter) {
@@ -438,22 +456,45 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  // Active Term/Session Info Card
+                  // Session/Term Filter Card
                   Card(
                     elevation: 2,
                     color: Colors.blue.shade50,
                     child: Padding(
                       padding: const EdgeInsets.all(12),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.info_outline, size: 20),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Showing expenses for $_activeTerm, $_activeSession',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _selectedSession,
+                              decoration: const InputDecoration(
+                                labelText: 'Session',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                                prefixIcon: Icon(Icons.calendar_today, size: 18),
+                              ),
+                              items: _sessions
+                                  .map((s) => s['sessionName'] as String)
+                                  .toSet()
+                                  .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+                                  .toList(),
+                              onChanged: _setSession,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _selectedTerm,
+                              decoration: const InputDecoration(
+                                labelText: 'Term',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                                prefixIcon: Icon(Icons.event, size: 18),
+                              ),
+                              items: _terms
+                                  .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                                  .toList(),
+                              onChanged: _setTerm,
                             ),
                           ),
                         ],

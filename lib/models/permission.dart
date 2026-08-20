@@ -81,6 +81,7 @@ class PermissionModule {
     // System Settings
     'school_profile': 'School Profile Management',
     'license_management': 'License Management',
+    'sync_key_management': 'Read-Only Sync Key Management',
     'thermal_printer': 'Thermal Printer Setup',
     'server_hosting': 'Server/Hosting Management',
     'backup': 'Backup & Restore Database',

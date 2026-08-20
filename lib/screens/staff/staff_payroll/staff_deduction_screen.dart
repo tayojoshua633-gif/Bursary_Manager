@@ -7,6 +7,7 @@ import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../models/staff_deduction.dart';
 import '../../../utils/staff_deduction_pdf_generator.dart';
+import '../../../utils/write_guard.dart';
 
 class StaffDeductionScreen extends StatefulWidget {
   const StaffDeductionScreen({super.key});
@@ -46,6 +47,7 @@ class _StaffDeductionScreenState extends State<StaffDeductionScreen> with Single
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
     _tabController = TabController(length: 2, vsync: this);
     _selectedMonth = _currentMonth;
     _loadData();

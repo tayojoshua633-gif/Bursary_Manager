@@ -8,6 +8,7 @@ import '../../db/database_helper.dart' show StudentLimitExceededException;
 import '../../utils/backup_reminder_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/admission_settings_helper.dart';
+import '../../utils/write_guard.dart';
 
 class StudentFormScreen extends StatefulWidget {
   const StudentFormScreen({super.key});
@@ -62,6 +63,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
     _initForm();
   }
 

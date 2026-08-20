@@ -30,6 +30,7 @@ class _ExaminationRegistrationScreenState
   final _searchCtrl = TextEditingController();
 
   String _activeSession = '';
+  List<Map<String, dynamic>> _sessions = [];
 
   List<Map<String, dynamic>> _students = [];
   List<Map<String, dynamic>> _filtered = [];
@@ -56,13 +57,21 @@ class _ExaminationRegistrationScreenState
     final classRows = await _db.getClasses();
     final sessionData = await _db.getActiveSession();
     final session = sessionData?['sessionName'] as String? ?? '';
+    final sessions = await _db.getAllSessions();
     if (!mounted) return;
     setState(() {
       _examinations = examRows.map(ExternalExamination.fromMap).toList();
       _classes = classRows;
       _activeSession = session;
+      _sessions = sessions;
       _loadingExams = false;
     });
+  }
+
+  void _onSessionChanged(String? session) {
+    if (session == null) return;
+    setState(() => _activeSession = session);
+    if (_selectedExam != null) _loadStudents();
   }
 
   Future<void> _loadStudents() async {
@@ -335,6 +344,21 @@ class _ExaminationRegistrationScreenState
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      DropdownButtonFormField<String>(
+                        initialValue: _activeSession,
+                        decoration: const InputDecoration(
+                          labelText: 'Session',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.calendar_today),
+                        ),
+                        items: _sessions
+                            .map((s) => s['sessionName'] as String)
+                            .toSet()
+                            .map((name) => DropdownMenuItem(value: name, child: Text(name)))
+                            .toList(),
+                        onChanged: _onSessionChanged,
+                      ),
+                      SizedBox(height: ds.cardPadding * 0.75),
                       DropdownButtonFormField<ExternalExamination>(
                         initialValue: _selectedExam,
                         decoration: const InputDecoration(

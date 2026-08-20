@@ -2,9 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
-import '../../db/database_helper.dart';
-import '../../utils/print_counter_helper.dart';
 import '../../utils/termly_report_pdf_generator.dart';
+import '../../utils/report_data/termly_report_loader.dart';
 
 class TermlyReportScreen extends StatefulWidget {
   const TermlyReportScreen({super.key});
@@ -80,399 +79,46 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
     setState(() => loading = true);
 
     try {
-      // Step 1: Load term, session, school profile
-      activeTerm = await db.getActiveTerm();
-      activeSession = (await db.getActiveSession())?['sessionName'];
-      school = await db.getSchoolProfile();
+      final r = await loadTermlyReportData();
 
-      final database = await db.database;
+      activeTerm = r.activeTerm;
+      activeSession = r.activeSession;
+      school = r.school;
 
-      // Step 2: Income Report (Payment Method Breakdown)
-      final paymentsRaw = await database.rawQuery('''
-        SELECT method, SUM(amount) as total
-        FROM payments
-        WHERE term = ? AND session = ?
-        GROUP BY method
-      ''', [activeTerm, activeSession]);
+      cashReceived = r.cashReceived;
+      posReceived = r.posReceived;
+      transferReceived = r.transferReceived;
+      totalIncome = r.totalIncome;
 
-      cashReceived = 0;
-      posReceived = 0;
-      transferReceived = 0;
+      expenseCash = r.expenseCash;
+      expensePos = r.expensePos;
+      expenseTransfer = r.expenseTransfer;
+      totalExpenses = r.totalExpenses;
+      expenseCategoryTotals = r.expenseCategoryTotals;
 
-      for (var row in paymentsRaw) {
-        final method = (row['method'] ?? '').toString().toUpperCase();
-        final amount = (row['total'] as num?)?.toDouble() ?? 0.0;
+      netIncome = r.netIncome;
 
-        if (method == 'CASH') {
-          cashReceived = amount;
-        } else if (method == 'POS') {
-          posReceived = amount;
-        } else if (method == 'TRANSFER' || method == 'BANK TRANSFER') {
-          transferReceived += amount;
-        }
-      }
+      totalStudents = r.totalStudents;
+      totalDebtors = r.totalDebtors;
+      totalOutstanding = r.totalOutstanding;
 
-      totalIncome = cashReceived + posReceived + transferReceived;
+      newIntakeByClass = r.newIntakeByClass;
+      totalNewIntake = r.totalNewIntake;
 
-      // Step 3: Expenses Report (Category & Payment Method Breakdown)
-      final expensesRaw = await DatabaseHelper().getAllExpenses(
-        term: activeTerm,
-        session: activeSession,
-      );
+      billsPrinted = r.billsPrinted;
+      receiptsPrinted = r.receiptsPrinted;
+      paymentHistoryPrinted = r.paymentHistoryPrinted;
+      reprintsPrinted = r.reprintsPrinted;
+      totalPrints = r.totalPrints;
 
-      expenseCash = 0;
-      expensePos = 0;
-      expenseTransfer = 0;
-      expenseCategoryTotals = {};
-
-      for (var expense in expensesRaw) {
-        final amount = (expense['amount'] as num?)?.toDouble() ?? 0.0;
-        final method = (expense['paymentMethod'] ?? '').toString().toUpperCase();
-
-        // Track by payment method
-        if (method == 'CASH') {
-          expenseCash += amount;
-        } else if (method == 'POS') {
-          expensePos += amount;
-        } else if (method == 'TRANSFER' || method == 'BANK TRANSFER') {
-          expenseTransfer += amount;
-        }
-
-        // Track by category
-        final category = expense['category'] ?? 'Uncategorized';
-        final customCategory = expense['customCategory'];
-        final displayCategory = category == 'Other' && customCategory != null
-            ? 'Other: $customCategory'
-            : category;
-
-        expenseCategoryTotals[displayCategory] =
-            (expenseCategoryTotals[displayCategory] ?? 0) + amount;
-      }
-
-      totalExpenses = expenseCash + expensePos + expenseTransfer;
-
-      // Step 4: Net Income Calculation (Include sales in income)
-      netIncome = (totalIncome + totalSales) - totalExpenses;
-
-      // Step 5: Debt Report — uses fresh grand total (all prior outstanding + current term fee)
-      final targetKey = DatabaseHelperWrapper.termSortKey(activeTerm ?? '', activeSession ?? '');
-      final debtQuery = await database.rawQuery('''
-        WITH student_totals AS (
-          SELECT
-            s.id,
-            (COALESCE(b.totalAmount, 0) - COALESCE(b.previousBalance, 0))
-            + (
-                COALESCE((SELECT SUM(b2.totalAmount - b2.previousBalance) FROM student_bills b2
-                          WHERE b2.studentId = s.id
-                            AND ${DatabaseHelperWrapper.sqlTermKeyExpr('b2')} < ?), 0)
-                -
-                COALESCE((SELECT SUM(p2.amount) FROM payments p2
-                          WHERE p2.studentId = s.id
-                            AND ${DatabaseHelperWrapper.sqlTermKeyExpr('p2')} < ?), 0)
-              ) as grandTotal,
-            COALESCE(
-              (SELECT SUM(amount) FROM payments
-               WHERE studentId = s.id AND term = ? AND session = ?), 0
-            ) as totalPaid
-          FROM students s
-          LEFT JOIN student_bills b ON s.id = b.studentId
-            AND b.term = ? AND b.session = ?
-          WHERE s.isActive = 1
-        )
-        SELECT
-          COUNT(*) as totalStudents,
-          COUNT(CASE WHEN (grandTotal - totalPaid) > 0 THEN 1 END) as totalDebtors,
-          COALESCE(SUM(grandTotal), 0) as totalBills,
-          COALESCE(SUM(totalPaid), 0) as totalPayments
-        FROM student_totals
-      ''', [targetKey, targetKey, activeTerm, activeSession, activeTerm, activeSession]);
-
-      if (debtQuery.isNotEmpty) {
-        final row = debtQuery.first;
-        totalStudents = (row['totalStudents'] as int?) ?? 0;
-        totalDebtors = (row['totalDebtors'] as int?) ?? 0;
-        final totalBills = (row['totalBills'] as num?)?.toDouble() ?? 0.0;
-        final totalPayments = (row['totalPayments'] as num?)?.toDouble() ?? 0.0;
-        totalOutstanding = totalBills - totalPayments;
-      } else {
-        totalStudents = 0;
-        totalDebtors = 0;
-        totalOutstanding = 0.0;
-      }
-
-      // Step 6: New Intake Report
-      newIntakeByClass = {};
-      totalNewIntake = 0;
-
-      // Get all students with bills in current term/session
-      final billsRaw = await database.rawQuery('''
-        SELECT DISTINCT sb.id, sb.studentId
-        FROM student_bills sb
-        WHERE sb.term = ? AND sb.session = ?
-      ''', [activeTerm, activeSession]);
-
-      for (var billRow in billsRaw) {
-        final billId = billRow['id'] as int;
-        final studentId = billRow['studentId'] as int;
-
-        // Get bill breakdown
-        final breakdown = await db.getBillBreakdown(billId);
-
-        // Check if any fee item contains "registration" or "reg"
-        bool hasRegistrationFee = false;
-        for (var item in breakdown) {
-          final label = (item['label'] ?? '').toString().toLowerCase();
-          if (label.contains('registration') ||
-              label.contains('reg. fee') ||
-              label.contains('reg fee') ||
-              label == 'reg.' ||
-              label == 'reg') {
-            hasRegistrationFee = true;
-            break;
-          }
-        }
-
-        if (hasRegistrationFee) {
-          // Get student's class via raw query
-          final studentRaw = await database.rawQuery('''
-            SELECT s.classId, c.name as className
-            FROM students s
-            LEFT JOIN classes c ON s.classId = c.id
-            WHERE s.id = ?
-          ''', [studentId]);
-
-          if (studentRaw.isNotEmpty) {
-            final className = studentRaw.first['className']?.toString() ?? 'Unknown';
-            newIntakeByClass[className] = (newIntakeByClass[className] ?? 0) + 1;
-            totalNewIntake++;
-          }
-        }
-      }
-
-      // Step 7: Thermal Printing Report
-      final allHistoricalData = await PrintCounterHelper.getAllHistoricalData();
-
-      billsPrinted = 0;
-      receiptsPrinted = 0;
-      paymentHistoryPrinted = 0;
-      reprintsPrinted = 0;
-
-      for (var dayData in allHistoricalData.values) {
-        billsPrinted += dayData['bills'] ?? 0;
-        receiptsPrinted += dayData['receipts'] ?? 0;
-        paymentHistoryPrinted += dayData['paymentHistory'] ?? 0;
-        reprintsPrinted += dayData['receiptReprint'] ?? 0;
-      }
-
-      totalPrints = billsPrinted + receiptsPrinted + paymentHistoryPrinted + reprintsPrinted;
-
-      // Step 8: Load Stock & Sales data
-      try {
-        // Reset stock & sales totals
-        salesCashTotal = 0;
-        salesPosTotal = 0;
-        salesTransferTotal = 0;
-        totalSales = 0;
-        totalSalesDebt = 0;
-        salesDetails = [];
-        stockSummary = [];
-        salesDebtors = [];
-
-        // Get sales for the term/session - LIMITED to prevent memory exhaustion
-        // Only include ORIGINAL sales (quantity > 0), exclude payment receipts (quantity = 0)
-        // Use LEFT JOIN to include custom items (stockItemId = 0)
-        const int maxSalesRows = 500; // Limit to prevent heap exhaustion
-        final salesRaw = await database.rawQuery('''
-          SELECT
-            s.*,
-            COALESCE(si.itemName, s.itemName) as itemName,
-            si.costPrice,
-            si.currentQuantity as currentStockQuantity
-          FROM sales s
-          LEFT JOIN stock_items si ON s.stockItemId = si.id AND s.stockItemId > 0
-          WHERE s.term = ? AND s.session = ? AND s.quantity > 0
-          ORDER BY s.saleDate DESC
-          LIMIT $maxSalesRows
-        ''', [activeTerm, activeSession]);
-
-        // Group sales by buyer for sales summary
-        Map<String, Map<String, dynamic>> salesByBuyer = {};
-        Map<int, Map<String, dynamic>> stockMovement = {};
-
-        for (var sale in salesRaw) {
-          final qty = (sale['quantity'] as int);
-
-          // Skip payment receipts (quantity = 0)
-          if (qty == 0) continue;
-
-          final method = (sale['paymentMethod'] ?? '').toString().toUpperCase();
-          final totalAmount = (sale['totalAmount'] as num).toDouble();
-          final amountPaid = (sale['amountPaid'] as num).toDouble();
-          final paymentStatus = sale['paymentStatus']?.toString() ?? 'Unpaid';
-          final stockItemId = sale['stockItemId'] as int;
-          final itemName = sale['itemName']?.toString() ?? 'Unknown Item';
-          final buyerName = sale['buyerName']?.toString() ?? 'Unknown';
-          final buyerType = sale['buyerType']?.toString() ?? '';
-          final currentStockQty = (sale['currentStockQuantity'] as int?) ?? 0;
-
-          // Check if this is a custom item (stockItemId = 0 or isCustomItem = 1)
-          final isCustomItem = sale['isCustomItem'] == 1 || stockItemId == 0;
-
-          // Track sales by buyer for sales summary
-          final buyerKey = '$buyerName|$buyerType';
-          if (!salesByBuyer.containsKey(buyerKey)) {
-            salesByBuyer[buyerKey] = {
-              'buyerName': buyerName,
-              'buyerType': buyerType,
-              'items': <Map<String, dynamic>>[],
-              'totalQtySold': 0,
-              'totalAmount': 0.0,
-              'totalPaid': 0.0,
-              'paymentStatus': paymentStatus,
-            };
-          }
-
-          salesByBuyer[buyerKey]!['items'].add({
-            'itemName': itemName,
-            'quantity': qty,
-            'unitPrice': (sale['unitPrice'] as num).toDouble(),
-            'isCustomItem': isCustomItem,
-          });
-          salesByBuyer[buyerKey]!['totalQtySold'] += qty;
-          salesByBuyer[buyerKey]!['totalAmount'] += totalAmount;
-          salesByBuyer[buyerKey]!['totalPaid'] += amountPaid;
-
-          // Track stock movement for stock summary (only for non-custom items)
-          if (!isCustomItem && stockItemId > 0) {
-            if (!stockMovement.containsKey(stockItemId)) {
-              stockMovement[stockItemId] = {
-                'itemName': itemName,
-                'qtySold': 0,
-                'currentQuantity': currentStockQty,
-              };
-            }
-            stockMovement[stockItemId]!['qtySold'] += qty;
-          }
-
-          // Calculate sales payment breakdown
-          if (method == 'CASH') {
-            salesCashTotal += amountPaid;
-          } else if (method == 'POS') {
-            salesPosTotal += amountPaid;
-          } else if (method == 'TRANSFER' || method == 'BANK TRANSFER') {
-            salesTransferTotal += amountPaid;
-          }
-
-          totalSales += amountPaid;
-        }
-
-        // Convert sales by buyer to list
-        salesDetails = salesByBuyer.values.toList();
-
-        // Prepare stock summary - LIMITED to prevent memory exhaustion
-        const int maxStockItems = 100;
-        final allStockItems = await database.query(
-          'stock_items',
-          orderBy: 'itemName',
-          limit: maxStockItems,
-        );
-
-        stockSummary = allStockItems.map((stockItem) {
-          final stockItemId = stockItem['id'] as int;
-          final itemName = stockItem['itemName']?.toString() ?? 'Unknown';
-          final currentQty = (stockItem['currentQuantity'] as int?) ?? 0;
-
-          // Check if this item has sales in the selected period
-          final qtySold = stockMovement.containsKey(stockItemId)
-              ? (stockMovement[stockItemId]!['qtySold'] as int)
-              : 0;
-
-          final beginningQty = currentQty + qtySold; // Current stock + what was sold = beginning stock
-
-          return {
-            'itemName': itemName,
-            'beginningQuantity': beginningQty,
-            'qtySold': qtySold,
-            'remainingQuantity': currentQty,
-          };
-        }).toList();
-
-        // Load sales debtors for the term/session - LIMITED to prevent memory exhaustion
-        const int maxDebtors = 50;
-        final debtorsRaw = await database.rawQuery('''
-          SELECT DISTINCT
-            sd.buyerName,
-            sd.buyerType,
-            sd.studentId,
-            sd.totalAmount,
-            sd.amountPaid,
-            sd.outstandingBalance
-          FROM sales_debtors sd
-          WHERE sd.outstandingBalance > 0
-          ORDER BY sd.outstandingBalance DESC
-          LIMIT $maxDebtors
-        ''');
-
-        // Process debtors data - check if they had sales in the current term/session
-        int debtorsProcessed = 0;
-        const int maxDebtorsToProcess = 30; // Limit processing to avoid N+1 query overload
-        for (var debtor in debtorsRaw) {
-          if (debtorsProcessed >= maxDebtorsToProcess) break;
-          final buyerName = debtor['buyerName']?.toString() ?? 'Unknown';
-          final buyerType = debtor['buyerType']?.toString() ?? '';
-
-          // Check if this debtor had purchases in the current term/session
-          final hasSalesInTerm = await database.rawQuery('''
-            SELECT COUNT(*) as count
-            FROM sales
-            WHERE buyerName = ? AND buyerType = ? AND term = ? AND session = ? AND quantity > 0
-          ''', [buyerName, buyerType, activeTerm, activeSession]);
-
-          if ((hasSalesInTerm.first['count'] as int) == 0) {
-            continue; // Skip debtors with no purchases in this term
-          }
-
-          // Get all items purchased by this debtor in the term/session
-          // Use LEFT JOIN to include custom items (stockItemId = 0)
-          final debtorSalesRaw = await database.rawQuery('''
-            SELECT COALESCE(si.itemName, s.itemName) as itemName, s.quantity, s.stockItemId, s.isCustomItem
-            FROM sales s
-            LEFT JOIN stock_items si ON s.stockItemId = si.id AND s.stockItemId > 0
-            WHERE s.buyerName = ? AND s.buyerType = ? AND s.term = ? AND s.session = ? AND s.quantity > 0
-          ''', [buyerName, buyerType, activeTerm, activeSession]);
-
-          final itemsList = debtorSalesRaw.map((item) {
-            final itemName = item['itemName']?.toString() ?? '';
-            final qty = item['quantity'] as int;
-            final isCustomItem = item['isCustomItem'] == 1 || item['stockItemId'] == 0;
-            return isCustomItem ? '$itemName [Custom] (x$qty)' : '$itemName (x$qty)';
-          }).join(', ');
-
-          salesDebtors.add({
-            'buyerName': buyerName,
-            'buyerType': buyerType,
-            'itemsPurchased': itemsList,
-            'totalAmount': (debtor['totalAmount'] as num).toDouble(),
-            'totalPaid': (debtor['amountPaid'] as num).toDouble(),
-            'outstandingBalance': (debtor['outstandingBalance'] as num).toDouble(),
-          });
-
-          totalSalesDebt += (debtor['outstandingBalance'] as num).toDouble();
-          debtorsProcessed++;
-        }
-
-      } catch (e) {
-        print('Error loading stock & sales data: $e');
-
-        salesCashTotal = 0;
-        salesPosTotal = 0;
-        salesTransferTotal = 0;
-        totalSales = 0;
-        totalSalesDebt = 0;
-        salesDetails = [];
-        stockSummary = [];
-        salesDebtors = [];
-      }
+      salesCashTotal = r.salesCashTotal;
+      salesPosTotal = r.salesPosTotal;
+      salesTransferTotal = r.salesTransferTotal;
+      totalSales = r.totalSales;
+      totalSalesDebt = r.totalSalesDebt;
+      salesDetails = r.salesDetails;
+      stockSummary = r.stockSummary;
+      salesDebtors = r.salesDebtors;
 
       if (mounted) {
         setState(() => loading = false);

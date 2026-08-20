@@ -2,7 +2,7 @@
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 15.3.0+1
+version: 15.4.0+1
 
 environment:
   sdk: ^3.10.0
@@ -126,6 +126,16 @@ flutter_launcher_icons:
   image_path: "assets/icon.png"
   adaptive_icon_background: "#2196F3"
   adaptive_icon_foreground: "assets/icon.png"
+
+
+
+
+
+
+
+
+
+
 
 
 

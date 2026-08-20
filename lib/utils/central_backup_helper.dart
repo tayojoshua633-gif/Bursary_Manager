@@ -1,45 +1,65 @@
 // lib/utils/central_backup_helper.dart
+import 'dart:async';
 import 'dart:io';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import '../db/database_helper.dart';
 import 'license_helper.dart';
+import 'school_sync_registry.dart';
 
-/// Pushes a copy of every backup to Tysolutions' central server, alongside
-/// whatever the user does with Google Drive. Purpose: support can look at a
-/// school's data without asking them to send a file manually.
+/// Pushes a copy of every backup to Tysolutions' central server. Purposes:
+/// (1) support can look at a school's data without asking for a file
+/// manually, and (2) it's the source Read-Only devices sync from — see
+/// SchoolSyncClient.
 ///
 /// Best-effort only — every failure is swallowed so this never blocks or
-/// breaks the local/Drive backup it rides along with.
+/// breaks whatever local operation triggered it.
 class CentralBackupHelper {
-  static const String _uploadUrl = 'https://backups.tysolutions.com.ng/api/upload.php';
+  /// Shared by every client of the central backup API (uploads and the
+  /// sync-key endpoints alike) so the host isn't duplicated per file.
+  static const String apiBaseUrl = 'https://backups.tysolutions.com.ng/api';
+  static const String _uploadUrl = '$apiBaseUrl/upload.php';
 
   // Proves the request came from this app, not a random visitor — shared by
   // every install, not a per-school secret. Must match config.php's
-  // api_secret on the server.
-  static const String _apiSecret = '571c6607bdc5f6c575d56e950c5ad844dae36bd922d81777bcb54472742a0f2e';
+  // api_secret on the server. Exposed publicly so SyncKeyClient and
+  // SchoolSyncClient can reuse it instead of duplicating the literal.
+  static const String apiSecret = '571c6607bdc5f6c575d56e950c5ad844dae36bd922d81777bcb54472742a0f2e';
+  static const String _apiSecret = apiSecret;
 
   /// Uploads [filePath] to the central backup server for the currently
   /// active license. Returns true only on a confirmed 200 from the server.
-  static Future<bool> uploadBackup(String filePath) async {
+  /// Thin wrapper over [_uploadBackupWithReason] for callers that only need
+  /// the bool (fire-and-forget call sites).
+  static Future<bool> uploadBackup(String filePath) async =>
+      (await _uploadBackupWithReason(filePath))['success'] as bool;
+
+  /// Same upload, but returns *why* it failed instead of collapsing every
+  /// cause into a bare `false`. Used by [triggerAutoUpload] so a user-facing
+  /// "Sync Now" button can show the real reason instead of a generic
+  /// "check your internet connection" for every possible failure.
+  static Future<Map<String, dynamic>> _uploadBackupWithReason(String filePath) async {
     try {
       final file = File(filePath);
       if (!await file.exists()) {
         debugPrint('[CentralBackup] aborted: file does not exist: $filePath');
-        return false;
+        return {'success': false, 'message': 'Backup file not found on this device.'};
       }
 
       final license = await DatabaseHelper().getActiveLicense();
       final licenseKey = license?['licenseKey'] as String?;
       if (licenseKey == null || licenseKey.isEmpty) {
         debugPrint('[CentralBackup] aborted: no active license found');
-        return false;
+        return {'success': false, 'message': 'No active license found on this device.'};
       }
 
       final schoolName = (license?['schoolName'] as String?) ?? '';
+      final schoolCode = (license?['schoolCode'] as String?) ?? '';
       final licenseExpiry = license?['expiryDate'] as String?;
       final deviceId = await LicenseHelper.getDeviceId();
       final stats = await _gatherSchoolStats();
@@ -49,13 +69,14 @@ class CentralBackupHelper {
         ..headers['X-Api-Secret'] = _apiSecret
         ..fields['product'] = 'BM'
         ..fields['license_key'] = licenseKey
-        ..fields['school_name'] = schoolName
+        ..fields['school_code'] = schoolCode
+        ..fields['entity_name'] = schoolName
         ..fields['device_id'] = deviceId
         ..fields['app_version'] = appVersion
-        ..fields['real_school_name'] = stats.realSchoolName ?? ''
-        ..fields['school_address'] = stats.address ?? ''
-        ..fields['school_phone'] = stats.phone ?? ''
-        ..fields['school_email'] = stats.email ?? ''
+        ..fields['real_entity_name'] = stats.realSchoolName ?? ''
+        ..fields['entity_address'] = stats.address ?? ''
+        ..fields['entity_phone'] = stats.phone ?? ''
+        ..fields['entity_email'] = stats.email ?? ''
         ..fields['active_students'] = stats.activeStudents.toString()
         ..fields['active_staff'] = stats.activeStaff.toString()
         ..fields['license_expiry'] = licenseExpiry ?? ''
@@ -69,13 +90,75 @@ class CentralBackupHelper {
       if (streamedResponse.statusCode != 200) {
         final body = await streamedResponse.stream.bytesToString();
         debugPrint('[CentralBackup] server rejected upload: HTTP ${streamedResponse.statusCode} — $body');
-        return false;
+        return {
+          'success': false,
+          'message': 'Server rejected the upload (HTTP ${streamedResponse.statusCode}).',
+        };
       }
       debugPrint('[CentralBackup] upload succeeded for license $licenseKey');
-      return true;
+      return {'success': true, 'message': 'Synced to central backup.'};
+    } on TimeoutException {
+      debugPrint('[CentralBackup] upload timed out');
+      return {'success': false, 'message': 'Upload timed out — connection may be too slow.'};
+    } on SocketException catch (e) {
+      debugPrint('[CentralBackup] upload socket error: $e');
+      return {'success': false, 'message': 'No internet connection.'};
     } catch (e, st) {
       debugPrint('[CentralBackup] upload threw: $e');
       debugPrint('$st');
+      return {'success': false, 'message': 'Upload failed: $e'};
+    }
+  }
+
+  /// Silent background push. Safe to call after any significant DB write.
+  /// Never runs on a Read-Only device — its active database may be a
+  /// linked school's cached copy, not this device's own data, and pushing
+  /// that would misattribute someone else's edits to the wrong subscriber.
+  /// Returns `{success, message}` — see [_uploadBackupWithReason].
+  static Future<Map<String, dynamic>> triggerAutoUpload() async {
+    if (await SchoolSyncRegistry.isReadOnlyMode()) {
+      return {'success': false, 'message': 'This device is in Read-Only mode.'};
+    }
+    if (!await hasInternetConnection()) {
+      debugPrint('[CentralBackup] aborted: no network interface active');
+      return {'success': false, 'message': 'No internet connection detected on this device.'};
+    }
+
+    try {
+      final database = await DatabaseHelper().database;
+      try {
+        // Checkpoint WAL before copying so all recent writes are in the
+        // main .db file — otherwise records written since the last
+        // checkpoint sit in the .db-wal file and would be missing from the
+        // uploaded copy.
+        await database.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch (_) {
+        // Proceed anyway — data already in the .db file will still upload.
+      }
+
+      final dir = await getTemporaryDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final tempPath = p.join(dir.path, 'central_upload_$ts.db');
+
+      final srcPath = await DatabaseHelper().currentDbPath;
+      await File(srcPath).copy(tempPath);
+
+      final result = await _uploadBackupWithReason(tempPath);
+      try {
+        File(tempPath).deleteSync();
+      } catch (_) {}
+      return result;
+    } catch (e) {
+      debugPrint('[CentralBackup] auto-upload threw: $e');
+      return {'success': false, 'message': 'Sync failed: $e'};
+    }
+  }
+
+  static Future<bool> hasInternetConnection() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      return results.any((r) => r != ConnectivityResult.none);
+    } catch (_) {
       return false;
     }
   }

@@ -13,7 +13,6 @@ import '../db/database_helper.dart';
 import 'central_backup_helper.dart';
 
 class DBBackupHelper {
-  static const String _dbName = "bursary_manager.db";
   static const String _backupFolderName = "BursaryBackups";
   static const String _backupEmail = "tysolutionsmultimediatech@gmail.com";
 
@@ -36,11 +35,10 @@ class DBBackupHelper {
     'printer_paper_sizes'         : 'string',
   };
 
-  /// Returns full database path
-  static Future<String> _getDatabasePath() async {
-    final dbPath = await getDatabasesPath();
-    return join(dbPath, _dbName);
-  }
+  /// Returns full database path of whichever database is currently active
+  /// (a Read-Only device may have switched to a linked school's file).
+  static Future<String> _getDatabasePath() async =>
+      DatabaseHelper().currentDbPath;
 
   /// Returns folder for backups (in Downloads/BursaryBackups or custom directory)
   static Future<Directory> _getBackupFolder() async {
@@ -633,11 +631,20 @@ Sent from Bursary Manager App
     }
   }
 
-  /// Selective restore: Restore only specific tables from backup
+  /// Selective restore: Restore only specific tables from backup.
+  ///
+  /// [treatEmptyAsSuccess]: by default (false, the existing behavior every
+  /// other caller relies on), restoring zero non-empty tables is reported
+  /// as a failure — a reasonable safety signal when restoring your own
+  /// backup file (usually means the wrong/corrupt file was picked). But a
+  /// linked school's backup can be *legitimately* empty (a brand new school
+  /// with no data entered yet) — for that caller (SchoolSyncClient), pass
+  /// true so a structurally valid but empty backup counts as success.
   static Future<Map<String, dynamic>> selectiveRestoreDatabase(
     String backupFilePath,
-    List<String> tablesToRestore,
-  ) async {
+    List<String> tablesToRestore, {
+    bool treatEmptyAsSuccess = false,
+  }) async {
     try {
       if (tablesToRestore.isEmpty) {
         return {
@@ -714,7 +721,7 @@ Sent from Bursary Manager App
       await backupDb.close();
       await currentDb.close();
 
-      if (restoredTables == 0) {
+      if (restoredTables == 0 && !treatEmptyAsSuccess) {
         return {
           'success': false,
           'message': 'No tables were successfully restored',
@@ -723,7 +730,9 @@ Sent from Bursary Manager App
 
       return {
         'success': true,
-        'message': 'Restored $restoredTables table(s) with $totalRecords record(s). Please restart the app.',
+        'message': restoredTables == 0
+            ? 'Backup is valid but contains no data yet.'
+            : 'Restored $restoredTables table(s) with $totalRecords record(s). Please restart the app.',
         'tablesRestored': restoredTables,
         'recordsRestored': totalRecords,
       };

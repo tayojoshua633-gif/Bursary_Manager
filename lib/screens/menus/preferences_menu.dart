@@ -2,17 +2,19 @@
 import 'package:flutter/material.dart';
 import '../../utils/permission_helper.dart';
 import '../../utils/display_settings_helper.dart';
+import '../../utils/school_sync_registry.dart';
 import '../../navigation/sidebar_scaffold.dart';
 import '../backup/backup_screen.dart';
 import '../license/license_management_screen.dart';
 import '../permissions/permission_management_screen.dart';
+import '../school_profile/sync_key_screen.dart';
 import '../settings/thermal_printer_screen.dart';
 import '../settings/usb_printer_screen.dart';
 import '../settings/clear_data_screen.dart';
 import '../settings/display_settings_screen.dart';
 import '../settings/security_settings_screen.dart';
 import '../auth/user_management_screen.dart';
-import '../settings/cloud_sync_settings_screen.dart';
+import '../settings/read_only_settings_screen.dart';
 import '../settings/sms_settings_screen.dart';
 import '../settings/admission_number_settings_screen.dart';
 
@@ -49,15 +51,7 @@ class PreferencesMenu extends StatelessWidget {
             page: const BackupScreen(),
             pageId: 'preferences/backup',
           ),
-          _menuCard(
-            context,
-            title: 'CloudSync',
-            subtitle: 'Auto backup & multi-device sync',
-            icon: Icons.cloud_sync,
-            color: Colors.teal,
-            page: const CloudSyncSettingsScreen(),
-            pageId: 'preferences/cloud_sync',
-          ),
+          _readOnlyAwareCard(context),
           _permissionMenuCard(
             context,
             module: 'license_management',
@@ -242,6 +236,51 @@ class PreferencesMenu extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// Read-only devices see "Linked Schools" (manage what's linked, no
+  /// permission gate — same as the old CloudSync card). Write devices see
+  /// "Read-Only Access" (generate/revoke the key that grants it), gated by
+  /// sync_key_management since handing out data access is a sensitive action.
+  Widget _readOnlyAwareCard(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: SchoolSyncRegistry.isReadOnlyMode(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return Card(
+            elevation: 3,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+
+        if (snapshot.data == true) {
+          return _menuCard(
+            context,
+            title: 'Linked Schools',
+            subtitle: 'Manage schools synced to this device',
+            icon: Icons.school_outlined,
+            color: Colors.orange,
+            page: const ReadOnlySettingsScreen(),
+            pageId: 'preferences/read_only',
+          );
+        }
+
+        return _permissionMenuCard(
+          context,
+          module: 'sync_key_management',
+          title: 'Read-Only Access',
+          subtitle: 'Sync key for viewer devices',
+          icon: Icons.key_outlined,
+          color: Colors.teal,
+          page: const SyncKeyScreen(),
+          pageId: 'preferences/sync_key',
+        );
+      },
     );
   }
 

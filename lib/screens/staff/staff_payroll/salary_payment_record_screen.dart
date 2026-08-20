@@ -7,6 +7,7 @@ import '../../../data/database_helper_wrapper.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../utils/salary_payment_pdf_generator.dart';
+import '../../../utils/write_guard.dart';
 import '../../expenses/expense_form_screen.dart';
 
 class SalaryPaymentRecordScreen extends StatefulWidget {
@@ -44,6 +45,7 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
     _selectedMonth = DateFormat('MMMM yyyy').format(DateTime.now());
     _loadPaymentRecords();
   }

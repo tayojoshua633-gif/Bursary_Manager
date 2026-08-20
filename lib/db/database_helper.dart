@@ -99,7 +99,11 @@ class DatabaseHelper {
   //      active term/session. Added transportation_manage and
   //      transportation_allocate permission modules.
   static const int _dbVersion = 60;
-  static const String _dbName = 'bursary_manager.db';
+  static const String _defaultDbName = 'bursary_manager.db';
+  // Which file the singleton currently points at — mutable (not const) so a
+  // Read-Only device can switch between multiple linked schools' cached
+  // databases at runtime via switchDatabase().
+  static String _dbFileName = _defaultDbName;
   static const String _kActiveTerm = 'activeTerm';
 
   // Permission modules - Comprehensive list covering all app screens (30 modules)
@@ -132,6 +136,7 @@ class DatabaseHelper {
     'expenses',                // Track and manage expenses
     'school_profile',          // View/edit school profile
     'license_management',      // Manage license
+    'sync_key_management',     // Generate/revoke Read-Only sync keys
     'thermal_printer',         // Thermal printer connection (bursar and admin)
     'daily_print_count',       // Daily print counter (admin only)
     'server_hosting',          // Server/hosting management
@@ -169,9 +174,14 @@ class DatabaseHelper {
     return _database!;
   }
 
+  /// Full path of whichever database file is currently active. Exposed so
+  /// other code that needs the on-disk path (e.g. db_backup_helper.dart)
+  /// never hardcodes it separately and risks drifting after a switch.
+  Future<String> get currentDbPath async =>
+      join(await getDatabasesPath(), _dbFileName);
+
   Future<Database> _initDb() async {
-    final dbPath = await getDatabasesPath();
-    final fullPath = join(dbPath, _dbName);
+    final fullPath = await currentDbPath;
 
     return await openDatabase(
       fullPath,
@@ -188,6 +198,19 @@ class DatabaseHelper {
       _database = null;
     }
   }
+
+  /// Switches the active database file — e.g. moving between a Read-Only
+  /// device's linked schools, each cached in its own file. Closes whatever
+  /// is currently open; the next `.database` access reopens against
+  /// [fileName] (created fresh via onCreate if it doesn't exist yet).
+  /// Pass [DatabaseHelper.defaultDbName] to switch back to the device's own
+  /// primary database.
+  Future<void> switchDatabase(String fileName) async {
+    await closeAndReset();
+    _dbFileName = fileName;
+  }
+
+  static String get defaultDbName => _defaultDbName;
 
   // ------------------------------------------------------------------
   // onCreate
@@ -3080,6 +3103,7 @@ class DatabaseHelper {
       'expenses',                // Track and manage expenses
       'school_profile',
       'license_management',
+      'sync_key_management',     // Generate/revoke Read-Only sync keys
       'thermal_printer',         // Connect to thermal printer
       'daily_print_count',       // Daily print counter (admin only)
       'backup',

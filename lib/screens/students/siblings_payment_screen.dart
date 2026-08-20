@@ -7,10 +7,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/backup_reminder_helper.dart';
-import '../../utils/cloud_sync_helper.dart';
+import '../../utils/central_backup_helper.dart';
 import '../../utils/thermal_printer_manager.dart';
 import '../../utils/print_counter_helper.dart';
 import '../../utils/usb_printer_manager.dart';
+import '../../utils/write_guard.dart';
 import '../settings/thermal_printer_screen.dart';
 import '../settings/usb_printer_screen.dart';
 import '../../utils/navigation_helper.dart';
@@ -81,6 +82,7 @@ class _SiblingsPaymentScreenState extends State<SiblingsPaymentScreen> {
   @override
   void initState() {
     super.initState();
+    WriteGuard.enforce(context);
     for (final s in _eligibleSiblings) {
       final id = s['id'] as int;
       _splitControllers[id] = TextEditingController();
@@ -353,7 +355,7 @@ class _SiblingsPaymentScreenState extends State<SiblingsPaymentScreen> {
       }
 
       await BackupReminderHelper.incrementTransactionCount();
-      CloudSyncHelper.triggerAutoBackup();
+      CentralBackupHelper.triggerAutoUpload();
 
       if (!mounted) return;
       setState(() => _saving = false);
