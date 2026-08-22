@@ -4,10 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/license_helper.dart';
-import '../../widgets/developer_auth_dialog.dart';
 import '../auth/mode_selection_screen.dart';
 import '../auth/welcome_screen.dart';
-import 'license_generator_screen.dart';
 
 class LicenseActivationScreen extends StatefulWidget {
   final bool canSkip;
@@ -234,22 +232,6 @@ class _LicenseActivationScreenState extends State<LicenseActivationScreen> {
       setState(() => _isActivating = false);
     }
   }
-
-  Future<void> _openDeveloperMode() async {
-    // Show authentication dialog
-    final authenticated = await showDeveloperAuthDialog(context);
-
-    if (authenticated && mounted) {
-      // Navigate to license generator screen
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const LicenseGeneratorScreen(),
-        ),
-      );
-    }
-  }
-
 
   @override
   Widget build(BuildContext context) {
@@ -574,26 +556,6 @@ class _LicenseActivationScreenState extends State<LicenseActivationScreen> {
                       style: TextStyle(fontSize: 14),
                     ),
                   ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 24),
-
-            // Developer Access Button (hidden, tap 5 times to reveal)
-            Center(
-              child: TextButton.icon(
-                onPressed: _openDeveloperMode,
-                icon: Icon(Icons.code, size: 16, color: Colors.grey.shade600),
-                label: Text(
-                  'Developer Access',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 ),
               ),
             ),

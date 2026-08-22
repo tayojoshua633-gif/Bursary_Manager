@@ -8,43 +8,6 @@ class LicenseHelper {
   static const String _secretKey = 'BURSARY_MANAGER_2024_SECRET_KEY_XYZ123';
   static const String _masterLicenseKey = 'DEV2024BURSARYMANAGER@MASTER';
 
-  /// Generate a license key for a school
-  /// Format: BASE64DATA-CHECKSUM (no dashes in base64 part)
-  ///
-  /// If [targetDeviceId] is provided, the license will be bound to that specific device.
-  /// If null, the license can be activated on any device (device binding happens during activation).
-  static String generateLicenseKey({
-    required String schoolName,
-    required String schoolCode,
-    required DateTime expiryDate,
-    int? maxStudents,
-    String? targetDeviceId,
-  }) {
-    // Create license data
-    final licenseData = {
-      'school': schoolName,
-      'code': schoolCode,
-      'expiry': expiryDate.toIso8601String(),
-      'maxStudents': maxStudents ?? 0,
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-    };
-
-    // Add device ID if provided (for pre-binding to specific device)
-    if (targetDeviceId != null && targetDeviceId.isNotEmpty) {
-      licenseData['deviceId'] = targetDeviceId;
-    }
-
-    // Convert to JSON and encode (keep case-sensitive base64)
-    final jsonData = jsonEncode(licenseData);
-    final encoded = base64Url.encode(utf8.encode(jsonData));
-
-    // Generate checksum
-    final checksum = _generateChecksum(encoded);
-
-    // Combine: encoded-checksum (keep base64 case-sensitive!)
-    return '$encoded-$checksum';
-  }
-
   /// Validate a license key
   static Map<String, dynamic>? validateLicenseKey(String licenseKey) {
     try {

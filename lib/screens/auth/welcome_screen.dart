@@ -2,10 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
-import '../../widgets/developer_auth_dialog.dart';
 import '../../navigation/sidebar_scaffold.dart';
 import '../home_screen.dart';
-import '../license/license_generator_screen.dart';
 
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
@@ -162,21 +160,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
-    }
-  }
-
-  Future<void> _openDeveloperMode() async {
-    // Show authentication dialog
-    final authenticated = await showDeveloperAuthDialog(context);
-
-    if (authenticated && mounted) {
-      // Navigate to license generator screen
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const LicenseGeneratorScreen(),
-        ),
-      );
     }
   }
 
@@ -448,27 +431,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     ),
                   ),
 
-                  const SizedBox(height: 24),
-
-                  // Developer Access Button
-                  TextButton.icon(
-                    onPressed: _openDeveloperMode,
-                    icon: Icon(
-                      Icons.code,
-                      size: 16,
-                      color: Colors.white.withValues(alpha: 0.7),
-                    ),
-                    label: Text(
-                      'Developer Access',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.7),
-                      ),
-                    ),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    ),
-                  ),
                 ],
               ),
             ),
