@@ -26,6 +26,8 @@ class _LicenseManagementScreenState extends State<LicenseManagementScreen> {
   LicenseStatus? _licenseStatus;
   LicenseTier? _currentTier;
   int _activeStudentCount = 0;
+  int? _licenseMaxStudents;
+  bool _isMasterKey = false;
 
   @override
   void initState() {
@@ -43,13 +45,33 @@ class _LicenseManagementScreenState extends State<LicenseManagementScreen> {
       final status = await LicenseChecker.checkLicense();
       final activeStudents = await _db.getActiveStudents();
 
+      // Re-decode the stored key just to read the isMasterKey flag — that
+      // flag isn't persisted on the licenses table itself.
+      final decoded = activeLicense != null
+          ? LicenseHelper.validateLicenseKey(
+              activeLicense['licenseKey'] as String,
+            )
+          : null;
+      final isMasterKey = decoded?['isMasterKey'] == true;
+
+      final maxStudents = status.maxStudents;
+      final licenseMaxStudents =
+          (maxStudents != null && maxStudents > 0) ? maxStudents : null;
+
       setState(() {
         _activeLicense = activeLicense;
         _allLicenses = allLicenses;
         _deviceId = deviceId;
         _licenseStatus = status;
         _activeStudentCount = activeStudents.length;
-        _currentTier = tierForStudentCount(activeStudents.length);
+        _licenseMaxStudents = licenseMaxStudents;
+        _isMasterKey = isMasterKey;
+        // Current tier reflects what was actually purchased (the license's
+        // maxStudents cap), not the fluctuating active student count. A
+        // master key isn't a real pricing tier, so it's shown separately.
+        _currentTier = (!isMasterKey && licenseMaxStudents != null)
+            ? tierForStudentCount(licenseMaxStudents)
+            : null;
         _isLoading = false;
       });
     } catch (e) {
@@ -280,10 +302,52 @@ class _LicenseManagementScreenState extends State<LicenseManagementScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Current Tier — derived from active student count, since
-                  // licenses activated before the tier scheme existed don't
-                  // carry a tier of their own.
-                  if (_currentTier != null)
+                  // Current Tier — reflects what's actually licensed (the
+                  // license's maxStudents cap), not the fluctuating active
+                  // student count. Licenses activated before the tier scheme
+                  // existed, or master keys, don't map to a pricing tier.
+                  if (_isMasterKey)
+                    Card(
+                      color: Colors.purple.shade50,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.sell, color: Colors.purple.shade700),
+                                const SizedBox(width: 8),
+                                const Text(
+                                  'Current Tier',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              '🔑 Master (${_licenseMaxStudents ?? 999999} students)',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Master license key — not a purchased pricing tier',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else if (_currentTier != null)
                     Card(
                       color: Colors.purple.shade50,
                       child: Padding(
@@ -315,8 +379,8 @@ class _LicenseManagementScreenState extends State<LicenseManagementScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Based on your $_activeStudentCount active '
-                              'student${_activeStudentCount == 1 ? '' : 's'}',
+                              'Licensed for up to $_licenseMaxStudents students '
+                              '($_activeStudentCount active now)',
                               style: const TextStyle(
                                 fontSize: 12,
                                 color: Colors.black54,

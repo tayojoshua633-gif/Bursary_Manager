@@ -21,6 +21,7 @@ import '../../utils/permission_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
+import '../../utils/license_helper.dart';
 import '../../widgets/sibling_mark.dart';
 // ========================================
 
@@ -45,12 +46,31 @@ class _StudentListScreenState extends State<StudentListScreen> {
   int? _selectedArmFilter; // null means "All Arms"
   Map<String, dynamic>? _currentUser;
   bool _canManageStudents = false;
+  int? _licenseMaxStudents;
+  bool _isMasterKey = false;
 
   @override
   void initState() {
     super.initState();
     _loadCurrentUser();
     _loadStudents();
+    _loadLicenseInfo();
+  }
+
+  Future<void> _loadLicenseInfo() async {
+    final license = await _db.getActiveLicense();
+    if (!mounted || license == null) return;
+
+    final maxStudents = license['maxStudents'] as int?;
+    final decoded = LicenseHelper.validateLicenseKey(
+      license['licenseKey'] as String,
+    );
+
+    setState(() {
+      _licenseMaxStudents =
+          (maxStudents != null && maxStudents > 0) ? maxStudents : null;
+      _isMasterKey = decoded?['isMasterKey'] == true;
+    });
   }
 
   Future<void> _loadCurrentUser() async {
@@ -150,7 +170,14 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
   String _buildFilterInfoText() {
     if (_selectedClassFilter == null && _selectedArmFilter == null) {
-      return "Showing ${_students.length} of ${_allStudents.length} active students";
+      var text = "Showing ${_students.length} of ${_allStudents.length} active students";
+      if (!_isMasterKey && _licenseMaxStudents != null) {
+        final remaining = _licenseMaxStudents! - _allStudents.length;
+        text += remaining > 0
+            ? " • $remaining slot${remaining == 1 ? '' : 's'} remaining of $_licenseMaxStudents"
+            : " • Student limit reached ($_licenseMaxStudents)";
+      }
+      return text;
     }
 
     String filterText = "Showing ${_students.length} students";

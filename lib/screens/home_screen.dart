@@ -8,6 +8,7 @@ import '../utils/app_version.dart';
 import '../utils/app_uptime.dart';
 import '../utils/display_settings_helper.dart';
 import '../utils/license_checker.dart';
+import '../utils/license_helper.dart';
 import '../utils/license_tier_helper.dart';
 import '../data/database_helper_wrapper.dart';
 import '../navigation/sidebar_scaffold.dart';
@@ -73,6 +74,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String? _activeTerm;
   int? _licenseDaysRemaining;
   LicenseTier? _currentTier;
+  bool _isMasterKey = false;
   String _uptimeText = AppUptime.format();
   Timer? _uptimeTimer;
 
@@ -83,7 +85,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _loadLinkedSchools();
     _loadActiveSessionTerm();
     _loadLicenseStatus();
-    _loadCurrentTier();
     ActiveSessionTermNotifier.listenable.addListener(_loadActiveSessionTerm);
     _uptimeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
@@ -154,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     await DatabaseHelper().switchDatabase(school.dbFileName);
     await SchoolSyncRegistry.setActiveId(school.id);
     if (!mounted) return;
-    await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus(), _loadCurrentTier()]);
+    await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus()]);
   }
 
   Future<void> _loadActiveSessionTerm() async {
@@ -172,22 +173,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _loadLicenseStatus() async {
+    final db = DatabaseHelperWrapper();
     final status = await LicenseChecker.checkLicense();
+    final activeLicense = await db.getActiveLicense();
+
+    // Re-decode the stored key just to read the isMasterKey flag — that
+    // flag isn't persisted on the licenses table itself.
+    final decoded = activeLicense != null
+        ? LicenseHelper.validateLicenseKey(activeLicense['licenseKey'] as String)
+        : null;
+
     if (!mounted) return;
     setState(() {
       _licenseDaysRemaining = status.isValid ? status.daysRemaining : null;
-    });
-  }
-
-  /// Tiers were introduced after many licenses were already activated, so
-  /// there's no tier stored on the license itself — derive it from the
-  /// school's current active student count instead.
-  Future<void> _loadCurrentTier() async {
-    final db = DatabaseHelperWrapper();
-    final activeStudents = await db.getActiveStudents();
-    if (!mounted) return;
-    setState(() {
-      _currentTier = tierForStudentCount(activeStudents.length);
+      _isMasterKey = decoded?['isMasterKey'] == true;
+      // Tiers were introduced after many licenses were already activated,
+      // so older licenses carry no maxStudents cap (0/null = unlimited) and
+      // have no tier to show. For newer licenses, derive the tier from the
+      // maxStudents entitlement actually purchased — not the school's
+      // current active student count, which fluctuates independently of
+      // what was paid for. A master key isn't a real pricing tier, so it's
+      // shown separately in the app bar title instead.
+      final maxStudents = status.maxStudents;
+      _currentTier = (_isMasterKey || maxStudents == null || maxStudents <= 0)
+          ? null
+          : tierForStudentCount(maxStudents);
     });
   }
 
@@ -212,7 +222,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (!mounted) return;
 
     if (result['success'] == true && _isReadOnlyMode) {
-      await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus(), _loadCurrentTier()]);
+      await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus()]);
       if (!mounted) return;
     }
 
@@ -446,9 +456,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           surfaceTintColor: Colors.transparent,
           elevation: 2,
           title: Text(
-            _currentTier == null
-                ? 'School Bursary Manager $kAppVersion'
-                : 'School Bursary Manager ${_currentTier!.label} $kAppVersion',
+            _isMasterKey
+                ? 'School Bursary Manager 🔑 Master $kAppVersion'
+                : _currentTier == null
+                    ? 'School Bursary Manager $kAppVersion'
+                    : 'School Bursary Manager ${_currentTier!.label} $kAppVersion',
           ),
           centerTitle: true,
           actions: [
