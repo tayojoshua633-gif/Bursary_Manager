@@ -126,22 +126,23 @@ class CentralBackupHelper {
 
     try {
       final database = await DatabaseHelper().database;
-      try {
-        // Checkpoint WAL before copying so all recent writes are in the
-        // main .db file — otherwise records written since the last
-        // checkpoint sit in the .db-wal file and would be missing from the
-        // uploaded copy.
-        await database.execute('PRAGMA wal_checkpoint(TRUNCATE)');
-      } catch (_) {
-        // Proceed anyway — data already in the .db file will still upload.
-      }
 
       final dir = await getTemporaryDirectory();
       final ts = DateTime.now().millisecondsSinceEpoch;
       final tempPath = p.join(dir.path, 'central_upload_$ts.db');
 
-      final srcPath = await DatabaseHelper().currentDbPath;
-      await File(srcPath).copy(tempPath);
+      // VACUUM INTO writes a complete, consistent snapshot of the database
+      // in one atomic step, regardless of any pending WAL activity. This
+      // replaces a checkpoint-then-raw-file-copy approach that could
+      // silently upload an incomplete snapshot (missing very recent writes)
+      // whenever the WAL checkpoint didn't fully complete — e.g. because
+      // something else briefly had the database open at that moment. That
+      // was the root cause of data appearing to "disappear" on Read-Only
+      // devices until a later sync happened to catch a fully-checkpointed
+      // copy. VACUUM INTO errors if the target file already exists, but
+      // tempPath is freshly timestamped each call so that never collides.
+      final escapedPath = tempPath.replaceAll("'", "''");
+      await database.execute("VACUUM INTO '$escapedPath'");
 
       final result = await _uploadBackupWithReason(tempPath);
       try {

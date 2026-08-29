@@ -3,8 +3,10 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:window_manager/window_manager.dart';
 import 'data/repository_factory.dart';
 import 'data/database_helper_wrapper.dart';
 import 'screens/home_screen.dart';
@@ -17,24 +19,78 @@ import 'utils/school_sync_client.dart';
 import 'utils/auto_sync_service.dart';
 import 'utils/display_settings_helper.dart';
 import 'utils/app_uptime.dart';
+import 'utils/sound_service.dart';
 import 'navigation/sidebar_state_provider.dart';
 import 'navigation/sidebar_scaffold.dart';
 
+/// Plays the popup sound whenever a dialog / bottom sheet / dropdown route
+/// is pushed, without every screen having to remember to call SoundService.
+class _SoundRouteObserver extends RouteObserver<ModalRoute<void>> {
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (route is PopupRoute) {
+      SoundService.instance.playPopup();
+    }
+    super.didPush(route, previousRoute);
+  }
+}
+
 /// Global route observer — used by screens that need to refresh on every appearance.
 final RouteObserver<ModalRoute<void>> appRouteObserver =
-    RouteObserver<ModalRoute<void>>();
+    _SoundRouteObserver();
+
+/// True if the pointer-down at [position] landed on an actually-interactive
+/// widget (button, InkWell, list tile, switch, tab, etc.) rather than blank
+/// space, a scroll gesture, or a text field.
+///
+/// Verified empirically (see test/click_detection_test.dart) against real
+/// Material widgets — mouse-cursor identity looked reliable on paper but
+/// doesn't hold up: on non-web platforms every Material widget's MouseRegion
+/// cursor resolves down to the plain arrow before it ever reaches
+/// RenderMouseRegion, indistinguishable from blank space. What *does* work:
+/// InkWell/IconButton/ButtonStyleButton-based widgets attach a
+/// `Semantics(onTap: ...)` node (RenderSemanticsAnnotations), and a raw
+/// `GestureDetector(onTap: ...)` attaches a RenderSemanticsGestureHandler —
+/// both are ordinary members of the normal hit-test path, no accessibility
+/// mode required.
+bool _isTapOnClickableWidget(Offset position, int viewId) {
+  final HitTestResult result = HitTestResult();
+  WidgetsBinding.instance.hitTestInView(result, position, viewId);
+  for (final HitTestEntry entry in result.path) {
+    final Object target = entry.target;
+    if (target is RenderSemanticsAnnotations && target.properties.onTap != null) {
+      return true;
+    }
+    if (target is RenderSemanticsGestureHandler && target.onTap != null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+final bool _isDesktop =
+    Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppUptime.startTime; // capture app launch time as early as possible
 
   // Initialize FFI for desktop platforms (Windows, Linux, macOS)
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  if (_isDesktop) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
     debugPrint(
       '✅ Database initialized for desktop platform: ${Platform.operatingSystem}',
     );
+  }
+
+  await SoundService.instance.init();
+
+  if (_isDesktop) {
+    await windowManager.ensureInitialized();
+    // Intercept the window close button so we can play a sound before the
+    // process actually exits — otherwise the app vanishes before it plays.
+    await windowManager.setPreventClose(true);
   }
 
   runApp(const MyApp());
@@ -47,7 +103,7 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver, WindowListener {
   final _navigatorKey = GlobalKey<NavigatorState>();
   DateTime? _lastPausedTime;
   Duration _autoLogoutDelay = const Duration(minutes: 5); // Default value
@@ -63,6 +119,21 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     _loadDisplaySettings();
     _loadAutoLogoutSettings();
     debugPrint('🔵 App lifecycle observer added');
+
+    SoundService.instance.playAppOpen();
+
+    if (_isDesktop) {
+      windowManager.addListener(this);
+    }
+  }
+
+  // WindowListener — fires when the user clicks the window's close button.
+  // We play the close sound, wait for it to finish, then actually close.
+  @override
+  void onWindowClose() async {
+    await SoundService.instance.playAppClose();
+    await Future.delayed(const Duration(milliseconds: 450));
+    await windowManager.destroy();
   }
 
   Future<void> _loadAutoLogoutSettings() async {
@@ -94,6 +165,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (_isDesktop) {
+      windowManager.removeListener(this);
+    }
     _sidebarState.dispose();
     super.dispose();
   }
@@ -207,6 +281,20 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           title: 'Bursary Manager',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
+          // Plays a soft click on every tap anywhere in the app, without
+          // each of the 100+ screens needing to wire it in individually.
+          // Only fires for actual interactive widgets (buttons, InkWell,
+          // list tiles, switches, tabs, …) — not blank space, scrolls, or
+          // text fields.
+          builder: (context, child) => Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (event) {
+              if (_isTapOnClickableWidget(event.position, event.viewId)) {
+                SoundService.instance.playClick();
+              }
+            },
+            child: child,
+          ),
           home: const SplashScreen(),
         ),
       ),

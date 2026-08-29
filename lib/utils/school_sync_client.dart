@@ -150,6 +150,38 @@ class SchoolSyncClient {
     LinkedSchool school, {
     required bool makeActive,
   }) async {
+    // Capture whichever school the registry currently considers active
+    // BEFORE touching anything, so that if this call is refreshing a
+    // non-active school (e.g. one of several during refreshAllOnLaunch)
+    // and something below fails, the correct original active school can
+    // still be restored afterward.
+    final previousActiveId = await SchoolSyncRegistry.getActiveId();
+
+    // Point DatabaseHelper at this school's cached file FIRST, before any
+    // network call — this is a purely local operation and must never be
+    // gated behind network reachability. Every step below (checking for a
+    // newer backup, downloading, restoring) is best-effort on top of this:
+    // if any of it fails — no internet, a timeout, a server error, or even
+    // "nothing new to download" — the school still correctly shows
+    // whatever was last cached locally, instead of silently leaving
+    // DatabaseHelper pointed at whatever it was before (which, on a cold
+    // app restart, is the device's empty default database — the actual
+    // cause of data appearing to "disappear" both on restart and when
+    // offline; the local cache itself was never touched or lost).
+    await DatabaseHelper().switchDatabase(school.dbFileName);
+
+    Future<void> restoreActiveState() async {
+      if (makeActive) {
+        await SchoolSyncRegistry.setActiveId(school.id);
+      } else if (previousActiveId != null && previousActiveId != school.id) {
+        final all = await SchoolSyncRegistry.getAll();
+        final activeSchool = all.where((s) => s.id == previousActiveId).firstOrNull;
+        if (activeSchool != null) {
+          await DatabaseHelper().switchDatabase(activeSchool.dbFileName);
+        }
+      }
+    }
+
     try {
       final listResp = await http.post(
         Uri.parse('$_baseUrl/sync_list_backups.php'),
@@ -159,6 +191,7 @@ class SchoolSyncClient {
 
       final listed = _decodeOrNull(listResp.body);
       if (listResp.statusCode != 200 || listed == null || listed['ok'] != true) {
+        await restoreActiveState();
         return {
           'success': false,
           'message': (listed != null ? listed['error'] as String? : null) ??
@@ -168,6 +201,7 @@ class SchoolSyncClient {
 
       final backups = (listed['backups'] as List<dynamic>?) ?? [];
       if (backups.isEmpty) {
+        await restoreActiveState();
         return {'success': false, 'message': 'This school has no backups yet.'};
       }
 
@@ -175,67 +209,69 @@ class SchoolSyncClient {
       final latestCreatedAt = latest['created_at'] as String?;
       final backupId = latest['id'].toString();
 
-      if (latestCreatedAt != null && latestCreatedAt == school.lastBackupCreatedAt) {
-        return {'success': true, 'changed': false, 'message': 'Already up to date.'};
-      }
+      final upToDate = latestCreatedAt != null && latestCreatedAt == school.lastBackupCreatedAt;
+      List<dynamic> failedTables = const [];
 
-      final tempPath = await _buildTempPath('school_sync_${school.id}');
-      final downloadResp = await http.post(
-        Uri.parse('$_baseUrl/sync_download_backup.php'),
-        headers: {'X-Api-Secret': _apiSecret},
-        body: {'product': _product, 'sync_key': school.syncKey, 'backup_id': backupId},
-      ).timeout(const Duration(seconds: 60));
+      if (!upToDate) {
+        final tempPath = await _buildTempPath('school_sync_${school.id}');
+        final downloadResp = await http.post(
+          Uri.parse('$_baseUrl/sync_download_backup.php'),
+          headers: {'X-Api-Secret': _apiSecret},
+          body: {'product': _product, 'sync_key': school.syncKey, 'backup_id': backupId},
+        ).timeout(const Duration(seconds: 60));
 
-      if (downloadResp.statusCode != 200) {
-        final failed = _decodeOrNull(downloadResp.body);
-        return {
-          'success': false,
-          'message': (failed != null ? failed['error'] as String? : null) ??
-              'Download failed (HTTP ${downloadResp.statusCode}).',
-        };
-      }
-      await File(tempPath).writeAsBytes(downloadResp.bodyBytes);
-
-      await DatabaseHelper().switchDatabase(school.dbFileName);
-      final restoreResult = await DBBackupHelper.selectiveRestoreDatabase(
-        tempPath,
-        syncTables,
-        treatEmptyAsSuccess: true,
-      );
-      _deleteSilently(tempPath);
-
-      if (restoreResult['success'] != true) {
-        return {
-          'success': false,
-          'message': restoreResult['message'] as String? ?? 'Restore failed.',
-        };
-      }
-
-      final nowIso = DateTime.now().toIso8601String();
-      await SchoolSyncRegistry.update(
-        school.id,
-        schoolName: school.schoolName,
-        lastSyncedAt: nowIso,
-        lastBackupCreatedAt: latestCreatedAt,
-      );
-
-      if (makeActive) {
-        await SchoolSyncRegistry.setActiveId(school.id);
-      } else {
-        // Leave the active database pointed at whatever the registry still
-        // considers active — this refresh was a background/non-visible one.
-        final activeId = await SchoolSyncRegistry.getActiveId();
-        if (activeId != null && activeId != school.id) {
-          final all = await SchoolSyncRegistry.getAll();
-          final activeSchool = all.where((s) => s.id == activeId).firstOrNull;
-          if (activeSchool != null) {
-            await DatabaseHelper().switchDatabase(activeSchool.dbFileName);
-          }
+        if (downloadResp.statusCode != 200) {
+          final failed = _decodeOrNull(downloadResp.body);
+          await restoreActiveState();
+          return {
+            'success': false,
+            'message': (failed != null ? failed['error'] as String? : null) ??
+                'Download failed (HTTP ${downloadResp.statusCode}).',
+          };
         }
+        await File(tempPath).writeAsBytes(downloadResp.bodyBytes);
+
+        // Already pointed at school.dbFileName from the top of this method.
+        final restoreResult = await DBBackupHelper.selectiveRestoreDatabase(
+          tempPath,
+          syncTables,
+          treatEmptyAsSuccess: true,
+        );
+        _deleteSilently(tempPath);
+
+        if (restoreResult['success'] != true) {
+          await restoreActiveState();
+          return {
+            'success': false,
+            'message': restoreResult['message'] as String? ?? 'Restore failed.',
+          };
+        }
+
+        await SchoolSyncRegistry.update(
+          school.id,
+          schoolName: school.schoolName,
+          lastSyncedAt: DateTime.now().toIso8601String(),
+          lastBackupCreatedAt: latestCreatedAt,
+        );
+        failedTables = (restoreResult['failedTables'] as List<dynamic>?) ?? const [];
       }
 
-      return {'success': true, 'changed': true, 'message': 'Synced "${school.schoolName}".'};
+      await restoreActiveState();
+
+      final message = upToDate
+          ? 'Already up to date.'
+          : (failedTables.isEmpty
+              ? 'Synced "${school.schoolName}".'
+              : 'Synced "${school.schoolName}" — ${failedTables.length} table(s) kept previous data (see logs): ${failedTables.join(', ')}.');
+
+      return {'success': true, 'changed': !upToDate, 'message': message, 'failedTables': failedTables};
     } catch (e) {
+      // Network/sync failure of any kind (including no internet at all) —
+      // but DatabaseHelper is already correctly pointed at school's cached
+      // file from the top of this method, so whatever's mid-flight fails
+      // silently on the network side while the last-known-good local data
+      // still displays correctly.
+      await restoreActiveState();
       return {'success': false, 'message': 'Sync failed: $e'};
     }
   }

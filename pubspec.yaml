@@ -2,7 +2,7 @@
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 15.4.3+1
+version: 15.5.2+1
 
 environment:
   sdk: ^3.10.0
@@ -95,6 +95,12 @@ dependencies:
   google_sign_in: ^6.2.1
   googleapis: ^13.2.0
 
+  # -----------------------------
+  # UI SOUND EFFECTS
+  # -----------------------------
+  audioplayers: ^6.1.0             # click/warning/success/popup/app open+close sounds
+  window_manager: ^0.4.3           # lets us intercept the desktop window close to play a sound first
+
 dependency_overrides:
   # Vendored local copy of flutter_usb_printer with AGP 8+ namespace fix applied.
   # This prevents flutter pub get from ever reverting to the broken pub.dev version.
@@ -118,6 +124,7 @@ flutter:
     #
     # Keep empty for now unless you add images.
     - assets/
+    - assets/sounds/
 
 # App Icon Configuration
 flutter_launcher_icons:
@@ -126,6 +133,15 @@ flutter_launcher_icons:
   image_path: "assets/icon.png"
   adaptive_icon_background: "#2196F3"
   adaptive_icon_foreground: "assets/icon.png"
+
+
+
+
+
+
+
+
+
 
 
 

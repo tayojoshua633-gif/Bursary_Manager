@@ -13,6 +13,7 @@ import '../settings/usb_printer_screen.dart';
 import '../settings/clear_data_screen.dart';
 import '../settings/display_settings_screen.dart';
 import '../settings/security_settings_screen.dart';
+import '../settings/sound_settings_screen.dart';
 import '../auth/user_management_screen.dart';
 import '../settings/read_only_settings_screen.dart';
 import '../settings/sms_settings_screen.dart';
@@ -115,6 +116,15 @@ class PreferencesMenu extends StatelessWidget {
             color: Colors.red,
             page: const SecuritySettingsScreen(),
             pageId: 'preferences/security',
+          ),
+          _menuCard(
+            context,
+            title: 'Sound Effects',
+            subtitle: 'Clicks, alerts & chimes',
+            icon: Icons.volume_up_outlined,
+            color: Colors.teal,
+            page: const SoundSettingsScreen(),
+            pageId: 'preferences/sound',
           ),
           _menuCard(
             context,

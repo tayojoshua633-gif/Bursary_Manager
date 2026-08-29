@@ -9,6 +9,7 @@ import '../../utils/backup_reminder_helper.dart';
 import '../../utils/central_backup_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/navigation_helper.dart';
+import '../../utils/sound_service.dart';
 import '../../utils/write_guard.dart';
 import '../../widgets/sibling_mark.dart';
 import '../students/siblings_information_screen.dart';
@@ -354,6 +355,7 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
     final amount = double.tryParse(_amountCtrl.text.trim()) ?? 0.0;
 
     if (amount <= 0) {
+      SoundService.instance.playWarning();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Enter a valid amount")),
       );
@@ -361,6 +363,7 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
     }
 
     if (_selectedMethod == null) {
+      SoundService.instance.playWarning();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Select a payment method")),
       );
@@ -389,6 +392,8 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
       CentralBackupHelper.triggerAutoUpload();
 
       if (!mounted) return;
+
+      SoundService.instance.playSuccess();
 
       // Show success toast
       ScaffoldMessenger.of(context).showSnackBar(
@@ -419,6 +424,7 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
       }
     } catch (e) {
       if (!mounted) return;
+      SoundService.instance.playWarning();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Error: $e")),
       );

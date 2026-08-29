@@ -937,6 +937,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       pageId: 'student_management',
                     ),
 
+                    // Bills & Payment Category
+                    _menuCard(
+                      context,
+                      title: 'Bills & Payment',
+                      subtitle: 'Fees, bills & payments',
+                      icon: Icons.receipt_long_outlined,
+                      color: Colors.indigo,
+                      page: BillsPaymentMenu(currentUser: widget.currentUser),
+                      pageId: 'bills_payment',
+                    ),
+
                     // Parents Management Category
                     _menuCard(
                       context,
@@ -948,17 +959,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         currentUser: widget.currentUser,
                       ),
                       pageId: 'parents_management',
-                    ),
-
-                    // Bills & Payment Category
-                    _menuCard(
-                      context,
-                      title: 'Bills & Payment',
-                      subtitle: 'Fees, bills & payments',
-                      icon: Icons.receipt_long_outlined,
-                      color: Colors.indigo,
-                      page: BillsPaymentMenu(currentUser: widget.currentUser),
-                      pageId: 'bills_payment',
                     ),
 
                     // Transportation Category

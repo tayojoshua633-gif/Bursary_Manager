@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../navigation/sidebar_scaffold.dart';
+import '../../utils/sound_service.dart';
 import '../home_screen.dart';
 
 class WelcomeScreen extends StatefulWidget {
@@ -125,6 +126,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
         if (!mounted) return;
 
+        SoundService.instance.playSuccess();
+
         // Login successful - navigate to home
         Navigator.pushReplacement(
           context,
@@ -140,6 +143,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         );
       } else {
         // Login failed
+        SoundService.instance.playWarning();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Invalid username or password'),
@@ -149,6 +153,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       }
     } catch (e) {
       if (mounted) {
+        SoundService.instance.playWarning();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error: $e'),

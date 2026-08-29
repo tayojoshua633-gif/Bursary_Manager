@@ -253,47 +253,36 @@ class DBBackupHelper {
       // so that user preferences travel with the backup.
       await _snapshotPrefsToDb();
 
-      // Checkpoint WAL before backup so all recent writes are in the main .db file.
-      // Without this, records written since the last checkpoint are in the .db-wal
-      // file and would be missing from the copied backup.
-      try {
-        final db = DatabaseHelper();
-        final database = await db.database;
-        await database.execute('PRAGMA wal_checkpoint(TRUNCATE)');
-      } catch (_) {
-        // If checkpoint fails (e.g. db not open yet), proceed anyway —
-        // the data already in the .db file will still be backed up.
-      }
-
       // Get paths
-      final dbPath = await _getDatabasePath();
       final backupFolder = await _getBackupFolder();
       final filename = await _generateBackupFilename();
       final backupPath = join(backupFolder.path, filename);
 
-      // Copy database file
-      final sourceFile = File(dbPath);
+      // VACUUM INTO writes a complete, consistent snapshot in one atomic
+      // step, regardless of any pending WAL activity — this replaces a
+      // checkpoint-then-raw-file-copy approach that could silently produce
+      // an incomplete backup (missing very recent writes) whenever the WAL
+      // checkpoint didn't fully complete, e.g. because something else
+      // briefly had the database open at that moment. VACUUM INTO errors if
+      // the target file already exists; _generateBackupFilename()'s
+      // second-precision timestamp makes that effectively impossible for a
+      // manually-triggered backup, but guard it anyway.
       final destFile = File(backupPath);
+      if (await destFile.exists()) await destFile.delete();
 
-      if (await sourceFile.exists()) {
-        await destFile.writeAsBytes(await sourceFile.readAsBytes());
+      final database = await DatabaseHelper().database;
+      final escapedPath = backupPath.replaceAll("'", "''");
+      await database.execute("VACUUM INTO '$escapedPath'");
 
-        // Best-effort copy to the central support server — never blocks or
-        // fails the backup itself if it doesn't succeed.
-        unawaited(CentralBackupHelper.uploadBackup(backupPath));
-
-        return {
-          'success': true,
-          'message': 'Backup created successfully',
-          'filePath': backupPath,
-          'filename': filename,
-        };
-      }
+      // Best-effort copy to the central support server — never blocks or
+      // fails the backup itself if it doesn't succeed.
+      unawaited(CentralBackupHelper.uploadBackup(backupPath));
 
       return {
-        'success': false,
-        'message': 'Database file not found',
-        'filePath': null,
+        'success': true,
+        'message': 'Backup created successfully',
+        'filePath': backupPath,
+        'filename': filename,
       };
     } catch (e) {
       return {
@@ -653,7 +642,6 @@ Sent from Bursary Manager App
         };
       }
 
-      final dbPath = await _getDatabasePath();
       final backupFile = File(backupFilePath);
 
       if (!await backupFile.exists()) {
@@ -678,12 +666,23 @@ Sent from Bursary Manager App
         // Database might not be open, continue
       }
 
-      // Open both databases
-      final currentDb = await openDatabase(dbPath);
+      // Open the destination through DatabaseHelper's own versioned getter,
+      // NOT a bare openDatabase(dbPath) — a bare open skips onCreate/
+      // onUpgrade entirely, so a brand-new destination file (e.g. a linked
+      // school being synced for the very first time) would open with zero
+      // tables. Every delete/insert in the loop below would then fail with
+      // "no such table", get caught, and (with treatEmptyAsSuccess) the
+      // whole sync would still report success despite writing nothing —
+      // the destination silently never having a schema to receive data
+      // into in the first place. Going through the real getter guarantees
+      // the schema exists (freshly created, or upgraded) before any table
+      // is touched.
+      final currentDb = await DatabaseHelper().database;
       final backupDb = await openDatabase(backupFilePath, readOnly: true);
 
       int restoredTables = 0;
       int totalRecords = 0;
+      final failedTables = <String>[];
 
       for (String tableName in tablesToRestore) {
         try {
@@ -694,15 +693,23 @@ Sent from Bursary Manager App
             continue; // Skip empty tables
           }
 
-          // Delete existing data in current table
-          await currentDb.delete(tableName);
-
-          // Insert backup data
-          final batch = currentDb.batch();
-          for (var row in backupData) {
-            batch.insert(tableName, row);
-          }
-          await batch.commit(noResult: true);
+          // Delete + insert wrapped in one transaction: if the insert fails
+          // partway through (a single bad row is enough — a constraint
+          // violation, a type mismatch, a schema difference between the
+          // source and destination), the delete is rolled back too. Without
+          // this, a failed insert left the table permanently empty (deleted,
+          // never repopulated) while the overall restore still reported
+          // success — silent data loss that only a fresh, non-conflicting
+          // backup would ever "fix". A table that fails to update now keeps
+          // its previous data instead of losing it.
+          await currentDb.transaction((txn) async {
+            await txn.delete(tableName);
+            final batch = txn.batch();
+            for (var row in backupData) {
+              batch.insert(tableName, row);
+            }
+            await batch.commit(noResult: true);
+          });
 
           // If the settings table was just restored, re-apply pref_ rows to SharedPreferences
           if (tableName == 'settings') {
@@ -712,14 +719,19 @@ Sent from Bursary Manager App
           restoredTables++;
           totalRecords += backupData.length;
         } catch (e) {
-          // Skip table if error (might not exist or have schema issues)
-          debugPrint('Warning: Could not restore table $tableName: $e');
+          // Previous data for this table is preserved (transaction rolled
+          // back) — not silently wiped.
+          debugPrint('Warning: Could not restore table $tableName (kept previous data): $e');
+          failedTables.add(tableName);
         }
       }
 
-      // Close databases
+      // Close only the temporary read-only backup connection. currentDb is
+      // DatabaseHelper()'s shared singleton — closing it here would leave
+      // the singleton holding a reference to an already-closed connection,
+      // breaking the very next access anywhere else in the app. It's left
+      // open for whoever accesses DatabaseHelper().database next.
       await backupDb.close();
-      await currentDb.close();
 
       if (restoredTables == 0 && !treatEmptyAsSuccess) {
         return {
@@ -728,13 +740,19 @@ Sent from Bursary Manager App
         };
       }
 
+      final warning = failedTables.isEmpty
+          ? ''
+          : ' ${failedTables.length} table(s) could not be updated and kept their previous data: ${failedTables.join(', ')}.';
+
       return {
         'success': true,
-        'message': restoredTables == 0
-            ? 'Backup is valid but contains no data yet.'
-            : 'Restored $restoredTables table(s) with $totalRecords record(s). Please restart the app.',
+        'message': (restoredTables == 0
+                ? 'Backup is valid but contains no data yet.'
+                : 'Restored $restoredTables table(s) with $totalRecords record(s). Please restart the app.') +
+            warning,
         'tablesRestored': restoredTables,
         'recordsRestored': totalRecords,
+        'failedTables': failedTables,
       };
     } catch (e) {
       return {
