@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../navigation/sidebar_scaffold.dart';
 import 'special_fee_assignment_screen.dart';
 
 class SpecialFeeItemsScreen extends StatefulWidget {
-  const SpecialFeeItemsScreen({super.key});
+  final Map<String, dynamic> currentUser;
+
+  const SpecialFeeItemsScreen({super.key, required this.currentUser});
 
   @override
   State<SpecialFeeItemsScreen> createState() => _SpecialFeeItemsScreenState();
@@ -962,9 +965,20 @@ class _SpecialFeeItemsScreenState extends State<SpecialFeeItemsScreen> {
                       onPressed: _totalItems == 0
                           ? null
                           : () {
+                              final screenSize = MediaQuery.of(context).size;
+                              final showSidebar = screenSize.shortestSide >= 700;
                               Navigator.push(
                                 context,
-                                MaterialPageRoute(builder: (_) => const SpecialFeeAssignmentScreen()),
+                                MaterialPageRoute(
+                                  builder: (_) => showSidebar
+                                      ? SidebarScaffold(
+                                          currentUser: widget.currentUser,
+                                          currentPageId:
+                                              'bills_payment/new_intake/special_items',
+                                          child: const SpecialFeeAssignmentScreen(),
+                                        )
+                                      : const SpecialFeeAssignmentScreen(),
+                                ),
                               );
                             },
                       icon: const Icon(Icons.assignment, size: 28),

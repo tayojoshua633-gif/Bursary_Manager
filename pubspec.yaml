@@ -2,7 +2,7 @@
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 15.5.2+1
+version: 15.5.7+1
 
 environment:
   sdk: ^3.10.0
@@ -19,6 +19,7 @@ dependencies:
   cupertino_icons: ^1.0.8
 
   crypto: ^3.0.3
+  ed25519_edwards: ^0.3.1  # Ed25519 signature verification for the whole-app license
   device_info_plus: ^10.0.1
   package_info_plus: ^8.0.0
   
@@ -133,6 +134,11 @@ flutter_launcher_icons:
   image_path: "assets/icon.png"
   adaptive_icon_background: "#2196F3"
   adaptive_icon_foreground: "assets/icon.png"
+
+
+
+
+
 
 
 

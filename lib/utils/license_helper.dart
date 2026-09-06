@@ -2,82 +2,35 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:ed25519_edwards/ed25519_edwards.dart' as ed;
 import 'dart:io';
 
 class LicenseHelper {
-  static const String _secretKey = 'BURSARY_MANAGER_2024_SECRET_KEY_XYZ123';
-  static const String _masterLicenseKey = 'DEV2024BURSARYMANAGER@MASTER';
+  // Public half of the license_manager private key that signs whole-app
+  // BM/DSM licenses (same key used for bursary_manager_desktop's CBT add-on
+  // codes) — can verify a signature but cannot be used to produce one.
+  static const String _licenseSigningPublicKeyBase64 =
+      '2p+t4hZgtXCqFwj85HKpIGbgeOVvU4g6WKo10pnViWk=';
 
   /// Validate a license key
   static Map<String, dynamic>? validateLicenseKey(String licenseKey) {
     try {
-      // Check if this is the master license key, optionally suffixed with
-      // "=<days>" and/or ",<maxStudents>" to limit its validity/student cap,
-      // e.g. "DEV2024BURSARYMANAGER@MASTER=90" (90-day validity, unlimited students)
-      // or  "DEV2024BURSARYMANAGER@MASTER=90,50" (90-day validity, capped at 50 students)
-      // or  "DEV2024BURSARYMANAGER@MASTER=,50" (default validity, capped at 50 students)
-      final trimmedKey = licenseKey.trim();
-      if (trimmedKey == _masterLicenseKey ||
-          trimmedKey.startsWith('$_masterLicenseKey=')) {
-        var validityDays = 36500; // Default: effectively never expires
-        var maxStudents = 999999; // Default: effectively unlimited
-
-        if (trimmedKey.length > _masterLicenseKey.length) {
-          final suffix = trimmedKey.substring(_masterLicenseKey.length + 1);
-          final parts = suffix.split(',');
-          if (parts.length > 2) return null; // Malformed suffix
-
-          if (parts[0].isNotEmpty) {
-            final parsedDays = int.tryParse(parts[0]);
-            if (parsedDays == null || parsedDays <= 0) return null;
-            validityDays = parsedDays;
-          }
-
-          if (parts.length == 2 && parts[1].isNotEmpty) {
-            final parsedStudents = int.tryParse(parts[1]);
-            if (parsedStudents == null || parsedStudents <= 0) return null;
-            maxStudents = parsedStudents;
-          }
-        }
-
-        final expiryDate = DateTime.now().add(Duration(days: validityDays));
-        return {
-          'school': 'My School',
-          'code': 'MYSCHOOL/00001',
-          'expiry': expiryDate.toIso8601String(),
-          'maxStudents': maxStudents,
-          'timestamp': DateTime.now().millisecondsSinceEpoch,
-          'isExpired': false,
-          'daysRemaining': validityDays,
-          'isMasterKey': true, // Flag to identify master key
-        };
-      }
-
-      // Remove spaces and split by last dash
+      // Remove spaces
       final cleanKey = licenseKey.trim().replaceAll(' ', '');
 
-      // Split by the LAST dash only (format: ENCODED-CHECKSUM)
-      final lastDashIndex = cleanKey.lastIndexOf('-');
-      if (lastDashIndex == -1) return null;
+      // Ed25519-signed license is the only format accepted (see
+      // signed_license_engine.dart on the license_manager side). The old
+      // shared-secret checksum format and the hardcoded master license key
+      // were retired: both values were public (committed in this repo's
+      // history), which let anyone forge a valid license without ever
+      // touching license_manager's private key.
+      final signedPayload = _verifySignedLicense(cleanKey);
+      if (signedPayload == null) return null;
 
-      final encoded = cleanKey.substring(0, lastDashIndex);
-      final checksum = cleanKey.substring(lastDashIndex + 1);
-
-      // Verify checksum (case-insensitive comparison)
-      if (_generateChecksum(encoded).toLowerCase() != checksum.toLowerCase()) {
-        return null; // Tampered key
-      }
-
-      // Decode license data (base64 is case-sensitive, so preserve case)
-      final jsonData = utf8.decode(base64Url.decode(encoded));
-      final licenseData = jsonDecode(jsonData) as Map<String, dynamic>;
-
-      // Check expiry
-      final expiryDate = DateTime.parse(licenseData['expiry'] as String);
-      licenseData['isExpired'] = DateTime.now().isAfter(expiryDate);
-      licenseData['daysRemaining'] = expiryDate.difference(DateTime.now()).inDays;
-
-      return licenseData;
+      final expiryDate = DateTime.parse(signedPayload['expiry'] as String);
+      signedPayload['isExpired'] = DateTime.now().isAfter(expiryDate);
+      signedPayload['daysRemaining'] = expiryDate.difference(DateTime.now()).inDays;
+      return signedPayload;
     } catch (e) {
       return null; // Invalid key format
     }
@@ -113,12 +66,25 @@ class LicenseHelper {
     return 'unknown';
   }
 
-  /// Generate checksum for license key validation
-  static String _generateChecksum(String data) {
-    final combined = '$data$_secretKey';
-    final bytes = utf8.encode(combined);
-    final hash = sha256.convert(bytes);
-    return hash.toString().substring(0, 8); // Use first 8 chars
+  /// Returns the decoded payload iff [cleanKey] carries a genuine Ed25519
+  /// signature from the license_manager private key; null on any
+  /// tamper/format/wrong-prefix/garbage input.
+  static Map<String, dynamic>? _verifySignedLicense(String cleanKey) {
+    try {
+      final parts = cleanKey.split('.');
+      if (parts.length != 3 || parts[0] != 'LIC1') return null;
+
+      final publicKey = ed.PublicKey(base64Decode(_licenseSigningPublicKeyBase64));
+      final message = utf8.encode(parts[1]);
+      final signature = base64Url.decode(parts[2]);
+
+      if (!ed.verify(publicKey, message, signature)) return null;
+
+      final payloadJson = utf8.decode(base64Url.decode(parts[1]));
+      return jsonDecode(payloadJson) as Map<String, dynamic>;
+    } catch (_) {
+      return null; // Invalid/tampered/malformed key
+    }
   }
 
   /// Hash a string using SHA-256

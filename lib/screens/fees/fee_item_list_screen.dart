@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../navigation/sidebar_scaffold.dart';
 import 'fee_class_assignment_screen.dart';
 
 class FeeItemListScreen extends StatefulWidget {
-  const FeeItemListScreen({super.key});
+  final Map<String, dynamic> currentUser;
+
+  const FeeItemListScreen({super.key, required this.currentUser});
 
   @override
   State<FeeItemListScreen> createState() => _FeeItemListScreenState();
@@ -687,10 +690,18 @@ class _FeeItemListScreenState extends State<FeeItemListScreen> {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       onPressed: () {
+                        final screenSize = MediaQuery.of(context).size;
+                        final showSidebar = screenSize.shortestSide >= 700;
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => const FeeClassAssignmentScreen(),
+                            builder: (_) => showSidebar
+                                ? SidebarScaffold(
+                                    currentUser: widget.currentUser,
+                                    currentPageId: 'bills_payment/fee_items',
+                                    child: const FeeClassAssignmentScreen(),
+                                  )
+                                : const FeeClassAssignmentScreen(),
                           ),
                         );
                       },

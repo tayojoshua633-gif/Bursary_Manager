@@ -35,7 +35,7 @@ class NewIntakeMenu extends StatelessWidget {
             subtitle: 'Create & manage special fee items for new students',
             icon: Icons.add_box_outlined,
             color: Colors.deepOrange,
-            page: const SpecialFeeItemsScreen(),
+            page: SpecialFeeItemsScreen(currentUser: currentUser),
             pageId: 'bills_payment/new_intake/special_items',
           ),
           _permissionMenuCard(

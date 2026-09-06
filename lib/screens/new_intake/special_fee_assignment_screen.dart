@@ -27,6 +27,11 @@ class _SpecialFeeAssignmentScreenState extends State<SpecialFeeAssignmentScreen>
   String? _activeSession;
   int? _selectedClassId;
   int? _selectedArmId;
+  Map<int, List<Map<String, dynamic>>> _armsByClass = {};
+
+  // Multi class/arm assignment mode
+  bool _applyToMultiple = false;
+  final Set<String> _selectedTargets = {};
 
   final Map<int, TextEditingController> _amountCtrl = {};
   bool _loading = true;
@@ -51,6 +56,15 @@ class _SpecialFeeAssignmentScreenState extends State<SpecialFeeAssignmentScreen>
         (await _db.getActiveSession())?['sessionName'] ?? "";
 
     _classes = await _db.getClasses();
+
+    // Load arms for ALL classes at once (needed for multi class/arm selection)
+    final database = await _db.database;
+    final allArms = await database.query('arms', orderBy: 'classId, name');
+    _armsByClass = {};
+    for (var arm in allArms) {
+      final classId = arm['classId'] as int;
+      _armsByClass.putIfAbsent(classId, () => []).add(arm);
+    }
 
     // Load all special fee items (flat list for saving)
     _specialFeeItems = await _db.getSpecialFeeItems(
@@ -540,6 +554,120 @@ class _SpecialFeeAssignmentScreenState extends State<SpecialFeeAssignmentScreen>
     Navigator.pop(context, true);
   }
 
+  // -----------------------------------------------------------
+  // SAVE TO DATABASE - MULTIPLE CLASS/ARM TARGETS AT ONCE
+  // -----------------------------------------------------------
+  Future<void> _saveMultiAssignments() async {
+    if (_selectedTargets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please select at least one class/arm"),
+        ),
+      );
+      return;
+    }
+
+    final sessionVal = _activeSession ?? "";
+
+    // Build the special fee template once - shared by every target
+    final feeTemplate = <Map<String, dynamic>>[];
+
+    for (var item in _specialFeeItems) {
+      final id = item['id'] as int;
+      final parentId = item['parentId'];
+      if (parentId == null) continue; // skip category headers
+
+      final ctrl = _amountCtrl[id];
+      if (ctrl != null && ctrl.text.trim().isNotEmpty) {
+        final amount = double.tryParse(ctrl.text.trim()) ?? 0;
+        feeTemplate.add({'specialFeeItemId': id, 'amount': amount});
+      }
+    }
+
+    for (var item in _standaloneItems) {
+      final id = item['id'] as int;
+      final ctrl = _amountCtrl[id];
+      if (ctrl != null && ctrl.text.trim().isNotEmpty) {
+        final amount = double.tryParse(ctrl.text.trim()) ?? 0;
+        feeTemplate.add({'specialFeeItemId': id, 'amount': amount});
+      }
+    }
+
+    if (feeTemplate.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please enter at least one special fee amount"),
+        ),
+      );
+      return;
+    }
+
+    final targets = _selectedTargets.map((key) {
+      final parts = key.split(':');
+      return {
+        'classId': int.parse(parts[0]),
+        'armId': parts.length > 1 ? int.parse(parts[1]) : null,
+      };
+    }).toList();
+
+    setState(() => _loading = true);
+
+    final updatedNames = <String>[];
+
+    for (var t in targets) {
+      final classId = t['classId'] as int;
+      final armId = t['armId'];
+
+      final rows = feeTemplate
+          .map((f) => {
+                'classId': classId,
+                'specialFeeItemId': f['specialFeeItemId'],
+                'amount': f['amount'],
+                'term': _activeTerm,
+                'session': sessionVal,
+              })
+          .toList();
+
+      await _db.replaceSpecialClassFeesFor(
+        classId,
+        _activeTerm!,
+        sessionVal,
+        rows,
+        armId: armId,
+      );
+
+      final className = _classes.firstWhere(
+        (c) => c['id'] == classId,
+        orElse: () => {'name': 'Unknown'},
+      )['name'];
+
+      final armName = armId != null
+          ? (_armsByClass[classId]
+              ?.firstWhere((a) => a['id'] == armId, orElse: () => {'name': ''})['name'])
+          : null;
+
+      updatedNames.add(
+        (armName != null && armName != '') ? '$className $armName' : className,
+      );
+    }
+
+    if (!mounted) return;
+    setState(() => _loading = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Special fees saved for ${updatedNames.length} class/arm(s): '
+          '${updatedNames.join(", ")}',
+        ),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+
+    Navigator.pop(context, true);
+  }
+
   String _formatCurrency(double amount) {
     final formatter = NumberFormat('#,##0', 'en_US');
     return formatter.format(amount);
@@ -627,6 +755,38 @@ class _SpecialFeeAssignmentScreenState extends State<SpecialFeeAssignmentScreen>
 
                 const SizedBox(height: 20),
 
+                // MULTI CLASS/ARM MODE TOGGLE
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.deepOrange.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.deepOrange.shade200),
+                  ),
+                  child: SwitchListTile(
+                    value: _applyToMultiple,
+                    activeThumbColor: Colors.deepOrange,
+                    onChanged: (val) {
+                      setState(() {
+                        _applyToMultiple = val;
+                        if (!val) _selectedTargets.clear();
+                      });
+                    },
+                    title: const Text(
+                      'Apply Same Special Fees to Multiple Classes/Arms',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                    subtitle: const Text(
+                      'Enter the special fee amounts once below, then pick every '
+                      'class/arm that should get them - no need to repeat this for each one.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                if (!_applyToMultiple) ...[
                 // CLASS SELECT
                 const Text(
                   "Select Class",
@@ -871,6 +1031,10 @@ class _SpecialFeeAssignmentScreenState extends State<SpecialFeeAssignmentScreen>
 
                   const SizedBox(height: 16),
                 ],
+                ] else
+                  _buildMultiTargetSelector(),
+
+                const SizedBox(height: 8),
 
                 // SPECIAL FEES SECTION (EDITABLE) - Hierarchical View
                 Row(
@@ -1378,13 +1542,17 @@ class _SpecialFeeAssignmentScreenState extends State<SpecialFeeAssignmentScreen>
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: (_specialFeeItems.isEmpty || _selectedClassId == null)
+                    onPressed: _specialFeeItems.isEmpty
                         ? null
-                        : _saveAssignments,
+                        : (_applyToMultiple
+                            ? (_selectedTargets.isEmpty ? null : _saveMultiAssignments)
+                            : (_selectedClassId == null ? null : _saveAssignments)),
                     icon: const Icon(Icons.save),
-                    label: const Text(
-                      "SAVE SPECIAL FEE ASSIGNMENTS",
-                      style: TextStyle(
+                    label: Text(
+                      _applyToMultiple
+                          ? "APPLY TO SELECTED CLASSES/ARMS"
+                          : "SAVE SPECIAL FEE ASSIGNMENTS",
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),
@@ -1401,7 +1569,32 @@ class _SpecialFeeAssignmentScreenState extends State<SpecialFeeAssignmentScreen>
                 const SizedBox(height: 12),
 
                 // Help text
-                if (_selectedClassId == null)
+                if (_applyToMultiple && _selectedTargets.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline,
+                            size: 18, color: Colors.orange.shade700),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Select at least one class/arm to apply these special fees to',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (!_applyToMultiple && _selectedClassId == null)
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
@@ -1428,6 +1621,153 @@ class _SpecialFeeAssignmentScreenState extends State<SpecialFeeAssignmentScreen>
                   ),
               ],
             ),
+    );
+  }
+
+  // -----------------------------------------------------------
+  // MULTI CLASS/ARM TARGET SELECTOR
+  // -----------------------------------------------------------
+  Widget _buildMultiTargetSelector() {
+    int totalTargets = 0;
+    for (var c in _classes) {
+      final arms = _armsByClass[c['id']] ?? [];
+      totalTargets += arms.isEmpty ? 1 : arms.length;
+    }
+
+    final allSelected = totalTargets > 0 && _selectedTargets.length == totalTargets;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                "Select Classes/Arms",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _classes.isEmpty
+                  ? null
+                  : () {
+                      setState(() {
+                        if (allSelected) {
+                          _selectedTargets.clear();
+                        } else {
+                          _selectedTargets.clear();
+                          for (var c in _classes) {
+                            final classId = c['id'] as int;
+                            final arms = _armsByClass[classId] ?? [];
+                            if (arms.isEmpty) {
+                              _selectedTargets.add('$classId');
+                            } else {
+                              for (var a in arms) {
+                                _selectedTargets.add('$classId:${a['id']}');
+                              }
+                            }
+                          }
+                        }
+                      });
+                    },
+              icon: Icon(allSelected ? Icons.deselect : Icons.select_all, size: 18),
+              label: Text(allSelected ? 'Clear All' : 'Select All'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${_selectedTargets.length} of $totalTargets selected',
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: _classes.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('No classes found'),
+                )
+              : Column(
+                  children: _classes.map((c) => _buildClassTargetGroup(c)).toList(),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildClassTargetGroup(Map<String, dynamic> classData) {
+    final classId = classData['id'] as int;
+    final className = classData['name'] as String? ?? '';
+    final arms = _armsByClass[classId] ?? [];
+
+    if (arms.isEmpty) {
+      final key = '$classId';
+      return CheckboxListTile(
+        dense: true,
+        title: Text(className),
+        value: _selectedTargets.contains(key),
+        onChanged: (val) {
+          setState(() {
+            if (val == true) {
+              _selectedTargets.add(key);
+            } else {
+              _selectedTargets.remove(key);
+            }
+          });
+        },
+      );
+    }
+
+    final armKeys = arms.map((a) => '$classId:${a['id']}').toList();
+    final selectedCount = armKeys.where(_selectedTargets.contains).length;
+    final allArmsSelected = selectedCount == armKeys.length;
+    final someArmsSelected = selectedCount > 0 && !allArmsSelected;
+
+    return ExpansionTile(
+      title: Row(
+        children: [
+          Checkbox(
+            value: allArmsSelected ? true : (someArmsSelected ? null : false),
+            tristate: true,
+            onChanged: (val) {
+              setState(() {
+                if (allArmsSelected) {
+                  _selectedTargets.removeAll(armKeys);
+                } else {
+                  _selectedTargets.addAll(armKeys);
+                }
+              });
+            },
+          ),
+          Expanded(child: Text(className)),
+        ],
+      ),
+      children: arms.map((a) {
+        final armId = a['id'] as int;
+        final armName = a['name'] as String? ?? '';
+        final key = '$classId:$armId';
+        return Padding(
+          padding: const EdgeInsets.only(left: 24),
+          child: CheckboxListTile(
+            dense: true,
+            title: Text(armName),
+            value: _selectedTargets.contains(key),
+            onChanged: (val) {
+              setState(() {
+                if (val == true) {
+                  _selectedTargets.add(key);
+                } else {
+                  _selectedTargets.remove(key);
+                }
+              });
+            },
+          ),
+        );
+      }).toList(),
     );
   }
 }

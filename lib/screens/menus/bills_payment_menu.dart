@@ -44,7 +44,7 @@ class BillsPaymentMenu extends StatelessWidget {
             subtitle: 'Define & assign fees',
             icon: Icons.payments_outlined,
             color: Colors.teal,
-            page: const FeeItemListScreen(),
+            page: FeeItemListScreen(currentUser: currentUser),
             pageId: 'bills_payment/fee_items',
           ),
           _permissionMenuCard(

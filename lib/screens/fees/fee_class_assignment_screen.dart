@@ -15,11 +15,16 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
   List<Map<String, dynamic>> _classes = [];
   List<Map<String, dynamic>> _arms = [];
   List<Map<String, dynamic>> _feeItems = [];
+  Map<int, List<Map<String, dynamic>>> _armsByClass = {};
 
   String? _activeTerm;
   String? _activeSession;
   int? _selectedClassId;
   int? _selectedArmId;
+
+  // Multi class/arm assignment mode
+  bool _applyToMultiple = false;
+  final Set<String> _selectedTargets = {};
 
   final Map<int, TextEditingController> _amountCtrl = {};
   bool _loading = true;
@@ -47,6 +52,15 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
       term: _activeTerm,
       session: _activeSession,
     );
+
+    // Load arms for ALL classes at once (needed for multi class/arm selection)
+    final database = await _db.database;
+    final allArms = await database.query('arms', orderBy: 'classId, name');
+    _armsByClass = {};
+    for (var arm in allArms) {
+      final classId = arm['classId'] as int;
+      _armsByClass.putIfAbsent(classId, () => []).add(arm);
+    }
 
     _amountCtrl.clear();
 
@@ -488,6 +502,189 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
     }
 
     Navigator.pop(context, true);
+  }
+
+  // -----------------------------------------------------------
+  // SAVE TO DATABASE - MULTIPLE CLASS/ARM TARGETS AT ONCE
+  // -----------------------------------------------------------
+  Future<void> _saveMultiAssignments() async {
+    if (_selectedTargets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please select at least one class/arm"),
+        ),
+      );
+      return;
+    }
+
+    final sessionVal = _activeSession ?? "";
+
+    // Build the fee template (feeItemId -> amount) once - shared by every target
+    final feeTemplate = <Map<String, dynamic>>[];
+    for (var item in _feeItems) {
+      final id = item['id'] as int;
+      final ctrl = _amountCtrl[id];
+      if (ctrl != null && ctrl.text.trim().isNotEmpty) {
+        final amount = double.tryParse(ctrl.text.trim()) ?? 0;
+        feeTemplate.add({'feeItemId': id, 'amount': amount});
+      }
+    }
+
+    if (feeTemplate.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please enter at least one fee amount"),
+        ),
+      );
+      return;
+    }
+
+    final targets = _selectedTargets.map((key) {
+      final parts = key.split(':');
+      return {
+        'classId': int.parse(parts[0]),
+        'armId': parts.length > 1 ? int.parse(parts[1]) : null,
+      };
+    }).toList();
+
+    setState(() => _loading = true);
+
+    // Check for custom adjustments across all selected targets
+    int totalCustomAdjustments = 0;
+    for (var t in targets) {
+      totalCustomAdjustments += await _checkForCustomAdjustments(
+        t['classId'] as int,
+        _activeTerm!,
+        sessionVal,
+        feeTemplate,
+        armId: t['armId'],
+      );
+    }
+
+    if (totalCustomAdjustments > 0) {
+      final proceed = await _showMultiOverrideDialog(
+        totalCustomAdjustments,
+        targets.length,
+      );
+
+      if (proceed != true) {
+        if (mounted) setState(() => _loading = false);
+        return;
+      }
+    }
+
+    int classesUpdated = 0;
+    int totalBillsGenerated = 0;
+    final updatedNames = <String>[];
+
+    for (var t in targets) {
+      final classId = t['classId'] as int;
+      final armId = t['armId'];
+
+      final rows = feeTemplate
+          .map((f) => {
+                'classId': classId,
+                'feeItemId': f['feeItemId'],
+                'amount': f['amount'],
+                'term': _activeTerm,
+                'session': sessionVal,
+              })
+          .toList();
+
+      await _db.replaceClassFeesFor(
+        classId,
+        _activeTerm!,
+        sessionVal,
+        rows,
+        armId: armId,
+      );
+
+      final className = _classes.firstWhere(
+        (c) => c['id'] == classId,
+        orElse: () => {'name': 'Unknown'},
+      )['name'];
+
+      final armName = armId != null
+          ? (_armsByClass[classId]
+              ?.firstWhere((a) => a['id'] == armId, orElse: () => {'name': ''})['name'])
+          : null;
+
+      final displayName =
+          (armName != null && armName != '') ? '$className $armName' : className;
+      updatedNames.add(displayName);
+
+      try {
+        totalBillsGenerated += await _autoGenerateBillsForClass(
+          classId,
+          _activeTerm!,
+          sessionVal,
+          rows,
+          armId: armId,
+        );
+      } catch (e) {
+        debugPrint('Bill generation failed for $displayName: $e');
+      }
+
+      classesUpdated++;
+    }
+
+    if (!mounted) return;
+    setState(() => _loading = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Fees saved for $classesUpdated class/arm(s): ${updatedNames.join(", ")}\n'
+          'Bills auto-generated for $totalBillsGenerated student(s)',
+        ),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+
+    Navigator.pop(context, true);
+  }
+
+  // -----------------------------------------------------------
+  // MULTI-SAVE OVERRIDE CONFIRMATION DIALOG
+  // -----------------------------------------------------------
+  Future<bool?> _showMultiOverrideDialog(int affectedCount, int targetCount) {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700, size: 32),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Custom Adjustments Detected',
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          '$affectedCount student(s) across $targetCount selected class/arm(s) have '
+          'custom bill adjustments.\n\n'
+          'Proceeding will override ALL fees for the selected classes/arms with the '
+          'amounts entered above. Custom adjustments will be lost.\n\n'
+          'Do you want to continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('Override All', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 
   // -----------------------------------------------------------
@@ -1239,68 +1436,102 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
 
                 const SizedBox(height: 20),
 
-                // CLASS SELECT
-                const Text(
-                  "Select Class",
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-
-                DropdownButtonFormField<int>(
-                  initialValue: _selectedClassId,
-                  decoration: InputDecoration(
-                    border: const OutlineInputBorder(),
-                    prefixIcon: const Icon(Icons.school),
-                    hintText: 'Choose a class',
-                    filled: true,
-                    fillColor: Colors.grey.shade50,
+                // MULTI CLASS/ARM MODE TOGGLE
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.indigo.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.indigo.shade200),
                   ),
-                  items: _classes
-                      .map((c) => DropdownMenuItem<int>(
-                            value: c['id'],
-                            child: Text(c['name']),
-                          ))
-                      .toList(),
-                  onChanged: _onClassChanged,
+                  child: SwitchListTile(
+                    value: _applyToMultiple,
+                    activeThumbColor: Colors.indigo,
+                    onChanged: (val) {
+                      setState(() {
+                        _applyToMultiple = val;
+                        if (!val) _selectedTargets.clear();
+                      });
+                    },
+                    title: const Text(
+                      'Apply Same Fees to Multiple Classes/Arms',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                    subtitle: const Text(
+                      'Enter the fee amounts once below, then pick every class/arm '
+                      'that should get them - no need to repeat this for each one.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
                 ),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
 
-                // ARM SELECT (shown only if class has arms)
-                if (_selectedClassId != null && _arms.isNotEmpty) ...[
+                if (!_applyToMultiple) ...[
+                  // CLASS SELECT
                   const Text(
-                    "Select Arm",
+                    "Select Class",
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
 
-                  _loadingArms
-                      ? const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(16),
-                            child: CircularProgressIndicator(),
-                          ),
-                        )
-                      : DropdownButtonFormField<int>(
-                          initialValue: _selectedArmId,
-                          decoration: InputDecoration(
-                            border: const OutlineInputBorder(),
-                            prefixIcon: const Icon(Icons.class_),
-                            hintText: 'Choose an arm',
-                            filled: true,
-                            fillColor: Colors.blue.shade50,
-                          ),
-                          items: _arms
-                              .map((a) => DropdownMenuItem<int>(
-                                    value: a['id'],
-                                    child: Text(a['name']),
-                                  ))
-                              .toList(),
-                          onChanged: _onArmChanged,
-                        ),
+                  DropdownButtonFormField<int>(
+                    initialValue: _selectedClassId,
+                    decoration: InputDecoration(
+                      border: const OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.school),
+                      hintText: 'Choose a class',
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                    ),
+                    items: _classes
+                        .map((c) => DropdownMenuItem<int>(
+                              value: c['id'],
+                              child: Text(c['name']),
+                            ))
+                        .toList(),
+                    onChanged: _onClassChanged,
+                  ),
 
-                  const SizedBox(height: 8),
-                ],
+                  const SizedBox(height: 16),
+
+                  // ARM SELECT (shown only if class has arms)
+                  if (_selectedClassId != null && _arms.isNotEmpty) ...[
+                    const Text(
+                      "Select Arm",
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+
+                    _loadingArms
+                        ? const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(16),
+                              child: CircularProgressIndicator(),
+                            ),
+                          )
+                        : DropdownButtonFormField<int>(
+                            initialValue: _selectedArmId,
+                            decoration: InputDecoration(
+                              border: const OutlineInputBorder(),
+                              prefixIcon: const Icon(Icons.class_),
+                              hintText: 'Choose an arm',
+                              filled: true,
+                              fillColor: Colors.blue.shade50,
+                            ),
+                            items: _arms
+                                .map((a) => DropdownMenuItem<int>(
+                                      value: a['id'],
+                                      child: Text(a['name']),
+                                    ))
+                                .toList(),
+                            onChanged: _onArmChanged,
+                          ),
+
+                    const SizedBox(height: 8),
+                  ],
+                ] else
+                  _buildMultiTargetSelector(),
 
                 const SizedBox(height: 24),
 
@@ -1458,11 +1689,15 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: _feeItems.isEmpty ? null : _saveAssignments,
+                    onPressed: _feeItems.isEmpty
+                        ? null
+                        : (_applyToMultiple ? _saveMultiAssignments : _saveAssignments),
                     icon: const Icon(Icons.save),
-                    label: const Text(
-                      "SAVE ASSIGNMENTS",
-                      style: TextStyle(
+                    label: Text(
+                      _applyToMultiple
+                          ? "APPLY TO SELECTED CLASSES/ARMS"
+                          : "SAVE ASSIGNMENTS",
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),
@@ -1479,7 +1714,32 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
                 const SizedBox(height: 12),
 
                 // Help text
-                if (_selectedClassId == null)
+                if (_applyToMultiple && _selectedTargets.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline,
+                            size: 18, color: Colors.orange.shade700),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Select at least one class/arm to apply these fees to',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (!_applyToMultiple && _selectedClassId == null)
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
@@ -1506,6 +1766,153 @@ class _FeeClassAssignmentScreenState extends State<FeeClassAssignmentScreen> {
                   ),
               ],
             ),
+    );
+  }
+
+  // -----------------------------------------------------------
+  // MULTI CLASS/ARM TARGET SELECTOR
+  // -----------------------------------------------------------
+  Widget _buildMultiTargetSelector() {
+    int totalTargets = 0;
+    for (var c in _classes) {
+      final arms = _armsByClass[c['id']] ?? [];
+      totalTargets += arms.isEmpty ? 1 : arms.length;
+    }
+
+    final allSelected = totalTargets > 0 && _selectedTargets.length == totalTargets;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                "Select Classes/Arms",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _classes.isEmpty
+                  ? null
+                  : () {
+                      setState(() {
+                        if (allSelected) {
+                          _selectedTargets.clear();
+                        } else {
+                          _selectedTargets.clear();
+                          for (var c in _classes) {
+                            final classId = c['id'] as int;
+                            final arms = _armsByClass[classId] ?? [];
+                            if (arms.isEmpty) {
+                              _selectedTargets.add('$classId');
+                            } else {
+                              for (var a in arms) {
+                                _selectedTargets.add('$classId:${a['id']}');
+                              }
+                            }
+                          }
+                        }
+                      });
+                    },
+              icon: Icon(allSelected ? Icons.deselect : Icons.select_all, size: 18),
+              label: Text(allSelected ? 'Clear All' : 'Select All'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${_selectedTargets.length} of $totalTargets selected',
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: _classes.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('No classes found'),
+                )
+              : Column(
+                  children: _classes.map((c) => _buildClassTargetGroup(c)).toList(),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildClassTargetGroup(Map<String, dynamic> classData) {
+    final classId = classData['id'] as int;
+    final className = classData['name'] as String? ?? '';
+    final arms = _armsByClass[classId] ?? [];
+
+    if (arms.isEmpty) {
+      final key = '$classId';
+      return CheckboxListTile(
+        dense: true,
+        title: Text(className),
+        value: _selectedTargets.contains(key),
+        onChanged: (val) {
+          setState(() {
+            if (val == true) {
+              _selectedTargets.add(key);
+            } else {
+              _selectedTargets.remove(key);
+            }
+          });
+        },
+      );
+    }
+
+    final armKeys = arms.map((a) => '$classId:${a['id']}').toList();
+    final selectedCount = armKeys.where(_selectedTargets.contains).length;
+    final allArmsSelected = selectedCount == armKeys.length;
+    final someArmsSelected = selectedCount > 0 && !allArmsSelected;
+
+    return ExpansionTile(
+      title: Row(
+        children: [
+          Checkbox(
+            value: allArmsSelected ? true : (someArmsSelected ? null : false),
+            tristate: true,
+            onChanged: (val) {
+              setState(() {
+                if (allArmsSelected) {
+                  _selectedTargets.removeAll(armKeys);
+                } else {
+                  _selectedTargets.addAll(armKeys);
+                }
+              });
+            },
+          ),
+          Expanded(child: Text(className)),
+        ],
+      ),
+      children: arms.map((a) {
+        final armId = a['id'] as int;
+        final armName = a['name'] as String? ?? '';
+        final key = '$classId:$armId';
+        return Padding(
+          padding: const EdgeInsets.only(left: 24),
+          child: CheckboxListTile(
+            dense: true,
+            title: Text(armName),
+            value: _selectedTargets.contains(key),
+            onChanged: (val) {
+              setState(() {
+                if (val == true) {
+                  _selectedTargets.add(key);
+                } else {
+                  _selectedTargets.remove(key);
+                }
+              });
+            },
+          ),
+        );
+      }).toList(),
     );
   }
 }

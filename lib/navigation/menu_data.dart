@@ -267,7 +267,7 @@ class MenuData {
               icon: Icons.list_alt_outlined,
               color: Colors.indigo,
               permissionModule: 'fees_manage',
-              pageBuilder: (_) => const FeeItemListScreen(),
+              pageBuilder: (user) => FeeItemListScreen(currentUser: user),
             ),
             SidebarMenuItem(
               id: 'bills_payment/student_bills',
@@ -329,7 +329,7 @@ class MenuData {
                   icon: Icons.add_box_outlined,
                   color: Colors.deepOrange,
                   permissionModule: 'fee_items_manage',
-                  pageBuilder: (_) => const SpecialFeeItemsScreen(),
+                  pageBuilder: (user) => SpecialFeeItemsScreen(currentUser: user),
                 ),
                 SidebarMenuItem(
                   id: 'bills_payment/new_intake/view_bills',

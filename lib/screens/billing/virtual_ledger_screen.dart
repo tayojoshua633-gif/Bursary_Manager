@@ -566,6 +566,7 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
           for (int i = 1; i <= _maxInstalments; i++)
             DataColumn(label: Text('Payment $i', style: const TextStyle(fontWeight: FontWeight.bold))),
           const DataColumn(label: Text('Total Paid', style: TextStyle(fontWeight: FontWeight.bold))),
+          const DataColumn(label: Text('Outstanding', style: TextStyle(fontWeight: FontWeight.bold))),
           const DataColumn(label: Text('Remark', style: TextStyle(fontWeight: FontWeight.bold))),
         ],
         rows: _ledger.asMap().entries.map((entry) {
@@ -574,6 +575,7 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
 
           final totalBill = (row['totalBill'] as num).toDouble();
           final totalPaid = (row['totalPaid'] as num).toDouble();
+          final outstanding = (row['outstanding'] as num).toDouble();
           final instalments = row['instalments'] as List<Map<String, dynamic>>;
           final remark = row['remark'] as String;
           final isBalanced = remark == 'Balanced';
@@ -615,6 +617,15 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
                 Text(
                   _amountFormat.format(totalPaid),
                   style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w500),
+                ),
+              ),
+              DataCell(
+                Text(
+                  _amountFormat.format(outstanding > 0 ? outstanding : 0),
+                  style: TextStyle(
+                    color: isBalanced ? Colors.grey[600] : Colors.red[700],
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
               DataCell(

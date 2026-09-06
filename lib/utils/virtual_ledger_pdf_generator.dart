@@ -157,8 +157,10 @@ class VirtualLedgerPDFGenerator {
       columnWidths[4 + i] = const pw.FlexColumnWidth(1);
     }
     final totalPaidColIndex = 4 + maxInstalments;
-    final remarkColIndex = totalPaidColIndex + 1;
+    final outstandingColIndex = totalPaidColIndex + 1;
+    final remarkColIndex = outstandingColIndex + 1;
     columnWidths[totalPaidColIndex] = const pw.FixedColumnWidth(50);
+    columnWidths[outstandingColIndex] = const pw.FixedColumnWidth(50);
     columnWidths[remarkColIndex] = const pw.FixedColumnWidth(48);
 
     return pw.Table(
@@ -174,6 +176,7 @@ class VirtualLedgerPDFGenerator {
             _buildTableHeader('Total Bill'),
             for (int i = 1; i <= maxInstalments; i++) _buildTableHeader('P$i'),
             _buildTableHeader('Total Paid'),
+            _buildTableHeader('Outstanding'),
             _buildTableHeader('Remark'),
           ],
         ),
@@ -183,6 +186,7 @@ class VirtualLedgerPDFGenerator {
 
           final totalBill = (row['totalBill'] as num).toDouble();
           final totalPaid = (row['totalPaid'] as num).toDouble();
+          final outstanding = (row['outstanding'] as num).toDouble();
           final instalments = row['instalments'] as List<Map<String, dynamic>>;
           final remark = row['remark'] as String;
           final isBalanced = remark == 'Balanced';
@@ -207,6 +211,10 @@ class VirtualLedgerPDFGenerator {
                     ? _buildInstalmentCell(instalments[i], formatter, dateFormat)
                     : _buildTableCell('-'),
               _buildTableCell(formatter.format(totalPaid), textColor: PdfColors.green800),
+              _buildTableCell(
+                formatter.format(outstanding > 0 ? outstanding : 0),
+                textColor: isBalanced ? PdfColors.grey700 : PdfColors.red800,
+              ),
               _buildTableCell(
                 remark,
                 textColor: isBalanced ? PdfColors.green800 : PdfColors.red800,
