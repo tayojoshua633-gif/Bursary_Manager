@@ -387,7 +387,7 @@ class _LicenseActivationScreenState extends State<LicenseActivationScreen> {
                     controller: _licenseKeyController,
                     decoration: InputDecoration(
                       labelText: 'License Key',
-                      hintText: 'XXXXX-XXXXX-XXXXX-XXXXX',
+                      hintText: 'LIC1.eyJ...',
                       prefixIcon: const Icon(Icons.vpn_key),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
