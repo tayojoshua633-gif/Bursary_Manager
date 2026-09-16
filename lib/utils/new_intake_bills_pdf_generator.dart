@@ -2,8 +2,10 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'new_intake_bills_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class NewIntakeBillsPDFGenerator {
   static Future<String> generateNewIntakeBillPDF({
@@ -18,7 +20,32 @@ class NewIntakeBillsPDFGenerator {
     required Map<String, dynamic> schoolProfile,
     String title = 'NEW INTAKE BILL',
     String filePrefix = 'NewIntakeBill',
+    bool saveToDownloads = true,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final classLabel = className.replaceAll(' ', '_');
+    final baseName = '${filePrefix}_${classLabel}_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = await NewIntakeBillsHtmlGenerator.build(
+        regularFees: regularFees,
+        groupedCategories: groupedCategories,
+        standaloneItems: standaloneItems,
+        grandTotal: grandTotal,
+        term: term,
+        session: session,
+        className: className,
+        armName: armName,
+        schoolProfile: schoolProfile,
+        title: title,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdfBytes = await generateNewIntakeBillPDFBytes(
       regularFees: regularFees,
       groupedCategories: groupedCategories,
@@ -32,23 +59,8 @@ class NewIntakeBillsPDFGenerator {
       title: title,
     );
 
-    // Save to file in Download folder
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final classLabel = className.replaceAll(' ', '_');
-    final fileName = '${filePrefix}_${classLabel}_$timestamp.pdf';
-
-    String filePath;
-    if (Platform.isAndroid) {
-      filePath = '/storage/emulated/0/Download/$fileName';
-    } else if (Platform.isIOS) {
-      final output = await getApplicationDocumentsDirectory();
-      filePath = '${output.path}/$fileName';
-    } else {
-      final output = await getApplicationDocumentsDirectory();
-      filePath = '${output.path}/$fileName';
-    }
-
-    final file = File(filePath);
+    final output = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${output.path}/$baseName.pdf');
     await file.writeAsBytes(pdfBytes);
 
     return file.path;

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
@@ -9,6 +8,7 @@ import '../../utils/thermal_printer_manager.dart';
 import '../../utils/usb_printer_manager.dart';
 import '../../utils/print_counter_helper.dart';
 import '../../utils/custom_report_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../utils/navigation_helper.dart';
 import '../../screens/settings/thermal_printer_screen.dart';
 import '../../screens/settings/usb_printer_screen.dart';
@@ -475,17 +475,12 @@ class CustomReportScreenState extends State<CustomReportScreen>
       return;
     }
 
-    try {
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(child: CircularProgressIndicator()),
-      );
-
-      await Future.delayed(const Duration(milliseconds: 100));
-
-      final filePath = await CustomReportPDFGenerator.generateCustomReportPDF(
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Custom Report - $_rangeLabel',
+      shareText: 'Custom financial report for $_rangeLabel',
+      successMessage: 'Custom report PDF exported successfully!',
+      generate: ({required saveToDownloads}) => CustomReportPDFGenerator.generateCustomReportPDF(
         startDate: _startDate,
         endDate: _endDate,
         term: activeTerm,
@@ -514,36 +509,33 @@ class CustomReportScreenState extends State<CustomReportScreen>
         includeExpenses: _showExpenses,
         includeStockAndSales: _showStockSales,
         reportTabLabel: _tabLabels[_reportTab],
-      );
-
-      if (!mounted) return;
-      Navigator.pop(context);
-
-      await Share.shareXFiles(
-        [XFile(filePath)],
-        subject: 'Custom Report - $_rangeLabel',
-        text: 'Custom financial report for $_rangeLabel',
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Custom report PDF exported successfully!')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error exporting PDF: $e')),
-      );
-    }
+        saveToDownloads: saveToDownloads,
+      ),
+    );
   }
 
   // -----------------------------------------------------------
   // UI
   // -----------------------------------------------------------
+  //
+  // NOTE: this screen uses CustomScrollView + slivers instead of a single
+  // SingleChildScrollView(Column(...)). The payments/expenses/sales/stock/
+  // debtors lists were previously built with `.map()` spread directly into
+  // a Column, which is eager — for a large date range (thousands of
+  // records) that built a full Card/ListTile/Table-row widget subtree for
+  // every record at once, regardless of what was visible on screen. That
+  // was a major memory sink (on top of the app's own data + PDF export),
+  // and was the real driver behind out-of-memory crashes on the "Full
+  // Report" tab, which shows every one of these lists at once. SliverList
+  // (via .builder) only builds the rows actually near the viewport, same as
+  // ListView.builder, so viewing a large report no longer holds thousands
+  // of widgets in memory simultaneously.
   @override
   Widget build(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
+    final filteredPayments = _filteredPayments;
+    final paymentCategories = _paymentCategories;
+
     return Scaffold(
       appBar: AppBar(
         title: Text("Custom Report - $_rangeLabel"),
@@ -551,802 +543,687 @@ class CustomReportScreenState extends State<CustomReportScreen>
       ),
       body: loading
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
+          : CustomScrollView(
               physics: const ClampingScrollPhysics(),
-              child: Padding(
-                padding: EdgeInsets.all(ds.cardPadding),
-                child: Column(
-                  children: [
-                    // Preset selector row
-                    Row(
-                      children: [
-                        Expanded(child: _presetButton('week', 'This Week', Icons.view_week)),
-                        SizedBox(width: ds.cardPadding * 0.5),
-                        Expanded(child: _presetButton('month', 'This Month', Icons.calendar_view_month)),
-                        SizedBox(width: ds.cardPadding * 0.5),
-                        Expanded(child: _presetButton('custom', 'Custom Range', Icons.date_range)),
-                      ],
-                    ),
-
-                    SizedBox(height: ds.cardPadding * 0.75),
-
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-                      decoration: BoxDecoration(
-                        color: Colors.teal.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.teal.shade200),
-                      ),
-                      child: Row(
+              slivers: [
+                // ---- Controls, tabs, summary cards, payment section header ----
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(ds.cardPadding, ds.cardPadding, ds.cardPadding, 0),
+                  sliver: SliverList.list(
+                    children: [
+                      // Preset selector row
+                      Row(
                         children: [
-                          Icon(Icons.event_note, color: Colors.teal.shade700, size: 18),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Period: $_rangeLabel',
-                            style: TextStyle(
-                              fontSize: ds.bodyFontSize * 0.9,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.teal.shade800,
-                            ),
-                          ),
+                          Expanded(child: _presetButton('week', 'This Week', Icons.view_week)),
+                          SizedBox(width: ds.cardPadding * 0.5),
+                          Expanded(child: _presetButton('month', 'This Month', Icons.calendar_view_month)),
+                          SizedBox(width: ds.cardPadding * 0.5),
+                          Expanded(child: _presetButton('custom', 'Custom Range', Icons.date_range)),
                         ],
                       ),
-                    ),
 
-                    SizedBox(height: ds.cardPadding * 0.75),
+                      SizedBox(height: ds.cardPadding * 0.75),
 
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: paymentDetails.isNotEmpty ||
-                                   expenseDetails.isNotEmpty ||
-                                   stockSummary.isNotEmpty ||
-                                   salesDetails.isNotEmpty ||
-                                   salesDebtors.isNotEmpty
-                            ? _exportCustomReportPDF
-                            : null,
-                        icon: Icon(Icons.picture_as_pdf, size: ds.iconSize),
-                        label: Text(
-                          'Export PDF',
-                          style: TextStyle(fontSize: ds.bodyFontSize, fontWeight: FontWeight.bold),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red.shade700,
-                          foregroundColor: Colors.white,
-                          padding: EdgeInsets.symmetric(vertical: ds.cardPadding),
-                          elevation: 3,
-                        ),
-                      ),
-                    ),
-
-                    SizedBox(height: ds.cardPadding * 0.75),
-
-                    // REPORT VIEW TABS
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.teal.shade50,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.teal.shade200),
-                      ),
-                      child: TabBar(
-                        controller: _tabController,
-                        isScrollable: true,
-                        tabAlignment: TabAlignment.start,
-                        indicatorColor: Colors.teal.shade700,
-                        indicatorSize: TabBarIndicatorSize.tab,
-                        labelColor: Colors.white,
-                        unselectedLabelColor: Colors.teal.shade700,
-                        labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                        unselectedLabelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                        indicator: BoxDecoration(
-                          color: Colors.teal.shade700,
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade50,
                           borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.teal.shade200),
                         ),
-                        tabs: _tabLabels.map((label) => Tab(text: label)).toList(),
-                      ),
-                    ),
-
-                    SizedBox(height: ds.cardPadding * 1.25),
-
-                    // INCOME SUMMARY
-                    if (_showIncome) Card(
-                      elevation: 4,
-                      color: Colors.green.shade50,
-                      child: Padding(
-                        padding: const EdgeInsets.all(18),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        child: Row(
                           children: [
-                            Row(
-                              children: [
-                                Icon(Icons.attach_money, color: Colors.green.shade700, size: 28),
-                                const SizedBox(width: 8),
-                                const Text(
-                                  'INCOME SUMMARY (SCHOOL FEES & OFFICE SALES)',
-                                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                            const Divider(height: 20),
-                            _row("Cash Received (School Fees)", "N ${NumberFormat('#,##0.00').format(cashTotal)}"),
-                            const SizedBox(height: 5),
-                            _row("Cash Received (Office Sales)", "N ${NumberFormat('#,##0.00').format(salesCashTotal)}"),
-                            const SizedBox(height: 10),
-                            _row("POS Received (School Fees)", "N ${NumberFormat('#,##0.00').format(posTotal)}"),
-                            const SizedBox(height: 5),
-                            _row("POS Received (Office Sales)", "N ${NumberFormat('#,##0.00').format(salesPosTotal)}"),
-                            const SizedBox(height: 10),
-                            _row("Transfer Received (School Fees)", "N ${NumberFormat('#,##0.00').format(transferTotal)}"),
-                            const SizedBox(height: 5),
-                            _row("Transfer Received (Office Sales)", "N ${NumberFormat('#,##0.00').format(salesTransferTotal)}"),
-                            const Divider(height: 25),
-                            _row(
-                              "TOTAL INCOME",
-                              "N ${NumberFormat('#,##0.00').format(totalIncome + totalSales)}",
-                              bold: true,
-                              color: Colors.green.shade800,
+                            Icon(Icons.event_note, color: Colors.teal.shade700, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Period: $_rangeLabel',
+                              style: TextStyle(
+                                fontSize: ds.bodyFontSize * 0.9,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.teal.shade800,
+                              ),
                             ),
                           ],
                         ),
                       ),
-                    ),
 
-                    const SizedBox(height: 20),
+                      SizedBox(height: ds.cardPadding * 0.75),
 
-                    // EXPENSES SUMMARY
-                    if (_showExpenses) Card(
-                      elevation: 4,
-                      color: Colors.orange.shade50,
-                      child: Padding(
-                        padding: const EdgeInsets.all(18),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(Icons.receipt_long, color: Colors.orange.shade800, size: 28),
-                                const SizedBox(width: 8),
-                                const Text(
-                                  'EXPENSES SUMMARY',
-                                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                            const Divider(height: 20),
-                            _row("Cash Paid", "N ${NumberFormat('#,##0.00').format(expenseCashTotal)}"),
-                            const SizedBox(height: 10),
-                            _row("POS Paid", "N ${NumberFormat('#,##0.00').format(expensePosTotal)}"),
-                            const SizedBox(height: 10),
-                            _row("Transfers Paid", "N ${NumberFormat('#,##0.00').format(expenseTransferTotal)}"),
-                            const Divider(height: 25),
-                            _row(
-                              "TOTAL EXPENSES",
-                              "N ${NumberFormat('#,##0.00').format(totalExpenses)}",
-                              bold: true,
-                              color: Colors.red.shade800,
-                            ),
-                          ],
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: paymentDetails.isNotEmpty ||
+                                     expenseDetails.isNotEmpty ||
+                                     stockSummary.isNotEmpty ||
+                                     salesDetails.isNotEmpty ||
+                                     salesDebtors.isNotEmpty
+                              ? _exportCustomReportPDF
+                              : null,
+                          icon: Icon(Icons.picture_as_pdf, size: ds.iconSize),
+                          label: Text(
+                            'Export PDF',
+                            style: TextStyle(fontSize: ds.bodyFontSize, fontWeight: FontWeight.bold),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red.shade700,
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.symmetric(vertical: ds.cardPadding),
+                            elevation: 3,
+                          ),
                         ),
                       ),
-                    ),
 
-                    const SizedBox(height: 20),
+                      SizedBox(height: ds.cardPadding * 0.75),
 
-                    // NET INCOME
-                    if (_showIncome && _showExpenses) Card(
-                      elevation: 5,
-                      color: Colors.blue.shade50,
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Builder(
-                          builder: (context) {
-                            final netCash = (cashTotal + salesCashTotal) - expenseCashTotal;
-                            final netPos = (posTotal + salesPosTotal) - expensePosTotal;
-                            final netTransfer = (transferTotal + salesTransferTotal) - expenseTransferTotal;
-                            final netIncome = (totalIncome + totalSales) - totalExpenses;
+                      // REPORT VIEW TABS
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.teal.shade200),
+                        ),
+                        child: TabBar(
+                          controller: _tabController,
+                          isScrollable: true,
+                          tabAlignment: TabAlignment.start,
+                          indicatorColor: Colors.teal.shade700,
+                          indicatorSize: TabBarIndicatorSize.tab,
+                          labelColor: Colors.white,
+                          unselectedLabelColor: Colors.teal.shade700,
+                          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          unselectedLabelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                          indicator: BoxDecoration(
+                            color: Colors.teal.shade700,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          tabs: _tabLabels.map((label) => Tab(text: label)).toList(),
+                        ),
+                      ),
 
-                            return Column(
+                      SizedBox(height: ds.cardPadding * 1.25),
+
+                      // INCOME SUMMARY
+                      if (_showIncome) ...[
+                        Card(
+                          elevation: 4,
+                          color: Colors.green.shade50,
+                          child: Padding(
+                            padding: const EdgeInsets.all(18),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(
                                   children: [
-                                    Icon(
-                                      netIncome >= 0 ? Icons.trending_up : Icons.trending_down,
-                                      color: netIncome >= 0 ? Colors.green.shade700 : Colors.red.shade700,
-                                      size: 28,
-                                    ),
+                                    Icon(Icons.attach_money, color: Colors.green.shade700, size: 28),
                                     const SizedBox(width: 8),
-                                    const Expanded(
-                                      child: Text(
-                                        'NET INCOME',
-                                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                                      ),
+                                    const Text(
+                                      'INCOME SUMMARY (SCHOOL FEES & OFFICE SALES)',
+                                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                                     ),
                                   ],
                                 ),
                                 const Divider(height: 20),
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.blue.shade200),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                _row("Cash Received (School Fees)", "N ${NumberFormat('#,##0.00').format(cashTotal)}"),
+                                const SizedBox(height: 5),
+                                _row("Cash Received (Office Sales)", "N ${NumberFormat('#,##0.00').format(salesCashTotal)}"),
+                                const SizedBox(height: 10),
+                                _row("POS Received (School Fees)", "N ${NumberFormat('#,##0.00').format(posTotal)}"),
+                                const SizedBox(height: 5),
+                                _row("POS Received (Office Sales)", "N ${NumberFormat('#,##0.00').format(salesPosTotal)}"),
+                                const SizedBox(height: 10),
+                                _row("Transfer Received (School Fees)", "N ${NumberFormat('#,##0.00').format(transferTotal)}"),
+                                const SizedBox(height: 5),
+                                _row("Transfer Received (Office Sales)", "N ${NumberFormat('#,##0.00').format(salesTransferTotal)}"),
+                                const Divider(height: 25),
+                                _row(
+                                  "TOTAL INCOME",
+                                  "N ${NumberFormat('#,##0.00').format(totalIncome + totalSales)}",
+                                  bold: true,
+                                  color: Colors.green.shade800,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+
+                      // EXPENSES SUMMARY
+                      if (_showExpenses) ...[
+                        Card(
+                          elevation: 4,
+                          color: Colors.orange.shade50,
+                          child: Padding(
+                            padding: const EdgeInsets.all(18),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.receipt_long, color: Colors.orange.shade800, size: 28),
+                                    const SizedBox(width: 8),
+                                    const Text(
+                                      'EXPENSES SUMMARY',
+                                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                                const Divider(height: 20),
+                                _row("Cash Paid", "N ${NumberFormat('#,##0.00').format(expenseCashTotal)}"),
+                                const SizedBox(height: 10),
+                                _row("POS Paid", "N ${NumberFormat('#,##0.00').format(expensePosTotal)}"),
+                                const SizedBox(height: 10),
+                                _row("Transfers Paid", "N ${NumberFormat('#,##0.00').format(expenseTransferTotal)}"),
+                                const Divider(height: 25),
+                                _row(
+                                  "TOTAL EXPENSES",
+                                  "N ${NumberFormat('#,##0.00').format(totalExpenses)}",
+                                  bold: true,
+                                  color: Colors.red.shade800,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+
+                      // NET INCOME
+                      if (_showIncome && _showExpenses) Card(
+                        elevation: 5,
+                        color: Colors.blue.shade50,
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Builder(
+                            builder: (context) {
+                              final netCash = (cashTotal + salesCashTotal) - expenseCashTotal;
+                              final netPos = (posTotal + salesPosTotal) - expensePosTotal;
+                              final netTransfer = (transferTotal + salesTransferTotal) - expenseTransferTotal;
+                              final netIncome = (totalIncome + totalSales) - totalExpenses;
+
+                              return Column(
+                                children: [
+                                  Row(
                                     children: [
+                                      Icon(
+                                        netIncome >= 0 ? Icons.trending_up : Icons.trending_down,
+                                        color: netIncome >= 0 ? Colors.green.shade700 : Colors.red.shade700,
+                                        size: 28,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Expanded(
+                                        child: Text(
+                                          'NET INCOME',
+                                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Divider(height: 20),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.blue.shade200),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Breakdown',
+                                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.blue.shade700),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        _netBreakdownRow('Total Cash at Hand', '(Cash Income - Cash Expenses)', netCash),
+                                        const SizedBox(height: 10),
+                                        _netBreakdownRow('Total POS', '(POS Income - POS Expenses)', netPos),
+                                        const SizedBox(height: 10),
+                                        _netBreakdownRow('Total Transfer', '(Transfer Income - Transfer Expenses)', netTransfer),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 15),
+                                  const Divider(height: 1),
+                                  const SizedBox(height: 15),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      const Text('NET INCOME', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                                       Text(
-                                        'Breakdown',
-                                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.blue.shade700),
+                                        'N ${NumberFormat('#,##0.00').format(netIncome)}',
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.bold,
+                                          color: netIncome >= 0 ? Colors.green.shade800 : Colors.red.shade800,
+                                        ),
                                       ),
-                                      const SizedBox(height: 10),
-                                      _netBreakdownRow('Total Cash at Hand', '(Cash Income - Cash Expenses)', netCash),
-                                      const SizedBox(height: 10),
-                                      _netBreakdownRow('Total POS', '(POS Income - POS Expenses)', netPos),
-                                      const SizedBox(height: 10),
-                                      _netBreakdownRow('Total Transfer', '(Transfer Income - Transfer Expenses)', netTransfer),
                                     ],
                                   ),
-                                ),
-                                const SizedBox(height: 15),
-                                const Divider(height: 1),
-                                const SizedBox(height: 15),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text('NET INCOME', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                    Text(
-                                      'N ${NumberFormat('#,##0.00').format(netIncome)}',
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+
+                      if (_showPayments) ...[
+                        const SizedBox(height: 30),
+
+                        // SCHOOL FEES PAYMENT DETAILS Section Header
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade700,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.people, color: Colors.white, size: 24),
+                              const SizedBox(width: 8),
+                              Text(
+                                "SCHOOL FEES PAYMENT DETAILS (${paymentDetails.length})",
+                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 10),
+
+                        if (paymentDetails.isEmpty)
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(32),
+                              child: Column(
+                                children: [
+                                  Icon(Icons.receipt_long, size: 64, color: Colors.grey.shade400),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    "No payments recorded for this period",
+                                    style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else ...[
+                          SizedBox(
+                            height: 40,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: paymentCategories.length,
+                              separatorBuilder: (_, _) => const SizedBox(width: 8),
+                              itemBuilder: (_, i) {
+                                final label = paymentCategories[i];
+                                final count = i == 0
+                                    ? paymentDetails.length
+                                    : paymentDetails
+                                        .where((p) => (p['paymentFor'] ?? 'School Fees') == label)
+                                        .length;
+                                final selected = _paymentTabIndex == i;
+                                return GestureDetector(
+                                  onTap: () => setState(() => _paymentTabIndex = i),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 200),
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: selected ? Colors.green.shade700 : Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: selected ? Colors.green.shade700 : Colors.grey.shade300,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      '$label ($count)',
                                       style: TextStyle(
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.bold,
-                                        color: netIncome >= 0 ? Colors.green.shade800 : Colors.red.shade800,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: selected ? Colors.white : Colors.grey.shade700,
                                       ),
                                     ),
-                                  ],
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-
-                    if (_showPayments) ...[
-
-                    const SizedBox(height: 30),
-
-                    // SCHOOL FEES PAYMENT DETAILS Section Header
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.green.shade700,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.people, color: Colors.white, size: 24),
-                          const SizedBox(width: 8),
-                          Text(
-                            "SCHOOL FEES PAYMENT DETAILS (${paymentDetails.length})",
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    if (paymentDetails.isEmpty)
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(32),
-                          child: Column(
-                            children: [
-                              Icon(Icons.receipt_long, size: 64, color: Colors.grey.shade400),
-                              const SizedBox(height: 16),
-                              Text(
-                                "No payments recorded for this period",
-                                style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    else ...[
-                      SizedBox(
-                        height: 40,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _paymentCategories.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 8),
-                          itemBuilder: (_, i) {
-                            final cats = _paymentCategories;
-                            final label = cats[i];
-                            final count = i == 0
-                                ? paymentDetails.length
-                                : paymentDetails
-                                    .where((p) => (p['paymentFor'] ?? 'School Fees') == label)
-                                    .length;
-                            final selected = _paymentTabIndex == i;
-                            return GestureDetector(
-                              onTap: () => setState(() => _paymentTabIndex = i),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 200),
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: selected ? Colors.green.shade700 : Colors.grey.shade100,
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: selected ? Colors.green.shade700 : Colors.grey.shade300,
                                   ),
-                                ),
-                                child: Text(
-                                  '$label ($count)',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: selected ? Colors.white : Colors.grey.shade700,
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-
-                      const SizedBox(height: 10),
-
-                      // Payment method filter tabs (All, Cash, Transfer, POS)
-                      SizedBox(
-                        height: 40,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _methodCategories.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 8),
-                          itemBuilder: (_, i) {
-                            final label = _methodCategories[i];
-                            final selected = _methodTabIndex == i;
-                            return GestureDetector(
-                              onTap: () => setState(() => _methodTabIndex = i),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 200),
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: selected ? Colors.indigo.shade700 : Colors.grey.shade100,
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: selected ? Colors.indigo.shade700 : Colors.grey.shade300,
-                                  ),
-                                ),
-                                child: Text(
-                                  label,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: selected ? Colors.white : Colors.grey.shade700,
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-
-                      const SizedBox(height: 10),
-
-                      ..._filteredPayments.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final payment = entry.value;
-                        final amount = payment['amount'] as num;
-
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          child: ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: payment['method'] == 'CASH'
-                                  ? Colors.green
-                                  : payment['method'] == 'POS'
-                                      ? Colors.blue
-                                      : Colors.orange,
-                              child: Text(
-                                '${index + 1}',
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                              ),
+                                );
+                              },
                             ),
-                            title: Text(
-                              payment['studentName'],
-                              style: const TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('${payment['className']} - ${payment['armName']}'),
-                                Row(
-                                  children: [
-                                    Container(
-                                      margin: const EdgeInsets.only(top: 3, right: 6),
-                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: Colors.green.shade50,
-                                        borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(color: Colors.green.shade200),
-                                      ),
-                                      child: Text(
-                                        payment['paymentFor'] ?? 'School Fees',
-                                        style: TextStyle(fontSize: 11, color: Colors.green.shade700),
+                          ),
+
+                          const SizedBox(height: 10),
+
+                          // Payment method filter tabs (All, Cash, Transfer, POS)
+                          SizedBox(
+                            height: 40,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: _methodCategories.length,
+                              separatorBuilder: (_, _) => const SizedBox(width: 8),
+                              itemBuilder: (_, i) {
+                                final label = _methodCategories[i];
+                                final selected = _methodTabIndex == i;
+                                return GestureDetector(
+                                  onTap: () => setState(() => _methodTabIndex = i),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 200),
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: selected ? Colors.indigo.shade700 : Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: selected ? Colors.indigo.shade700 : Colors.grey.shade300,
                                       ),
                                     ),
-                                    Text(
-                                      '${payment['method']} • N ${NumberFormat('#,##0.00').format(amount)}',
-                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey.shade700),
+                                    child: Text(
+                                      label,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: selected ? Colors.white : Colors.grey.shade700,
+                                      ),
                                     ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.print),
-                              tooltip: 'Re-print Receipt',
-                              onPressed: () => _showReceiptPrintOptions(payment),
-                            ),
-                            isThreeLine: true,
-                          ),
-                        );
-                      }),
-
-                      _buildTabPaymentBreakdown(_filteredPayments),
-                    ],
-
-                    ], // end _showPayments
-
-                    // SALES SUMMARY
-                    if (_showStockSales && salesDetails.isNotEmpty) ...[
-                      Card(
-                        elevation: 4,
-                        color: Colors.teal.shade50,
-                        child: Padding(
-                          padding: const EdgeInsets.all(18),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.shopping_cart, color: Colors.teal.shade700, size: 24),
-                                  const SizedBox(width: 8),
-                                  const Text('SALES SUMMARY', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                              const Divider(height: 20),
-                              const SizedBox(height: 10),
-                              Table(
-                                border: TableBorder.all(color: Colors.teal.shade300, width: 1),
-                                columnWidths: const {
-                                  0: FlexColumnWidth(1),
-                                  1: FlexColumnWidth(3),
-                                  2: FlexColumnWidth(1.5),
-                                  3: FlexColumnWidth(2),
-                                  4: FlexColumnWidth(2),
-                                  5: FlexColumnWidth(2.5),
-                                },
-                                children: [
-                                  TableRow(
-                                    decoration: BoxDecoration(color: Colors.teal.shade200),
-                                    children: [
-                                      _tableCell('S/N', isHeader: true),
-                                      _tableCell('Item(s) Sold', isHeader: true),
-                                      _tableCell('Qty', isHeader: true),
-                                      _tableCell('Payment Status', isHeader: true),
-                                      _tableCell('Amount Paid', isHeader: true),
-                                      _tableCell('Buyer Details', isHeader: true),
-                                    ],
                                   ),
-                                  ...salesDetails.asMap().entries.map((entry) {
-                                    final index = entry.key;
-                                    final sale = entry.value;
-                                    final items = sale['items'] as List<Map<String, dynamic>>;
-                                    final itemsText = items.map((item) {
-                                      final isCustom = item['isCustomItem'] == true;
-                                      return isCustom
-                                          ? '${item['itemName']} [Custom] (x${item['quantity']})'
-                                          : '${item['itemName']} (x${item['quantity']})';
-                                    }).join(', ');
-                                    final totalPaid = (sale['totalPaid'] as num).toDouble();
-                                    final totalAmount = (sale['totalAmount'] as num).toDouble();
-                                    final outstanding = totalAmount - totalPaid;
-
-                                    String paymentStatus;
-                                    if (outstanding <= 0) {
-                                      paymentStatus = 'Paid';
-                                    } else if (totalPaid > 0) {
-                                      paymentStatus = 'Part Payment';
-                                    } else {
-                                      paymentStatus = 'Unpaid';
-                                    }
-
-                                    return TableRow(
-                                      children: [
-                                        _tableCell('${index + 1}'),
-                                        _tableCell(itemsText),
-                                        _tableCell('${sale['totalQtySold']}', align: TextAlign.center),
-                                        _tableCell(paymentStatus, align: TextAlign.center),
-                                        _tableCell('N ${NumberFormat('#,##0.00').format(totalPaid)}', align: TextAlign.right),
-                                        _tableCell('${sale['buyerName']} (${sale['buyerType']})'),
-                                      ],
-                                    );
-                                  }),
-                                ],
-                              ),
-                            ],
+                                );
+                              },
+                            ),
                           ),
-                        ),
-                      ),
-                      const SizedBox(height: 30),
-                    ],
 
-                    // EXPENSES DETAILS Section Header
-                    if (_showExpenses) ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade700,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.receipt, color: Colors.white, size: 24),
-                          const SizedBox(width: 8),
-                          Text(
-                            "EXPENSES DETAILS (${expenseDetails.length})",
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
+                          const SizedBox(height: 10),
                         ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    if (expenseDetails.isEmpty)
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            children: [
-                              Icon(Icons.check_circle, size: 48, color: Colors.green.shade400),
-                              const SizedBox(height: 8),
-                              Text(
-                                "No expenses recorded for this period",
-                                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    else
-                      ...expenseDetails.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final expense = entry.value;
-                        final amount = expense['amount'] as num;
-
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          child: ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: expense['method'] == 'CASH'
-                                  ? Colors.red.shade300
-                                  : expense['method'] == 'POS'
-                                      ? Colors.orange.shade300
-                                      : Colors.brown.shade300,
-                              child: Text(
-                                '${index + 1}',
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                            title: Text(
-                              expense['description'],
-                              style: const TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('${expense['category']} • ${expense['recipient']}'),
-                                Text(
-                                  '${expense['method']} • N ${NumberFormat('#,##0.00').format(amount)}',
-                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.red.shade700),
-                                ),
-                              ],
-                            ),
-                            isThreeLine: true,
-                          ),
-                        );
-                      }),
-
-                    ], // end _showExpenses
-
-                    // STOCK & SALES REPORT SECTION
-                    if (_showStockSales) ...[
-
-                    const SizedBox(height: 40),
-
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Colors.brown.shade700, Colors.brown.shade500],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.inventory_2, color: Colors.white, size: 24),
-                          const SizedBox(width: 8),
-                          const Text(
-                            "STOCK & SALES REPORT",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    if (stockSummary.isNotEmpty) ...[
-                      Card(
-                        elevation: 4,
-                        color: Colors.brown.shade50,
-                        child: Padding(
-                          padding: const EdgeInsets.all(18),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.inventory, color: Colors.brown.shade700, size: 24),
-                                  const SizedBox(width: 8),
-                                  const Text('STOCK SUMMARY', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                              const Divider(height: 20),
-                              const SizedBox(height: 10),
-                              Table(
-                                border: TableBorder.all(color: Colors.brown.shade300, width: 1),
-                                columnWidths: const {
-                                  0: FlexColumnWidth(1),
-                                  1: FlexColumnWidth(3),
-                                  2: FlexColumnWidth(2),
-                                  3: FlexColumnWidth(2),
-                                  4: FlexColumnWidth(2),
-                                },
-                                children: [
-                                  TableRow(
-                                    decoration: BoxDecoration(color: Colors.brown.shade200),
-                                    children: [
-                                      _tableCell('S/N', isHeader: true),
-                                      _tableCell('Item Name', isHeader: true),
-                                      _tableCell('Total in Stock', isHeader: true),
-                                      _tableCell('Qty Sold', isHeader: true),
-                                      _tableCell('Qty Remain', isHeader: true),
-                                    ],
-                                  ),
-                                  ...stockSummary.asMap().entries.map((entry) {
-                                    final index = entry.key;
-                                    final item = entry.value;
-                                    return TableRow(
-                                      children: [
-                                        _tableCell('${index + 1}'),
-                                        _tableCell(item['itemName']),
-                                        _tableCell('${item['beginningQuantity']}', align: TextAlign.center),
-                                        _tableCell('${item['qtySold']}', align: TextAlign.center),
-                                        _tableCell('${item['remainingQuantity']}', align: TextAlign.center),
-                                      ],
-                                    );
-                                  }),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
+                      ],
                     ],
-
-                    if (salesDebtors.isNotEmpty) ...[
-                      Card(
-                        elevation: 4,
-                        color: Colors.red.shade50,
-                        child: Padding(
-                          padding: const EdgeInsets.all(18),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.account_balance_wallet, color: Colors.red.shade700, size: 24),
-                                  const SizedBox(width: 8),
-                                  const Text('SALES DEBTORS', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                              const Divider(height: 20),
-                              const SizedBox(height: 10),
-                              Table(
-                                border: TableBorder.all(color: Colors.red.shade300, width: 1),
-                                columnWidths: const {
-                                  0: FlexColumnWidth(1),
-                                  1: FlexColumnWidth(2.5),
-                                  2: FlexColumnWidth(3),
-                                  3: FlexColumnWidth(2),
-                                  4: FlexColumnWidth(2),
-                                  5: FlexColumnWidth(2),
-                                },
-                                children: [
-                                  TableRow(
-                                    decoration: BoxDecoration(color: Colors.red.shade200),
-                                    children: [
-                                      _tableCell('S/N', isHeader: true),
-                                      _tableCell('Name of Debtor', isHeader: true),
-                                      _tableCell('Item(s) Purchased', isHeader: true),
-                                      _tableCell('Total Amount', isHeader: true),
-                                      _tableCell('Total Paid', isHeader: true),
-                                      _tableCell('Outstanding', isHeader: true),
-                                    ],
-                                  ),
-                                  ...salesDebtors.asMap().entries.map((entry) {
-                                    final index = entry.key;
-                                    final debtor = entry.value;
-                                    return TableRow(
-                                      children: [
-                                        _tableCell('${index + 1}'),
-                                        _tableCell('${debtor['buyerName']} (${debtor['buyerType']})'),
-                                        _tableCell(debtor['itemsPurchased']),
-                                        _tableCell('N ${NumberFormat('#,##0.00').format(debtor['totalAmount'])}', align: TextAlign.right),
-                                        _tableCell('N ${NumberFormat('#,##0.00').format(debtor['totalPaid'])}', align: TextAlign.right),
-                                        _tableCell('N ${NumberFormat('#,##0.00').format(debtor['outstandingBalance'])}', align: TextAlign.right),
-                                      ],
-                                    );
-                                  }),
-                                ],
-                              ),
-                              const SizedBox(height: 15),
-                              const Divider(height: 25),
-                              _row(
-                                "TOTAL SALES DEBT",
-                                "N ${NumberFormat('#,##0.00').format(totalSalesDebt)}",
-                                bold: true,
-                                color: Colors.red.shade800,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                    ],
-
-                    if (stockSummary.isEmpty && salesDetails.isEmpty && salesDebtors.isEmpty)
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(32),
-                          child: Column(
-                            children: [
-                              Icon(Icons.inventory_2, size: 64, color: Colors.grey.shade400),
-                              const SizedBox(height: 16),
-                              Text(
-                                "No stock or sales data for this period",
-                                style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                    ], // end _showStockSales
-                  ],
+                  ),
                 ),
-              ),
+
+                // ---- Payment cards (lazy) ----
+                if (_showPayments && filteredPayments.isNotEmpty)
+                  SliverPadding(
+                    padding: EdgeInsets.symmetric(horizontal: ds.cardPadding),
+                    sliver: SliverList.builder(
+                      itemCount: filteredPayments.length,
+                      itemBuilder: (context, index) =>
+                          _buildPaymentListItem(filteredPayments[index], index),
+                    ),
+                  ),
+
+                // ---- Payment method breakdown footer ----
+                if (_showPayments && filteredPayments.isNotEmpty)
+                  SliverPadding(
+                    padding: EdgeInsets.symmetric(horizontal: ds.cardPadding),
+                    sliver: SliverToBoxAdapter(
+                      child: _buildTabPaymentBreakdown(filteredPayments),
+                    ),
+                  ),
+
+                // ---- SALES SUMMARY (lazy rows) ----
+                if (_showStockSales && salesDetails.isNotEmpty)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(ds.cardPadding, 30, ds.cardPadding, 0),
+                    sliver: DecoratedSliver(
+                      decoration: BoxDecoration(
+                        color: Colors.teal.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      sliver: SliverPadding(
+                        padding: const EdgeInsets.all(18),
+                        sliver: SliverMainAxisGroup(
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.shopping_cart, color: Colors.teal.shade700, size: 24),
+                                      const SizedBox(width: 8),
+                                      const Text('SALES SUMMARY', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  const Divider(height: 20),
+                                  const SizedBox(height: 10),
+                                  _flexTableRow(
+                                    values: const ['S/N', 'Item(s) Sold', 'Qty', 'Payment Status', 'Amount Paid', 'Buyer Details'],
+                                    flexes: const [2, 6, 3, 4, 4, 5],
+                                    isHeader: true,
+                                    backgroundColor: Colors.teal.shade200,
+                                    borderColor: Colors.teal.shade300,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SliverList.builder(
+                              itemCount: salesDetails.length,
+                              itemBuilder: (context, index) => _buildSalesSummaryRow(salesDetails[index], index),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // ---- EXPENSES DETAILS header + empty state ----
+                if (_showExpenses)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(ds.cardPadding, 30, ds.cardPadding, 0),
+                    sliver: SliverToBoxAdapter(
+                      child: Column(
+                        children: [
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade700,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.receipt, color: Colors.white, size: 24),
+                                const SizedBox(width: 8),
+                                Text(
+                                  "EXPENSES DETAILS (${expenseDetails.length})",
+                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          if (expenseDetails.isEmpty)
+                            Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.check_circle, size: 48, color: Colors.green.shade400),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      "No expenses recorded for this period",
+                                      style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                // ---- Expense cards (lazy) ----
+                if (_showExpenses && expenseDetails.isNotEmpty)
+                  SliverPadding(
+                    padding: EdgeInsets.symmetric(horizontal: ds.cardPadding),
+                    sliver: SliverList.builder(
+                      itemCount: expenseDetails.length,
+                      itemBuilder: (context, index) =>
+                          _buildExpenseListItem(expenseDetails[index], index),
+                    ),
+                  ),
+
+                // ---- STOCK & SALES REPORT section header ----
+                if (_showStockSales)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(ds.cardPadding, 40, ds.cardPadding, 0),
+                    sliver: SliverToBoxAdapter(
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Colors.brown.shade700, Colors.brown.shade500],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.inventory_2, color: Colors.white, size: 24),
+                            const SizedBox(width: 8),
+                            const Text(
+                              "STOCK & SALES REPORT",
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // ---- STOCK SUMMARY (lazy rows) ----
+                if (_showStockSales && stockSummary.isNotEmpty)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(ds.cardPadding, 20, ds.cardPadding, 0),
+                    sliver: DecoratedSliver(
+                      decoration: BoxDecoration(
+                        color: Colors.brown.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      sliver: SliverPadding(
+                        padding: const EdgeInsets.all(18),
+                        sliver: SliverMainAxisGroup(
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.inventory, color: Colors.brown.shade700, size: 24),
+                                      const SizedBox(width: 8),
+                                      const Text('STOCK SUMMARY', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  const Divider(height: 20),
+                                  const SizedBox(height: 10),
+                                  _flexTableRow(
+                                    values: const ['S/N', 'Item Name', 'Total in Stock', 'Qty Sold', 'Qty Remain'],
+                                    flexes: const [1, 3, 2, 2, 2],
+                                    isHeader: true,
+                                    backgroundColor: Colors.brown.shade200,
+                                    borderColor: Colors.brown.shade300,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SliverList.builder(
+                              itemCount: stockSummary.length,
+                              itemBuilder: (context, index) => _buildStockSummaryRow(stockSummary[index], index),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // ---- SALES DEBTORS (lazy rows) ----
+                if (_showStockSales && salesDebtors.isNotEmpty)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(ds.cardPadding, 20, ds.cardPadding, 0),
+                    sliver: DecoratedSliver(
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      sliver: SliverPadding(
+                        padding: const EdgeInsets.all(18),
+                        sliver: SliverMainAxisGroup(
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.account_balance_wallet, color: Colors.red.shade700, size: 24),
+                                      const SizedBox(width: 8),
+                                      const Text('SALES DEBTORS', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  const Divider(height: 20),
+                                  const SizedBox(height: 10),
+                                  _flexTableRow(
+                                    values: const ['S/N', 'Name of Debtor', 'Item(s) Purchased', 'Total Amount', 'Total Paid', 'Outstanding'],
+                                    flexes: const [2, 5, 6, 4, 4, 4],
+                                    isHeader: true,
+                                    backgroundColor: Colors.red.shade200,
+                                    borderColor: Colors.red.shade300,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SliverList.builder(
+                              itemCount: salesDebtors.length,
+                              itemBuilder: (context, index) => _buildSalesDebtorRow(salesDebtors[index], index),
+                            ),
+                            SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 15),
+                                child: Column(
+                                  children: [
+                                    const Divider(height: 25),
+                                    _row(
+                                      "TOTAL SALES DEBT",
+                                      "N ${NumberFormat('#,##0.00').format(totalSalesDebt)}",
+                                      bold: true,
+                                      color: Colors.red.shade800,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // ---- Empty state + bottom padding ----
+                if (_showStockSales)
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(ds.cardPadding, 20, ds.cardPadding, ds.cardPadding),
+                    sliver: SliverToBoxAdapter(
+                      child: (stockSummary.isEmpty && salesDetails.isEmpty && salesDebtors.isEmpty)
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(32),
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.inventory_2, size: 64, color: Colors.grey.shade400),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      "No stock or sales data for this period",
+                                      style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  )
+                else
+                  SliverPadding(padding: EdgeInsets.only(bottom: ds.cardPadding)),
+              ],
             ),
     );
   }
@@ -1499,6 +1376,224 @@ class CustomReportScreenState extends State<CustomReportScreen>
           style: TextStyle(fontSize: 17, fontWeight: bold ? FontWeight.bold : FontWeight.normal, color: color),
         ),
       ],
+    );
+  }
+
+  // -----------------------------------------------------------
+  // LAZY LIST ROW BUILDERS
+  // -----------------------------------------------------------
+  // Table-style row built from Row + Expanded instead of the Table widget,
+  // so it can be used inside a SliverList (Table requires all rows to be
+  // built eagerly up front, which is exactly what we're avoiding here).
+  Widget _flexTableRow({
+    required List<String> values,
+    required List<int> flexes,
+    List<TextAlign>? aligns,
+    bool isHeader = false,
+    Color? backgroundColor,
+    required Color borderColor,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (int i = 0; i < values.length; i++)
+          Expanded(
+            flex: flexes[i],
+            child: Container(
+              decoration: BoxDecoration(
+                color: backgroundColor,
+                border: Border.all(color: borderColor, width: 0.5),
+              ),
+              child: _tableCell(
+                values[i],
+                isHeader: isHeader,
+                align: aligns != null ? aligns[i] : TextAlign.left,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildPaymentListItem(Map<String, dynamic> payment, int index) {
+    final amount = payment['amount'] as num;
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: payment['method'] == 'CASH'
+              ? Colors.green
+              : payment['method'] == 'POS'
+                  ? Colors.blue
+                  : Colors.orange,
+          child: Text(
+            '${index + 1}',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+        ),
+        title: Text(
+          payment['studentName'],
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${payment['className']} - ${payment['armName']}'),
+            Row(
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(top: 3, right: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.green.shade200),
+                  ),
+                  child: Text(
+                    payment['paymentFor'] ?? 'School Fees',
+                    style: TextStyle(fontSize: 11, color: Colors.green.shade700),
+                  ),
+                ),
+                Text(
+                  '${payment['method']} • N ${NumberFormat('#,##0.00').format(amount)}',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey.shade700),
+                ),
+              ],
+            ),
+          ],
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.print),
+          tooltip: 'Re-print Receipt',
+          onPressed: () => _showReceiptPrintOptions(payment),
+        ),
+        isThreeLine: true,
+      ),
+    );
+  }
+
+  Widget _buildExpenseListItem(Map<String, dynamic> expense, int index) {
+    final amount = expense['amount'] as num;
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: expense['method'] == 'CASH'
+              ? Colors.red.shade300
+              : expense['method'] == 'POS'
+                  ? Colors.orange.shade300
+                  : Colors.brown.shade300,
+          child: Text(
+            '${index + 1}',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+        ),
+        title: Text(
+          expense['description'],
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${expense['category']} • ${expense['recipient']}'),
+            Text(
+              '${expense['method']} • N ${NumberFormat('#,##0.00').format(amount)}',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.red.shade700),
+            ),
+          ],
+        ),
+        isThreeLine: true,
+      ),
+    );
+  }
+
+  Widget _buildSalesSummaryRow(Map<String, dynamic> sale, int index) {
+    final items = sale['items'] as List<Map<String, dynamic>>;
+    final itemsText = items.map((item) {
+      final isCustom = item['isCustomItem'] == true;
+      return isCustom
+          ? '${item['itemName']} [Custom] (x${item['quantity']})'
+          : '${item['itemName']} (x${item['quantity']})';
+    }).join(', ');
+    final totalPaid = (sale['totalPaid'] as num).toDouble();
+    final totalAmount = (sale['totalAmount'] as num).toDouble();
+    final outstanding = totalAmount - totalPaid;
+
+    String paymentStatus;
+    if (outstanding <= 0) {
+      paymentStatus = 'Paid';
+    } else if (totalPaid > 0) {
+      paymentStatus = 'Part Payment';
+    } else {
+      paymentStatus = 'Unpaid';
+    }
+
+    return _flexTableRow(
+      values: [
+        '${index + 1}',
+        itemsText,
+        '${sale['totalQtySold']}',
+        paymentStatus,
+        'N ${NumberFormat('#,##0.00').format(totalPaid)}',
+        '${sale['buyerName']} (${sale['buyerType']})',
+      ],
+      flexes: const [2, 6, 3, 4, 4, 5],
+      aligns: const [
+        TextAlign.left,
+        TextAlign.left,
+        TextAlign.center,
+        TextAlign.center,
+        TextAlign.right,
+        TextAlign.left,
+      ],
+      backgroundColor: Colors.teal.shade50,
+      borderColor: Colors.teal.shade300,
+    );
+  }
+
+  Widget _buildStockSummaryRow(Map<String, dynamic> item, int index) {
+    return _flexTableRow(
+      values: [
+        '${index + 1}',
+        item['itemName'].toString(),
+        '${item['beginningQuantity']}',
+        '${item['qtySold']}',
+        '${item['remainingQuantity']}',
+      ],
+      flexes: const [1, 3, 2, 2, 2],
+      aligns: const [
+        TextAlign.left,
+        TextAlign.left,
+        TextAlign.center,
+        TextAlign.center,
+        TextAlign.center,
+      ],
+      backgroundColor: Colors.brown.shade50,
+      borderColor: Colors.brown.shade300,
+    );
+  }
+
+  Widget _buildSalesDebtorRow(Map<String, dynamic> debtor, int index) {
+    return _flexTableRow(
+      values: [
+        '${index + 1}',
+        '${debtor['buyerName']} (${debtor['buyerType']})',
+        debtor['itemsPurchased'].toString(),
+        'N ${NumberFormat('#,##0.00').format(debtor['totalAmount'])}',
+        'N ${NumberFormat('#,##0.00').format(debtor['totalPaid'])}',
+        'N ${NumberFormat('#,##0.00').format(debtor['outstandingBalance'])}',
+      ],
+      flexes: const [2, 5, 6, 4, 4, 4],
+      aligns: const [
+        TextAlign.left,
+        TextAlign.left,
+        TextAlign.left,
+        TextAlign.right,
+        TextAlign.right,
+        TextAlign.right,
+      ],
+      backgroundColor: Colors.red.shade50,
+      borderColor: Colors.red.shade300,
     );
   }
 }

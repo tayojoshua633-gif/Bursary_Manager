@@ -2,14 +2,32 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'stock_record_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class StockRecordPDFGenerator {
   static Future<String> generateStockRecordPDF({
     required List<Map<String, dynamic>> stockRecords,
     required Map<String, dynamic> schoolProfile,
+    bool saveToDownloads = false,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'Stock_Record_Report_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = StockRecordHtmlGenerator.build(
+        stockRecords: stockRecords,
+        schoolProfile: schoolProfile,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
     final formatter = NumberFormat('#,##0.00');
 
@@ -68,10 +86,8 @@ class StockRecordPDFGenerator {
     );
 
     // Save to file
-    final output = await getApplicationDocumentsDirectory();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'Stock_Record_Report_$timestamp.pdf';
-    final file = File('${output.path}/$fileName');
+    final output = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${output.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
 
     return file.path;

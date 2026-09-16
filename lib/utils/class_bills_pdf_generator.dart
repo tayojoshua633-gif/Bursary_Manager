@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'class_bills_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class ClassBillsPDFGenerator {
   static Future<String> generateClassBillsPDF({
@@ -11,7 +13,26 @@ class ClassBillsPDFGenerator {
     required String session,
     required Map<String, dynamic> schoolProfile,
     String? filterClassName,
+    bool saveToDownloads = false,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'Class_Bills_${filterClassName ?? 'All'}_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = ClassBillsHtmlGenerator.build(
+        studentBills: studentBills,
+        term: term,
+        session: session,
+        schoolProfile: schoolProfile,
+        filterClassName: filterClassName,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
 
     // Calculate totals
@@ -57,10 +78,8 @@ class ClassBillsPDFGenerator {
     );
 
     // Save to file
-    final output = await getApplicationDocumentsDirectory();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'Class_Bills_${filterClassName ?? 'All'}_$timestamp.pdf';
-    final file = File('${output.path}/$fileName');
+    final output = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${output.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
 
     return file.path;

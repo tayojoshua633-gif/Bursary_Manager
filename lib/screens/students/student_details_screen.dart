@@ -1807,6 +1807,68 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
     );
   }
 
+  static const List<String> _comparableTerms = ['1st Term', '2nd Term', '3rd Term'];
+
+  // Fetches the bill/payment summary for an arbitrary term+session so the
+  // Term Comparison sheet's "Compare with" filter can target any period,
+  // not just the one immediately before the active term.
+  Future<Map<String, dynamic>> _fetchTermBillSummary(String term, String session) async {
+    final dbHelper = DatabaseHelperWrapper();
+    final db = await dbHelper.database;
+
+    final bill = await dbHelper.getBillForStudent(current.id!, term, session);
+
+    double termBill = 0;
+    List<Map<String, dynamic>> billItems = [];
+
+    if (bill != null) {
+      final storedTotal = (bill['totalAmount'] as num?)?.toDouble() ?? 0.0;
+      final storedPrevBal = (bill['previousBalance'] as num?)?.toDouble() ?? 0.0;
+      termBill = storedTotal - storedPrevBal;
+
+      final items = await db.rawQuery('''
+        SELECT sfb.id, sfb.feeItemId, sfb.amount,
+               COALESCE(NULLIF(TRIM(sfb.label), ''), fi.name, 'Fee Item') as feeName
+        FROM student_fee_breakdown sfb
+        LEFT JOIN fee_items fi ON sfb.feeItemId = fi.id
+        WHERE sfb.billId = ?
+        ORDER BY sfb.id ASC
+      ''', [bill['id']]);
+      billItems = items.map((e) => Map<String, dynamic>.from(e)).toList();
+    }
+
+    final paymentsSum = await db.rawQuery('''
+      SELECT COALESCE(SUM(amount), 0) as totalPaid
+      FROM payments WHERE studentId = ? AND term = ? AND session = ?
+    ''', [current.id, term, session]);
+    final totalPaid = (paymentsSum.first['totalPaid'] as num?)?.toDouble() ?? 0.0;
+
+    final previousBalance = (await dbHelper.computeOutstandingBeforeTerm(
+      current.id!,
+      term: term,
+      session: session,
+    )).clamp(0.0, double.infinity);
+    final grandTotal = previousBalance + termBill;
+    final outstanding = grandTotal - totalPaid;
+
+    final paymentsList = await db.rawQuery('''
+      SELECT id, amount, method, note, paymentDate
+      FROM payments WHERE studentId = ? AND term = ? AND session = ?
+      ORDER BY paymentDate DESC
+    ''', [current.id, term, session]);
+    final payments = paymentsList.map((p) => Map<String, dynamic>.from(p)).toList();
+
+    return {
+      'previousBalance': previousBalance,
+      'termBill': termBill,
+      'grandTotal': grandTotal,
+      'totalPaid': totalPaid,
+      'outstanding': outstanding,
+      'billItems': billItems,
+      'payments': payments,
+    };
+  }
+
   Future<void> _showPreviousTermBills() async {
     final prevTermSession = DatabaseHelperWrapper.previousTermSession(
       term: _activeTerm,
@@ -1833,53 +1895,19 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
 
     try {
       final dbHelper = DatabaseHelperWrapper();
-      final db = await dbHelper.database;
 
-      final bill = await dbHelper.getBillForStudent(current.id!, prevTerm, prevSession);
-
-      double prevCurrentTermBill = 0;
-      List<Map<String, dynamic>> prevBillItems = [];
-
-      if (bill != null) {
-        final storedTotal = (bill['totalAmount'] as num?)?.toDouble() ?? 0.0;
-        final storedPrevBal = (bill['previousBalance'] as num?)?.toDouble() ?? 0.0;
-        prevCurrentTermBill = storedTotal - storedPrevBal;
-
-        final items = await db.rawQuery('''
-          SELECT sfb.id, sfb.feeItemId, sfb.amount,
-                 COALESCE(NULLIF(TRIM(sfb.label), ''), fi.name, 'Fee Item') as feeName
-          FROM student_fee_breakdown sfb
-          LEFT JOIN fee_items fi ON sfb.feeItemId = fi.id
-          WHERE sfb.billId = ?
-          ORDER BY sfb.id ASC
-        ''', [bill['id']]);
-        prevBillItems = items.map((e) => Map<String, dynamic>.from(e)).toList();
+      final sessions = await dbHelper.getAllSessions();
+      final availableSessions = sessions
+          .map((s) => s['sessionName']?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+      for (final s in [prevSession, _activeSession]) {
+        if (!availableSessions.contains(s)) availableSessions.add(s);
       }
 
-      final paymentsSum = await db.rawQuery('''
-        SELECT COALESCE(SUM(amount), 0) as totalPaid
-        FROM payments WHERE studentId = ? AND term = ? AND session = ?
-      ''', [current.id, prevTerm, prevSession]);
-      final prevTotalPaid = (paymentsSum.first['totalPaid'] as num?)?.toDouble() ?? 0.0;
-
-      // Derive the previous term's carry-in balance from the current term's already-correct
-      // _previousBalance rather than calling computeOutstandingBeforeTerm(prevTerm), which
-      // would incorrectly include future bills (current term's bill already exists in the DB).
-      //
-      // _previousBalance = net outstanding for ALL terms before the current term.
-      // prevTerm's own net = prevCurrentTermBill - prevTotalPaid.
-      // Everything before prevTerm = _previousBalance − prevTerm's net.
-      final prevNetOutstanding = prevCurrentTermBill - prevTotalPaid;
-      final prevPreviousBalance = (_previousBalance - prevNetOutstanding).clamp(0.0, double.infinity);
-      final prevGrandTotal = prevPreviousBalance + prevCurrentTermBill;
-      final prevOutstanding = prevGrandTotal - prevTotalPaid;
-
-      final paymentsList = await db.rawQuery('''
-        SELECT id, amount, method, note, paymentDate
-        FROM payments WHERE studentId = ? AND term = ? AND session = ?
-        ORDER BY paymentDate DESC
-      ''', [current.id, prevTerm, prevSession]);
-      final prevPayments = paymentsList.map((p) => Map<String, dynamic>.from(p)).toList();
+      final compareData = await _fetchTermBillSummary(prevTerm, prevSession);
 
       if (!mounted) return;
       Navigator.pop(context);
@@ -1890,17 +1918,8 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
         ),
-        builder: (ctx) => _PreviousTermBillSheet(
+        builder: (ctx) => _TermComparisonSheet(
           studentName: '${current.surname} ${current.firstName}',
-          prevTerm: prevTerm,
-          prevSession: prevSession,
-          prevPreviousBalance: prevPreviousBalance,
-          prevCurrentTermBill: prevCurrentTermBill,
-          prevGrandTotal: prevGrandTotal,
-          prevTotalPaid: prevTotalPaid,
-          prevOutstanding: prevOutstanding,
-          prevBillItems: prevBillItems,
-          prevPayments: prevPayments,
           currentTerm: _activeTerm,
           currentSession: _activeSession,
           currentPreviousBalance: _previousBalance,
@@ -1908,6 +1927,12 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
           currentGrandTotal: _grandTotal,
           currentTotalPaid: _totalPaid,
           currentOutstanding: _outstanding,
+          initialCompareTerm: prevTerm,
+          initialCompareSession: prevSession,
+          initialCompareData: compareData,
+          availableTerms: _comparableTerms,
+          availableSessions: availableSessions,
+          onFetchCompareData: _fetchTermBillSummary,
         ),
       );
     } catch (e) {
@@ -1950,17 +1975,8 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
 // Previous Term Bill Comparison Sheet
 // ---------------------------------------------------------------------------
 
-class _PreviousTermBillSheet extends StatelessWidget {
+class _TermComparisonSheet extends StatefulWidget {
   final String studentName;
-  final String prevTerm;
-  final String prevSession;
-  final double prevPreviousBalance;
-  final double prevCurrentTermBill;
-  final double prevGrandTotal;
-  final double prevTotalPaid;
-  final double prevOutstanding;
-  final List<Map<String, dynamic>> prevBillItems;
-  final List<Map<String, dynamic>> prevPayments;
 
   final String currentTerm;
   final String currentSession;
@@ -1970,17 +1986,16 @@ class _PreviousTermBillSheet extends StatelessWidget {
   final double currentTotalPaid;
   final double currentOutstanding;
 
-  const _PreviousTermBillSheet({
+  final String initialCompareTerm;
+  final String initialCompareSession;
+  final Map<String, dynamic> initialCompareData;
+
+  final List<String> availableTerms;
+  final List<String> availableSessions;
+  final Future<Map<String, dynamic>> Function(String term, String session) onFetchCompareData;
+
+  const _TermComparisonSheet({
     required this.studentName,
-    required this.prevTerm,
-    required this.prevSession,
-    required this.prevPreviousBalance,
-    required this.prevCurrentTermBill,
-    required this.prevGrandTotal,
-    required this.prevTotalPaid,
-    required this.prevOutstanding,
-    required this.prevBillItems,
-    required this.prevPayments,
     required this.currentTerm,
     required this.currentSession,
     required this.currentPreviousBalance,
@@ -1988,11 +2003,79 @@ class _PreviousTermBillSheet extends StatelessWidget {
     required this.currentGrandTotal,
     required this.currentTotalPaid,
     required this.currentOutstanding,
+    required this.initialCompareTerm,
+    required this.initialCompareSession,
+    required this.initialCompareData,
+    required this.availableTerms,
+    required this.availableSessions,
+    required this.onFetchCompareData,
   });
+
+  @override
+  State<_TermComparisonSheet> createState() => _TermComparisonSheetState();
+}
+
+class _TermComparisonSheetState extends State<_TermComparisonSheet> {
+  late String _compareTerm = widget.initialCompareTerm;
+  late String _compareSession = widget.initialCompareSession;
+  late Map<String, dynamic> _compareData = widget.initialCompareData;
+  bool _loading = false;
+  String? _error;
+
+  Future<void> _reload() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await widget.onFetchCompareData(_compareTerm, _compareSession);
+      if (!mounted) return;
+      setState(() {
+        _compareData = data;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Error loading $_compareTerm · $_compareSession: $e';
+      });
+    }
+  }
+
+  void _onCompareSessionChanged(String? session) {
+    if (session == null || session == _compareSession) return;
+    setState(() => _compareSession = session);
+    _reload();
+  }
+
+  void _onCompareTermChanged(String? term) {
+    if (term == null || term == _compareTerm) return;
+    setState(() => _compareTerm = term);
+    _reload();
+  }
 
   @override
   Widget build(BuildContext context) {
     final fmt = NumberFormat('#,##0.00');
+
+    final prevTerm = _compareTerm;
+    final prevSession = _compareSession;
+    final prevPreviousBalance = (_compareData['previousBalance'] as num).toDouble();
+    final prevCurrentTermBill = (_compareData['termBill'] as num).toDouble();
+    final prevGrandTotal = (_compareData['grandTotal'] as num).toDouble();
+    final prevTotalPaid = (_compareData['totalPaid'] as num).toDouble();
+    final prevOutstanding = (_compareData['outstanding'] as num).toDouble();
+    final prevBillItems = List<Map<String, dynamic>>.from(_compareData['billItems'] as List);
+    final prevPayments = List<Map<String, dynamic>>.from(_compareData['payments'] as List);
+    final currentTerm = widget.currentTerm;
+    final currentSession = widget.currentSession;
+    final currentPreviousBalance = widget.currentPreviousBalance;
+    final currentTermBill = widget.currentTermBill;
+    final currentGrandTotal = widget.currentGrandTotal;
+    final currentTotalPaid = widget.currentTotalPaid;
+    final currentOutstanding = widget.currentOutstanding;
+
     final outstandingLabel =
         prevOutstanding <= 0 && currentOutstanding <= 0 ? 'Overpayment' : 'Outstanding';
 
@@ -2049,7 +2132,7 @@ class _PreviousTermBillSheet extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        studentName,
+                        widget.studentName,
                         style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.85)),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -2066,11 +2149,70 @@ class _PreviousTermBillSheet extends StatelessWidget {
             ),
           ),
 
+          // Compare-with filter — defaults to the last term/session
+          Container(
+            color: Colors.grey.shade50,
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+            child: Row(
+              children: [
+                Icon(Icons.filter_alt_outlined, size: 15, color: Colors.grey.shade600),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _compareSession,
+                    isDense: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Compare Session',
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      border: OutlineInputBorder(),
+                    ),
+                    style: const TextStyle(fontSize: 12, color: Colors.black87),
+                    items: widget.availableSessions
+                        .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                        .toList(),
+                    onChanged: _loading ? null : _onCompareSessionChanged,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _compareTerm,
+                    isDense: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Compare Term',
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      border: OutlineInputBorder(),
+                    ),
+                    style: const TextStyle(fontSize: 12, color: Colors.black87),
+                    items: widget.availableTerms
+                        .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                        .toList(),
+                    onChanged: _loading ? null : _onCompareTermChanged,
+                  ),
+                ),
+                if (_loading) ...[
+                  const SizedBox(width: 10),
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
           Expanded(
             child: ListView(
               controller: scrollController,
               padding: const EdgeInsets.fromLTRB(14, 16, 14, 24),
               children: [
+                if (_error != null) ...[
+                  _EmptyState(message: _error!),
+                  const SizedBox(height: 16),
+                ],
                 // Comparison card
                 Card(
                   elevation: 2,

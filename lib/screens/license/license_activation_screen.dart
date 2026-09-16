@@ -188,6 +188,38 @@ class _LicenseActivationScreenState extends State<LicenseActivationScreen> {
     try {
       final expiryDate = DateTime.parse(_licenseData!['expiry'] as String);
 
+      // Activating always deactivates whatever license is currently active --
+      // warn first if that would trade a longer-lived license for a shorter
+      // one, so a short test/renewal key can't silently clobber a still-valid
+      // one by accident.
+      final currentActive = await _db.getActiveLicense();
+      final currentExpiry = DateTime.tryParse(currentActive?['expiryDate'] as String? ?? '');
+      if (currentExpiry != null && currentExpiry.isAfter(expiryDate)) {
+        setState(() => _isActivating = false);
+        if (!mounted) return;
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Replace a longer-lived license?'),
+            content: Text(
+              'The license currently active on this device expires ${_formatDate(currentExpiry)}, '
+              'later than this key\'s expiry of ${_formatDate(expiryDate)}. Activating this key will '
+              'deactivate the current one. Continue?',
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                child: const Text('Replace anyway'),
+              ),
+            ],
+          ),
+        );
+        if (proceed != true) return;
+        setState(() => _isActivating = true);
+      }
+
       await _db.activateLicense(
         licenseKey: _licenseKeyController.text.trim(),
         schoolName: _licenseData!['school'] as String,

@@ -1,8 +1,19 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'custom_report_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
+
+// Shared row cap for every detail table in the report. Kept low (relative to
+// the old per-section caps of 100/100/100/50/50, and the old per-category —
+// effectively unbounded — cap on payment details) because "Full Report"
+// combines every section into one in-memory document at once, and the `pdf`
+// package builds the whole thing before writing anything to disk, so peak
+// memory scales with the sum of every table across every section.
+const int kMaxReportDetailRows = 60;
 
 class CustomReportPDFGenerator {
   static Future<String> generateCustomReportPDF({
@@ -39,79 +50,98 @@ class CustomReportPDFGenerator {
     bool includeExpenses = true,
     bool includeStockAndSales = true,
     String reportTabLabel = 'Full Report',
+    // Where to save the generated file — Downloads folder vs app-private storage (for sharing)
+    bool saveToDownloads = false,
   }) async {
-    final pdf = pw.Document();
-    final formatter = NumberFormat('#,##0.00');
-    final showNetIncome = includeIncome && includeExpenses;
-
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(40),
-        build: (context) => [
-          _buildHeader(schoolProfile, startDate, endDate, term, session, reportTabLabel),
-          pw.SizedBox(height: 25),
-
-          if (includeIncome) ...[
-            _buildIncomeSection(
-              cashTotal, posTotal, transferTotal, totalIncome, formatter,
-              salesCashTotal, salesPosTotal, salesTransferTotal, totalSales,
-            ),
-            pw.SizedBox(height: 20),
-          ],
-
-          if (includePaymentDetails && paymentDetails.isNotEmpty) ...[
-            _buildPaymentDetailsSection(paymentDetails, formatter),
-            pw.SizedBox(height: 20),
-          ],
-
-          if (includeStockAndSales && salesDetails.isNotEmpty) ...[
-            _buildSalesSummarySection(salesDetails, formatter),
-            pw.SizedBox(height: 20),
-          ],
-
-          if (includeExpenses && expenseDetails.isNotEmpty) ...[
-            _buildExpensesSection(
-              expenseCashTotal, expensePosTotal, expenseTransferTotal,
-              totalExpenses, expenseDetails, formatter,
-            ),
-            pw.SizedBox(height: 20),
-          ],
-
-          if (showNetIncome) ...[
-            _buildNetIncomeSection(
-              (totalIncome + totalSales) - totalExpenses,
-              formatter,
-            ),
-            pw.SizedBox(height: 20),
-          ],
-
-          if (includeStockAndSales && stockSummary.isNotEmpty) ...[
-            _buildStockSummarySection(stockSummary),
-            pw.SizedBox(height: 20),
-          ],
-
-          if (includeStockAndSales && salesDebtors.isNotEmpty) ...[
-            _buildSalesDebtorsSection(salesDebtors, totalSalesDebt, formatter),
-            pw.SizedBox(height: 20),
-          ],
-
-          _buildBankDetails(schoolProfile),
-          pw.SizedBox(height: 30),
-          _buildFooter(),
-        ],
-        footer: (context) => _buildPageFooter(context),
-      ),
-    );
-
-    final dir = await getApplicationDocumentsDirectory();
     final startStr = DateFormat('yyyyMMdd').format(startDate);
     final endStr = DateFormat('yyyyMMdd').format(endDate);
     final timestamp = DateFormat('HHmmss').format(DateTime.now());
     final safeLabel = reportTabLabel.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-    final fileName = 'Custom_Report_${safeLabel}_${startStr}_to_${endStr}_$timestamp.pdf';
-    final file = File('${dir.path}/$fileName');
-    await file.writeAsBytes(await pdf.save());
+    final baseName = 'Custom_Report_${safeLabel}_${startStr}_to_${endStr}_$timestamp';
+
+    if (Platform.isAndroid) {
+      // Render as HTML and hand it to Android's native WebView print
+      // pipeline — the same mechanism a browser uses for "Print / Save as
+      // PDF". Pagination and layout happen in native code, not the Dart
+      // heap, so this handles arbitrarily large reports without the
+      // pure-Dart `pdf` package's memory characteristics (which is what
+      // caused OOM crashes on constrained Android devices even for small
+      // reports — see _buildCustomReportPdfBytes below, still used for
+      // other platforms).
+      final html = CustomReportHtmlGenerator.build(
+        startDate: startDate,
+        endDate: endDate,
+        term: term,
+        session: session,
+        schoolProfile: schoolProfile,
+        cashTotal: cashTotal,
+        posTotal: posTotal,
+        transferTotal: transferTotal,
+        totalIncome: totalIncome,
+        paymentDetails: paymentDetails,
+        expenseCashTotal: expenseCashTotal,
+        expensePosTotal: expensePosTotal,
+        expenseTransferTotal: expenseTransferTotal,
+        totalExpenses: totalExpenses,
+        expenseDetails: expenseDetails,
+        stockSummary: stockSummary,
+        salesDetails: salesDetails,
+        salesDebtors: salesDebtors,
+        salesCashTotal: salesCashTotal,
+        salesPosTotal: salesPosTotal,
+        salesTransferTotal: salesTransferTotal,
+        totalSales: totalSales,
+        totalSalesDebt: totalSalesDebt,
+        includeIncome: includeIncome,
+        includePaymentDetails: includePaymentDetails,
+        includeExpenses: includeExpenses,
+        includeStockAndSales: includeStockAndSales,
+        reportTabLabel: reportTabLabel,
+      );
+
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
+    // Other platforms (Windows desktop, etc.): existing pure-Dart pdf
+    // package path.
+    final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final bytes = await _buildCustomReportPdfBytes({
+      'startDate': startDate.millisecondsSinceEpoch,
+      'endDate': endDate.millisecondsSinceEpoch,
+      'term': term,
+      'session': session,
+      'schoolProfile': schoolProfile,
+      'cashTotal': cashTotal,
+      'posTotal': posTotal,
+      'transferTotal': transferTotal,
+      'totalIncome': totalIncome,
+      'paymentDetails': paymentDetails,
+      'expenseCashTotal': expenseCashTotal,
+      'expensePosTotal': expensePosTotal,
+      'expenseTransferTotal': expenseTransferTotal,
+      'totalExpenses': totalExpenses,
+      'expenseDetails': expenseDetails,
+      'stockSummary': stockSummary,
+      'salesDetails': salesDetails,
+      'salesDebtors': salesDebtors,
+      'salesCashTotal': salesCashTotal,
+      'salesPosTotal': salesPosTotal,
+      'salesTransferTotal': salesTransferTotal,
+      'totalSales': totalSales,
+      'totalSalesDebt': totalSalesDebt,
+      'includeIncome': includeIncome,
+      'includePaymentDetails': includePaymentDetails,
+      'includeExpenses': includeExpenses,
+      'includeStockAndSales': includeStockAndSales,
+      'reportTabLabel': reportTabLabel,
+    });
+
+    final file = File('${dir.path}/$baseName.pdf');
+    await file.writeAsBytes(bytes);
 
     return file.path;
   }
@@ -249,17 +279,25 @@ class CustomReportPDFGenerator {
     List<Map<String, dynamic>> paymentDetails,
     NumberFormat formatter,
   ) {
+    // Cap the TOTAL number of detail rows across all categories combined —
+    // capping per-category only (as before) left the section effectively
+    // unbounded when a report had many categories, which is a major
+    // contributor to out-of-memory failures on large "Full Report" exports.
+    final isOverallTruncated = paymentDetails.length > kMaxReportDetailRows;
+    final cappedPayments = isOverallTruncated
+        ? paymentDetails.sublist(0, kMaxReportDetailRows)
+        : paymentDetails;
+
     final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final p in paymentDetails) {
+    for (final p in cappedPayments) {
       final cat = p['paymentFor']?.toString() ?? 'School Fees';
       (grouped[cat] ??= []).add(p);
     }
 
-    const maxRowsPerCategory = 100;
-
     final widgets = <pw.Widget>[
       pw.Text(
-        'SCHOOL FEES PAYMENT DETAILS (${paymentDetails.length} transactions)',
+        'SCHOOL FEES PAYMENT DETAILS (${paymentDetails.length} transactions)'
+        '${isOverallTruncated ? ' — showing first $kMaxReportDetailRows' : ''}',
         style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
       ),
       pw.SizedBox(height: 10),
@@ -268,10 +306,6 @@ class CustomReportPDFGenerator {
     grouped.forEach((category, payments) {
       final categoryTotal = payments.fold<double>(
           0, (sum, p) => sum + ((p['amount'] as num).toDouble()));
-      final limited = payments.length > maxRowsPerCategory
-          ? payments.sublist(0, maxRowsPerCategory)
-          : payments;
-      final isTruncated = payments.length > maxRowsPerCategory;
 
       widgets.add(pw.Row(
         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
@@ -281,8 +315,7 @@ class CustomReportPDFGenerator {
             style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11, color: PdfColors.green800),
           ),
           pw.Text(
-            '${payments.length} transaction(s) — Total: N ${formatter.format(categoryTotal)}'
-            '${isTruncated ? ' (showing first $maxRowsPerCategory)' : ''}',
+            '${payments.length} transaction(s) — Total: N ${formatter.format(categoryTotal)}',
             style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
           ),
         ],
@@ -301,7 +334,7 @@ class CustomReportPDFGenerator {
         },
         data: [
           ['Student Name', 'Adm No', 'Class/Arm', 'Method', 'Amount (N)'],
-          ...limited.map((p) {
+          ...payments.map((p) {
             return [
               p['studentName'],
               p['admissionNo'],
@@ -329,11 +362,10 @@ class CustomReportPDFGenerator {
     List<Map<String, dynamic>> expenseDetails,
     NumberFormat formatter,
   ) {
-    const maxRows = 100;
-    final limited = expenseDetails.length > maxRows
-        ? expenseDetails.sublist(0, maxRows)
+    final limited = expenseDetails.length > kMaxReportDetailRows
+        ? expenseDetails.sublist(0, kMaxReportDetailRows)
         : expenseDetails;
-    final isTruncated = expenseDetails.length > maxRows;
+    final isTruncated = expenseDetails.length > kMaxReportDetailRows;
 
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -370,7 +402,7 @@ class CustomReportPDFGenerator {
         pw.SizedBox(height: 14),
         pw.Text(
           'EXPENSES DETAILS (${expenseDetails.length} transactions)'
-          '${isTruncated ? ' — showing first $maxRows' : ''}',
+          '${isTruncated ? ' — showing first $kMaxReportDetailRows' : ''}',
           style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
         ),
         pw.SizedBox(height: 8),
@@ -438,9 +470,10 @@ class CustomReportPDFGenerator {
   // STOCK SUMMARY SECTION
   // -----------------------------------------------------------
   static pw.Widget _buildStockSummarySection(List<Map<String, dynamic>> stockSummary) {
-    const maxRows = 50;
-    final limited = stockSummary.length > maxRows ? stockSummary.sublist(0, maxRows) : stockSummary;
-    final isTruncated = stockSummary.length > maxRows;
+    final limited = stockSummary.length > kMaxReportDetailRows
+        ? stockSummary.sublist(0, kMaxReportDetailRows)
+        : stockSummary;
+    final isTruncated = stockSummary.length > kMaxReportDetailRows;
 
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -451,38 +484,32 @@ class CustomReportPDFGenerator {
         ),
         pw.SizedBox(height: 6),
         pw.Text(
-          'Stock Movement for the Period${isTruncated ? ' (showing first $maxRows of ${stockSummary.length} items)' : ''}',
+          'Stock Movement for the Period${isTruncated ? ' (showing first $kMaxReportDetailRows of ${stockSummary.length} items)' : ''}',
           style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
         ),
         pw.SizedBox(height: 10),
-        pw.Container(
-          padding: const pw.EdgeInsets.all(12),
-          decoration: pw.BoxDecoration(
-            border: pw.Border.all(color: PdfColors.brown400),
-            borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-            color: PdfColors.brown50,
-          ),
-          child: pw.TableHelper.fromTextArray(
-            headerStyle: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
-            cellStyle: const pw.TextStyle(fontSize: 10),
-            headerDecoration: pw.BoxDecoration(color: PdfColors.brown100),
-            cellHeight: 25,
-            cellAlignments: {
-              0: pw.Alignment.centerLeft,
-              1: pw.Alignment.centerRight,
-              2: pw.Alignment.centerRight,
-              3: pw.Alignment.centerRight,
-            },
-            headers: ['Item', 'Beginning', 'Sold', 'Remaining'],
-            data: limited.map((stock) {
-              return [
-                stock['itemName'],
-                '${stock['beginningQuantity']}',
-                '${stock['qtySold']}',
-                '${stock['remainingQuantity']}',
-              ];
-            }).toList(),
-          ),
+        pw.TableHelper.fromTextArray(
+          border: pw.TableBorder.all(color: PdfColors.brown400),
+          headerStyle: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
+          cellStyle: const pw.TextStyle(fontSize: 10),
+          headerDecoration: pw.BoxDecoration(color: PdfColors.brown100),
+          rowDecoration: pw.BoxDecoration(color: PdfColors.brown50),
+          cellHeight: 25,
+          cellAlignments: {
+            0: pw.Alignment.centerLeft,
+            1: pw.Alignment.centerRight,
+            2: pw.Alignment.centerRight,
+            3: pw.Alignment.centerRight,
+          },
+          headers: ['Item', 'Beginning', 'Sold', 'Remaining'],
+          data: limited.map((stock) {
+            return [
+              stock['itemName'],
+              '${stock['beginningQuantity']}',
+              '${stock['qtySold']}',
+              '${stock['remainingQuantity']}',
+            ];
+          }).toList(),
         ),
       ],
     );
@@ -495,9 +522,10 @@ class CustomReportPDFGenerator {
     List<Map<String, dynamic>> salesDetails,
     NumberFormat formatter,
   ) {
-    const maxRows = 100;
-    final limited = salesDetails.length > maxRows ? salesDetails.sublist(0, maxRows) : salesDetails;
-    final isTruncated = salesDetails.length > maxRows;
+    final limited = salesDetails.length > kMaxReportDetailRows
+        ? salesDetails.sublist(0, kMaxReportDetailRows)
+        : salesDetails;
+    final isTruncated = salesDetails.length > kMaxReportDetailRows;
 
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -510,7 +538,7 @@ class CustomReportPDFGenerator {
           pw.Padding(
             padding: const pw.EdgeInsets.only(top: 4),
             child: pw.Text(
-              '(Showing first $maxRows of ${salesDetails.length})',
+              '(Showing first $kMaxReportDetailRows of ${salesDetails.length})',
               style: pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
             ),
           ),
@@ -575,9 +603,10 @@ class CustomReportPDFGenerator {
     double totalSalesDebt,
     NumberFormat formatter,
   ) {
-    const maxRows = 50;
-    final limited = salesDebtors.length > maxRows ? salesDebtors.sublist(0, maxRows) : salesDebtors;
-    final isTruncated = salesDebtors.length > maxRows;
+    final limited = salesDebtors.length > kMaxReportDetailRows
+        ? salesDebtors.sublist(0, kMaxReportDetailRows)
+        : salesDebtors;
+    final isTruncated = salesDebtors.length > kMaxReportDetailRows;
 
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -588,55 +617,45 @@ class CustomReportPDFGenerator {
         ),
         pw.SizedBox(height: 6),
         pw.Text(
-          'Buyers with Outstanding Balances${isTruncated ? ' (showing first $maxRows of ${salesDebtors.length})' : ''}',
+          'Buyers with Outstanding Balances${isTruncated ? ' (showing first $kMaxReportDetailRows of ${salesDebtors.length})' : ''}',
           style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
         ),
         pw.SizedBox(height: 10),
-        pw.Container(
-          padding: const pw.EdgeInsets.all(12),
-          decoration: pw.BoxDecoration(
-            border: pw.Border.all(color: PdfColors.red400),
-            borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-            color: PdfColors.red50,
-          ),
-          child: pw.Column(
-            children: [
-              pw.TableHelper.fromTextArray(
-                headerStyle: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
-                cellStyle: const pw.TextStyle(fontSize: 9),
-                headerDecoration: pw.BoxDecoration(color: PdfColors.red100),
-                cellHeight: 30,
-                cellAlignments: {
-                  0: pw.Alignment.centerLeft,
-                  1: pw.Alignment.centerLeft,
-                  2: pw.Alignment.centerRight,
-                  3: pw.Alignment.centerRight,
-                  4: pw.Alignment.centerRight,
-                },
-                headers: ['Buyer', 'Items', 'Total', 'Paid', 'Balance'],
-                data: limited.map((debtor) {
-                  return [
-                    '${debtor['buyerName']}${debtor['buyerType'].toString().isNotEmpty ? '\n(${debtor['buyerType']})' : ''}',
-                    debtor['itemsPurchased'].toString().length > 40
-                        ? '${debtor['itemsPurchased'].toString().substring(0, 40)}...'
-                        : debtor['itemsPurchased'],
-                    'N ${formatter.format(debtor['totalAmount'])}',
-                    'N ${formatter.format(debtor['totalPaid'])}',
-                    'N ${formatter.format(debtor['outstandingBalance'])}',
-                  ];
-                }).toList(),
-              ),
-              pw.SizedBox(height: 10),
-              pw.Divider(thickness: 1.5, color: PdfColors.red400),
-              pw.SizedBox(height: 6),
-              _buildRow(
-                'TOTAL SALES DEBT:',
-                'N ${formatter.format(totalSalesDebt)}',
-                bold: true,
-                fontSize: 13,
-              ),
-            ],
-          ),
+        pw.TableHelper.fromTextArray(
+          border: pw.TableBorder.all(color: PdfColors.red400),
+          headerStyle: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
+          cellStyle: const pw.TextStyle(fontSize: 9),
+          headerDecoration: pw.BoxDecoration(color: PdfColors.red100),
+          rowDecoration: pw.BoxDecoration(color: PdfColors.red50),
+          cellHeight: 30,
+          cellAlignments: {
+            0: pw.Alignment.centerLeft,
+            1: pw.Alignment.centerLeft,
+            2: pw.Alignment.centerRight,
+            3: pw.Alignment.centerRight,
+            4: pw.Alignment.centerRight,
+          },
+          headers: ['Buyer', 'Items', 'Total', 'Paid', 'Balance'],
+          data: limited.map((debtor) {
+            return [
+              '${debtor['buyerName']}${debtor['buyerType'].toString().isNotEmpty ? '\n(${debtor['buyerType']})' : ''}',
+              debtor['itemsPurchased'].toString().length > 40
+                  ? '${debtor['itemsPurchased'].toString().substring(0, 40)}...'
+                  : debtor['itemsPurchased'],
+              'N ${formatter.format(debtor['totalAmount'])}',
+              'N ${formatter.format(debtor['totalPaid'])}',
+              'N ${formatter.format(debtor['outstandingBalance'])}',
+            ];
+          }).toList(),
+        ),
+        pw.SizedBox(height: 10),
+        pw.Divider(thickness: 1.5, color: PdfColors.red400),
+        pw.SizedBox(height: 6),
+        _buildRow(
+          'TOTAL SALES DEBT:',
+          'N ${formatter.format(totalSalesDebt)}',
+          bold: true,
+          fontSize: 13,
         ),
       ],
     );
@@ -744,4 +763,124 @@ class CustomReportPDFGenerator {
       ],
     );
   }
+}
+
+// -----------------------------------------------------------
+// ISOLATE ENTRY POINT
+// -----------------------------------------------------------
+// Top-level function so it can be handed to compute() and run on a
+// background isolate — building the pw.Document and rendering it to bytes
+// is the CPU-heavy part that used to block the UI thread.
+Future<Uint8List> _buildCustomReportPdfBytes(Map<String, dynamic> args) async {
+  final startDate = DateTime.fromMillisecondsSinceEpoch(args['startDate'] as int);
+  final endDate = DateTime.fromMillisecondsSinceEpoch(args['endDate'] as int);
+  final term = args['term'] as String?;
+  final session = args['session'] as String?;
+  final schoolProfile = args['schoolProfile'] as Map<String, dynamic>;
+
+  final cashTotal = args['cashTotal'] as double;
+  final posTotal = args['posTotal'] as double;
+  final transferTotal = args['transferTotal'] as double;
+  final totalIncome = args['totalIncome'] as double;
+  final paymentDetails = args['paymentDetails'] as List<Map<String, dynamic>>;
+
+  final expenseCashTotal = args['expenseCashTotal'] as double;
+  final expensePosTotal = args['expensePosTotal'] as double;
+  final expenseTransferTotal = args['expenseTransferTotal'] as double;
+  final totalExpenses = args['totalExpenses'] as double;
+  final expenseDetails = args['expenseDetails'] as List<Map<String, dynamic>>;
+
+  final stockSummary = args['stockSummary'] as List<Map<String, dynamic>>;
+  final salesDetails = args['salesDetails'] as List<Map<String, dynamic>>;
+  final salesDebtors = args['salesDebtors'] as List<Map<String, dynamic>>;
+  final salesCashTotal = args['salesCashTotal'] as double;
+  final salesPosTotal = args['salesPosTotal'] as double;
+  final salesTransferTotal = args['salesTransferTotal'] as double;
+  final totalSales = args['totalSales'] as double;
+  final totalSalesDebt = args['totalSalesDebt'] as double;
+
+  final includeIncome = args['includeIncome'] as bool;
+  final includePaymentDetails = args['includePaymentDetails'] as bool;
+  final includeExpenses = args['includeExpenses'] as bool;
+  final includeStockAndSales = args['includeStockAndSales'] as bool;
+  final reportTabLabel = args['reportTabLabel'] as String;
+
+  final pdf = pw.Document();
+  final formatter = NumberFormat('#,##0.00');
+  final showNetIncome = includeIncome && includeExpenses;
+
+  // ignore: avoid_print
+  print(
+    'CUSTOM REPORT PDF BUILD: '
+    'paymentDetails=${paymentDetails.length}, '
+    'expenseDetails=${expenseDetails.length}, '
+    'salesDetails=${salesDetails.length}, '
+    'stockSummary=${stockSummary.length}, '
+    'salesDebtors=${salesDebtors.length}, '
+    'includeIncome=$includeIncome, includePaymentDetails=$includePaymentDetails, '
+    'includeExpenses=$includeExpenses, includeStockAndSales=$includeStockAndSales',
+  );
+
+  pdf.addPage(
+    pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.all(40),
+      build: (context) => [
+        CustomReportPDFGenerator._buildHeader(
+            schoolProfile, startDate, endDate, term, session, reportTabLabel),
+        pw.SizedBox(height: 25),
+
+        if (includeIncome) ...[
+          CustomReportPDFGenerator._buildIncomeSection(
+            cashTotal, posTotal, transferTotal, totalIncome, formatter,
+            salesCashTotal, salesPosTotal, salesTransferTotal, totalSales,
+          ),
+          pw.SizedBox(height: 20),
+        ],
+
+        if (includePaymentDetails && paymentDetails.isNotEmpty) ...[
+          CustomReportPDFGenerator._buildPaymentDetailsSection(paymentDetails, formatter),
+          pw.SizedBox(height: 20),
+        ],
+
+        if (includeStockAndSales && salesDetails.isNotEmpty) ...[
+          CustomReportPDFGenerator._buildSalesSummarySection(salesDetails, formatter),
+          pw.SizedBox(height: 20),
+        ],
+
+        if (includeExpenses && expenseDetails.isNotEmpty) ...[
+          CustomReportPDFGenerator._buildExpensesSection(
+            expenseCashTotal, expensePosTotal, expenseTransferTotal,
+            totalExpenses, expenseDetails, formatter,
+          ),
+          pw.SizedBox(height: 20),
+        ],
+
+        if (showNetIncome) ...[
+          CustomReportPDFGenerator._buildNetIncomeSection(
+            (totalIncome + totalSales) - totalExpenses,
+            formatter,
+          ),
+          pw.SizedBox(height: 20),
+        ],
+
+        if (includeStockAndSales && stockSummary.isNotEmpty) ...[
+          CustomReportPDFGenerator._buildStockSummarySection(stockSummary),
+          pw.SizedBox(height: 20),
+        ],
+
+        if (includeStockAndSales && salesDebtors.isNotEmpty) ...[
+          CustomReportPDFGenerator._buildSalesDebtorsSection(salesDebtors, totalSalesDebt, formatter),
+          pw.SizedBox(height: 20),
+        ],
+
+        CustomReportPDFGenerator._buildBankDetails(schoolProfile),
+        pw.SizedBox(height: 30),
+        CustomReportPDFGenerator._buildFooter(),
+      ],
+      footer: (context) => CustomReportPDFGenerator._buildPageFooter(context),
+    ),
+  );
+
+  return pdf.save();
 }

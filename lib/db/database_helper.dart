@@ -98,7 +98,12 @@ class DatabaseHelper {
   //      adds/removes a "Transportation" line on the student's bill for the
   //      active term/session. Added transportation_manage and
   //      transportation_allocate permission modules.
-  static const int _dbVersion = 60;
+  // v61: Added Full Time/Per-Time employment category for Teaching Staff
+  //      (employmentType, paymentType, perPeriodRate columns on staff) and
+  //      the staff_period_records table, which stores the periods worked
+  //      and computed amount (periods × rate) per Per-Period staff member
+  //      per payroll month.
+  static const int _dbVersion = 61;
   static const String _defaultDbName = 'bursary_manager.db';
   // Which file the singleton currently points at — mutable (not const) so a
   // Read-Only device can switch between multiple linked schools' cached
@@ -787,6 +792,9 @@ class DatabaseHelper {
         referee2Address TEXT,
         dateOfEmployment TEXT,
         salary REAL DEFAULT 0,
+        employmentType TEXT,
+        paymentType TEXT,
+        perPeriodRate REAL,
         bankName TEXT,
         accountName TEXT,
         accountNumber TEXT,
@@ -920,6 +928,26 @@ class DatabaseHelper {
         reason TEXT,
         createdAt TEXT,
         FOREIGN KEY (staffId) REFERENCES staff(id)
+      )
+    ''');
+
+    // STAFF PERIOD RECORDS TABLE
+    // For Per-Time teaching staff paid Per-Period: how many periods they
+    // took in a given month and the rate that applied, so the computed
+    // amount (periodsWorked × periodRate) is saved per staff/month instead
+    // of being recalculated (and possibly forgotten) each time.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS staff_period_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        staffId INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        periodsWorked REAL NOT NULL DEFAULT 0,
+        periodRate REAL NOT NULL DEFAULT 0,
+        amount REAL NOT NULL DEFAULT 0,
+        createdAt TEXT,
+        updatedAt TEXT,
+        FOREIGN KEY (staffId) REFERENCES staff(id),
+        UNIQUE(staffId, month)
       )
     ''');
 
@@ -2798,6 +2826,27 @@ class DatabaseHelper {
         await db.insert('permissions', {'role': 'bursar', 'module': 'transportation_allocate', 'canAccess': 1});
       } catch (_) {}
       print('✅ v60: Transportation tables + permissions added');
+    }
+
+    if (oldVersion < 61) {
+      await _safeExec(db, 'ALTER TABLE staff ADD COLUMN employmentType TEXT');
+      await _safeExec(db, 'ALTER TABLE staff ADD COLUMN paymentType TEXT');
+      await _safeExec(db, 'ALTER TABLE staff ADD COLUMN perPeriodRate REAL');
+      await _safeExec(db, '''
+        CREATE TABLE IF NOT EXISTS staff_period_records (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          staffId INTEGER NOT NULL,
+          month TEXT NOT NULL,
+          periodsWorked REAL NOT NULL DEFAULT 0,
+          periodRate REAL NOT NULL DEFAULT 0,
+          amount REAL NOT NULL DEFAULT 0,
+          createdAt TEXT,
+          updatedAt TEXT,
+          FOREIGN KEY (staffId) REFERENCES staff(id),
+          UNIQUE(staffId, month)
+        )
+      ''');
+      print('✅ v61: Full Time/Per-Time staff category + staff_period_records table added');
     }
 
     // ensure session/term exists
@@ -7783,6 +7832,55 @@ class DatabaseHelper {
       return !targetDate.isAfter(deactMonthStart);
     } catch (_) {
       return true;
+    }
+  }
+
+  /// Get the saved periods-worked record for a Per-Period staff member for
+  /// a given "MMMM yyyy" month, if one has been entered.
+  Future<Map<String, dynamic>?> getStaffPeriodRecord(int staffId, String month) async {
+    final db = await database;
+    final result = await db.query(
+      'staff_period_records',
+      where: 'staffId = ? AND month = ?',
+      whereArgs: [staffId, month],
+      limit: 1,
+    );
+    return result.isNotEmpty ? result.first : null;
+  }
+
+  /// Save (insert or update) how many periods a Per-Period staff member
+  /// worked in [month] and the rate that applied, computing and storing the
+  /// resulting amount so it doesn't need to be recalculated later.
+  Future<void> setStaffPeriodRecord(
+    int staffId,
+    String month, {
+    required double periodsWorked,
+    required double periodRate,
+  }) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    final amount = periodsWorked * periodRate;
+    final existing = await getStaffPeriodRecord(staffId, month);
+    final data = {
+      'periodsWorked': periodsWorked,
+      'periodRate': periodRate,
+      'amount': amount,
+      'updatedAt': now,
+    };
+    if (existing != null) {
+      await db.update(
+        'staff_period_records',
+        data,
+        where: 'id = ?',
+        whereArgs: [existing['id']],
+      );
+    } else {
+      await db.insert('staff_period_records', {
+        ...data,
+        'staffId': staffId,
+        'month': month,
+        'createdAt': now,
+      });
     }
   }
 

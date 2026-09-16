@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'payment_progression_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class PaymentProgressionPdfGenerator {
   static final _currency = NumberFormat.currency(symbol: 'N', decimalDigits: 2);
@@ -15,7 +17,28 @@ class PaymentProgressionPdfGenerator {
     required String className,
     required String armName,
     required Map<String, dynamic> schoolProfile,
+    bool saveToDownloads = false,
   }) async {
+    final classLabelForFile = armName.isNotEmpty ? '$className ($armName)' : className;
+    final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'PaymentProgression_${classLabelForFile.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}_$ts';
+
+    if (Platform.isAndroid) {
+      final html = PaymentProgressionHtmlGenerator.build(
+        students: students,
+        term: term,
+        session: session,
+        className: className,
+        armName: armName,
+        schoolProfile: schoolProfile,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
 
     final classLabel = armName.isNotEmpty ? '$className ($armName)' : className;
@@ -57,10 +80,8 @@ class PaymentProgressionPdfGenerator {
       ),
     );
 
-    final dir = await getApplicationDocumentsDirectory();
-    final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'PaymentProgression_${classLabel.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}_$ts.pdf';
-    final file = File('${dir.path}/$fileName');
+    final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${dir.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
     return file.path;
   }

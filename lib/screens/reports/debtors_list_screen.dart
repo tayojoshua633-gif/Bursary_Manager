@@ -7,6 +7,7 @@ import '../../utils/display_settings_helper.dart';
 import '../../utils/debtors_pdf_generator.dart';
 import '../../utils/debtors_excel_generator.dart';
 import '../../utils/sibling_helper.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -162,36 +163,29 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
     }
 
     setState(() => _exporting = true);
-
     try {
-      final schoolProfile = await _db.getSchoolProfile();
       final className = _getSelectedClassName();
-
-      final filePath = await DebtorsPDFGenerator.generateDebtorsPDF(
-        debtors: _debtors,
-        className: className,
-        term: _term ?? '',
-        session: _session ?? '',
-        schoolProfile: schoolProfile ?? {},
-        filterType: _filterType,
-        minPercentage: _minPercentage,
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Debtors List - $className',
+        shareText: 'Debtors list for $_term $_session',
+        successMessage: 'Debtors list exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _db.getSchoolProfile();
+          return DebtorsPDFGenerator.generateDebtorsPDF(
+            debtors: _debtors,
+            className: className,
+            term: _term ?? '',
+            session: _session ?? '',
+            schoolProfile: schoolProfile ?? {},
+            filterType: _filterType,
+            minPercentage: _minPercentage,
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      setState(() => _exporting = false);
-
-      if (!mounted) return;
-
-      // Show share dialog
-      _showShareDialog(filePath, 'PDF');
-    } catch (e) {
-      setState(() => _exporting = false);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Export failed: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
   }
 

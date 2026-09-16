@@ -57,8 +57,11 @@ class _StaffRegisterScreenState extends State<StaffRegisterScreen> {
 
   // Salary
   final _salaryController = TextEditingController();
+  final _perPeriodRateController = TextEditingController();
 
   String _staffType = 'Teaching Staff';
+  String _employmentType = 'Full Time';
+  String _paymentType = 'Regular';
   String? _title;
   String _gender = 'Male';
   String _maritalStatus = 'Single';
@@ -114,6 +117,7 @@ class _StaffRegisterScreenState extends State<StaffRegisterScreen> {
     _accountNameController.dispose();
     _accountNumberController.dispose();
     _salaryController.dispose();
+    _perPeriodRateController.dispose();
     super.dispose();
   }
 
@@ -479,7 +483,20 @@ class _StaffRegisterScreenState extends State<StaffRegisterScreen> {
             ? null
             : _nextOfKinAddressController.text.trim(),
         dateOfEmployment: _dateOfEmployment?.toIso8601String(),
-        salary: double.tryParse(_salaryController.text.trim()) ?? 0,
+        salary: _staffType == 'Teaching Staff' &&
+                _employmentType == 'Per-Time' &&
+                _paymentType == 'Per-Period'
+            ? 0
+            : double.tryParse(_salaryController.text.trim()) ?? 0,
+        employmentType: _staffType == 'Teaching Staff' ? _employmentType : null,
+        paymentType: _staffType == 'Teaching Staff' && _employmentType == 'Per-Time'
+            ? _paymentType
+            : null,
+        perPeriodRate: _staffType == 'Teaching Staff' &&
+                _employmentType == 'Per-Time' &&
+                _paymentType == 'Per-Period'
+            ? double.tryParse(_perPeriodRateController.text.trim()) ?? 0
+            : null,
         bankName: _bankNameController.text.trim().isEmpty
             ? null
             : _bankNameController.text.trim(),
@@ -622,8 +639,32 @@ class _StaffRegisterScreenState extends State<StaffRegisterScreen> {
                       items: ['Teaching Staff', 'Non-Teaching Staff']
                           .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                           .toList(),
-                      onChanged: (v) => setState(() => _staffType = v!),
+                      onChanged: (v) => setState(() {
+                        _staffType = v!;
+                        if (_staffType != 'Teaching Staff') {
+                          _employmentType = 'Full Time';
+                          _paymentType = 'Regular';
+                        }
+                      }),
                     ),
+                    if (_staffType == 'Teaching Staff') ...[
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: _employmentType,
+                        decoration: const InputDecoration(
+                          labelText: 'Employment Type',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.schedule),
+                        ),
+                        items: ['Full Time', 'Per-Time']
+                            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                            .toList(),
+                        onChanged: (v) => setState(() {
+                          _employmentType = v!;
+                          if (_employmentType != 'Per-Time') _paymentType = 'Regular';
+                        }),
+                      ),
+                    ],
                     const SizedBox(height: 24),
 
                     // Bio Data Section
@@ -1024,15 +1065,52 @@ class _StaffRegisterScreenState extends State<StaffRegisterScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _salaryController,
-                      decoration: const InputDecoration(
-                        labelText: 'Monthly Salary',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.payments),
+                    if (_staffType == 'Teaching Staff' && _employmentType == 'Per-Time') ...[
+                      const Text(
+                        'Payment Type',
+                        style: TextStyle(fontWeight: FontWeight.w500),
                       ),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    ),
+                      RadioListTile<String>(
+                        value: 'Regular',
+                        groupValue: _paymentType,
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Regular Payment (fixed monthly amount)'),
+                        onChanged: (v) => setState(() => _paymentType = v!),
+                      ),
+                      RadioListTile<String>(
+                        value: 'Per-Period',
+                        groupValue: _paymentType,
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Per-Period (rate × periods taken monthly)'),
+                        onChanged: (v) => setState(() => _paymentType = v!),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (_staffType == 'Teaching Staff' &&
+                        _employmentType == 'Per-Time' &&
+                        _paymentType == 'Per-Period')
+                      TextFormField(
+                        controller: _perPeriodRateController,
+                        decoration: const InputDecoration(
+                          labelText: 'Rate per Period',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.payments),
+                          helperText: 'Amount agreed per period; multiplied by periods taken each month on the Staff Payroll screen',
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      )
+                    else
+                      TextFormField(
+                        controller: _salaryController,
+                        decoration: const InputDecoration(
+                          labelText: 'Monthly Salary',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.payments),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      ),
                     const SizedBox(height: 24),
 
                     // Salary Account Details Section

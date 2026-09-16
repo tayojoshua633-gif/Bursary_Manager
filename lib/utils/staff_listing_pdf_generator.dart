@@ -3,9 +3,11 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
 import '../models/staff.dart';
+import 'staff_listing_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class StaffListingPDFGenerator {
   static final _currencyFormat = NumberFormat.currency(symbol: 'N', decimalDigits: 0);
@@ -18,7 +20,28 @@ class StaffListingPDFGenerator {
     required int teachingCount,
     required int nonTeachingCount,
     required double totalSalary,
+    bool saveToDownloads = false,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'Staff_Listing_${filterType.replaceAll(' ', '_')}_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = StaffListingHtmlGenerator.build(
+        staff: staff,
+        schoolProfile: schoolProfile,
+        filterType: filterType,
+        totalStaff: totalStaff,
+        teachingCount: teachingCount,
+        nonTeachingCount: nonTeachingCount,
+        totalSalary: totalSalary,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
 
     pdf.addPage(
@@ -39,10 +62,8 @@ class StaffListingPDFGenerator {
       ),
     );
 
-    final output = await getApplicationDocumentsDirectory();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'Staff_Listing_${filterType.replaceAll(' ', '_')}_$timestamp.pdf';
-    final file = File('${output.path}/$fileName');
+    final output = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${output.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
 
     return file.path;

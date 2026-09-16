@@ -4,8 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../utils/debt_notification_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 
 class DebtNotificationScreen extends StatefulWidget {
   final Map<String, dynamic> schoolProfile;
@@ -121,7 +121,7 @@ class _DebtNotificationScreenState extends State<DebtNotificationScreen> {
   // ── Generate PDF ───────────────────────────────────────────────────────────
 
   Future<({Uint8List bytes, String? filePath})> _generatePdf(
-      {required bool saveToFile}) {
+      {required bool saveToFile, bool saveToDownloads = false}) {
     return DebtNotificationPdfGenerator.generate(
       schoolProfile: widget.schoolProfile,
       studentName: widget.studentName,
@@ -138,6 +138,7 @@ class _DebtNotificationScreenState extends State<DebtNotificationScreen> {
       customClosing: _closingController.text,
       paymentDeadline: _deadline,
       saveToFile: saveToFile,
+      saveToDownloads: saveToDownloads,
       isLastTerm: widget.isLastTerm,
       isZeroPayment: widget.isZeroPayment,
       isPta: widget.isPta,
@@ -155,23 +156,15 @@ class _DebtNotificationScreenState extends State<DebtNotificationScreen> {
   Future<void> _exportAndShare() async {
     setState(() => _generating = true);
     try {
-      final result = await _generatePdf(saveToFile: true);
-      if (!mounted) return;
-      if (result.filePath != null) {
-        await Share.shareXFiles(
-          [XFile(result.filePath!)],
-          subject: 'Debt Notification — ${widget.studentName}',
-          text:
-              'Kindly find attached the debt notification letter for ${widget.studentName}.',
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to generate PDF: $e'),
-          backgroundColor: Colors.red,
-        ),
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Debt Notification — ${widget.studentName}',
+        shareText: 'Kindly find attached the debt notification letter for ${widget.studentName}.',
+        successMessage: 'Debt notification letter exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final result = await _generatePdf(saveToFile: true, saveToDownloads: saveToDownloads);
+          return result.filePath!;
+        },
       );
     } finally {
       if (mounted) setState(() => _generating = false);

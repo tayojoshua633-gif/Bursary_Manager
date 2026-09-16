@@ -177,6 +177,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final status = await LicenseChecker.checkLicense();
     final activeLicense = await db.getActiveLicense();
 
+    if (mounted) unawaited(LicenseChecker.showExpiryWarningIfNeeded(context));
+
     // Re-decode the stored key just to read the isMasterKey flag — that
     // flag isn't persisted on the licenses table itself.
     final decoded = activeLicense != null

@@ -1,9 +1,9 @@
 // lib/screens/reports/stock_record_report_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/stock_record_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 
 class StockRecordReportScreen extends StatefulWidget {
   const StockRecordReportScreen({super.key});
@@ -94,35 +94,17 @@ class _StockRecordReportScreenState extends State<StockRecordReportScreen> {
       return;
     }
 
-    // Show loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
-
-    try {
-      final pdfPath = await StockRecordPDFGenerator.generateStockRecordPDF(
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Stock Record Report - ${DateFormat('MMMM d, yyyy').format(DateTime.now())}',
+      shareText: 'Stock Record Report',
+      successMessage: 'Stock record report exported successfully!',
+      generate: ({required saveToDownloads}) => StockRecordPDFGenerator.generateStockRecordPDF(
         stockRecords: _stockRecords,
         schoolProfile: _school ?? {},
-      );
-
-      if (!mounted) return;
-      Navigator.pop(context); // Dismiss loading dialog
-
-      // Share PDF
-      await Share.shareXFiles(
-        [XFile(pdfPath)],
-        subject: 'Stock Record Report - ${DateFormat('MMMM d, yyyy').format(DateTime.now())}',
-        text: 'Stock Record Report',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // Dismiss loading dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error exporting PDF: $e')),
-      );
-    }
+        saveToDownloads: saveToDownloads,
+      ),
+    );
   }
 
   @override

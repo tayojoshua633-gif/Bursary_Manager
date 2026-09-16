@@ -3,8 +3,10 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'staff_payroll_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class StaffPayrollPDFGenerator {
   static final _currencyFormat = NumberFormat.currency(symbol: 'N', decimalDigits: 2);
@@ -13,7 +15,24 @@ class StaffPayrollPDFGenerator {
     required List<Map<String, dynamic>> payrollData,
     required String month,
     required Map<String, dynamic> schoolProfile,
+    bool saveToDownloads = false,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'Staff_Payroll_${month.replaceAll(' ', '_')}_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = StaffPayrollHtmlGenerator.build(
+        payrollData: payrollData,
+        month: month,
+        schoolProfile: schoolProfile,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
 
     // Calculate totals
@@ -64,10 +83,8 @@ class StaffPayrollPDFGenerator {
     );
 
     // Save to file
-    final output = await getApplicationDocumentsDirectory();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'Staff_Payroll_${month.replaceAll(' ', '_')}_$timestamp.pdf';
-    final file = File('${output.path}/$fileName');
+    final output = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${output.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
 
     return file.path;

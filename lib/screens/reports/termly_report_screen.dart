@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/termly_report_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../utils/report_data/termly_report_loader.dart';
 
 class TermlyReportScreen extends StatefulWidget {
@@ -137,18 +137,12 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
   // EXPORT TERMLY REPORT AS PDF
   // -----------------------------------------------------------
   Future<void> _exportTermlyReportPDF() async {
-    try {
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(child: CircularProgressIndicator()),
-      );
-
-      // Allow UI to render loading indicator before heavy PDF work
-      await Future.delayed(const Duration(milliseconds: 100));
-
-      final filePath = await TermlyReportPDFGenerator.generateTermlyReportPDF(
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Termly Report - $activeTerm $activeSession',
+      shareText: 'Termly financial report for $activeTerm, $activeSession',
+      successMessage: 'Termly report PDF exported successfully!',
+      generate: ({required saveToDownloads}) => TermlyReportPDFGenerator.generateTermlyReportPDF(
         term: activeTerm ?? '',
         session: activeSession ?? '',
         schoolProfile: school ?? {},
@@ -180,28 +174,9 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
         salesTransferTotal: salesTransferTotal,
         totalSales: totalSales,
         totalSalesDebt: totalSalesDebt,
-      );
-
-      if (!mounted) return;
-      Navigator.pop(context);
-
-      await Share.shareXFiles(
-        [XFile(filePath)],
-        subject: 'Termly Report - $activeTerm $activeSession',
-        text: 'Termly financial report for $activeTerm, $activeSession',
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Termly report PDF exported successfully!')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error exporting PDF: $e')),
-      );
-    }
+        saveToDownloads: saveToDownloads,
+      ),
+    );
   }
 
   // -----------------------------------------------------------

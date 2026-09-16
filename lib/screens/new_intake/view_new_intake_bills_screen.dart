@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/new_intake_bills_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../utils/thermal_printer_manager.dart';
 import '../../utils/print_counter_helper.dart';
 import '../../utils/usb_printer_manager.dart';
@@ -544,79 +545,26 @@ class _ViewNewIntakeBillsScreenState extends State<ViewNewIntakeBillsScreen> {
     }
 
     setState(() => _exporting = true);
-
     try {
-      final pdfPath = await NewIntakeBillsPDFGenerator.generateNewIntakeBillPDF(
-        regularFees: _regularFees,
-        groupedCategories: _getSpecialFeesGroupedByCategory(),
-        standaloneItems: _getStandaloneItemsWithAmounts(),
-        grandTotal: _regularTotal + _specialTotal,
-        term: _activeTerm ?? '',
-        session: _activeSession ?? '',
-        className: _selectedClassName ?? '',
-        armName: _selectedArmName,
-        schoolProfile: _schoolProfile ?? {},
-      );
-
-      setState(() => _exporting = false);
-
-      if (!mounted) return;
-
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.check_circle, color: Colors.green),
-              SizedBox(width: 8),
-              Text('PDF Generated'),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('New Intake Bill PDF has been generated.'),
-              const SizedBox(height: 12),
-              Text(
-                'File: ${pdfPath.split('/').last}',
-                style: const TextStyle(fontSize: 12),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-            ElevatedButton.icon(
-              onPressed: () async {
-                Navigator.pop(context);
-                await Printing.sharePdf(
-                  bytes: await File(pdfPath).readAsBytes(),
-                  filename: pdfPath.split('/').last,
-                );
-              },
-              icon: const Icon(Icons.share),
-              label: const Text('Share'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.deepOrange,
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ],
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'New Intake Bill - ${_selectedClassName ?? ''}',
+        successMessage: 'New Intake Bill PDF exported successfully!',
+        generate: ({required saveToDownloads}) => NewIntakeBillsPDFGenerator.generateNewIntakeBillPDF(
+          regularFees: _regularFees,
+          groupedCategories: _getSpecialFeesGroupedByCategory(),
+          standaloneItems: _getStandaloneItemsWithAmounts(),
+          grandTotal: _regularTotal + _specialTotal,
+          term: _activeTerm ?? '',
+          session: _activeSession ?? '',
+          className: _selectedClassName ?? '',
+          armName: _selectedArmName,
+          schoolProfile: _schoolProfile ?? {},
+          saveToDownloads: saveToDownloads,
         ),
       );
-    } catch (e) {
-      setState(() => _exporting = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error generating PDF: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
   }
 

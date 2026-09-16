@@ -1,12 +1,12 @@
 // lib/screens/staff/staff_payroll/staff_incentive_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../../data/database_helper_wrapper.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../models/staff_incentive.dart';
 import '../../../utils/staff_incentive_pdf_generator.dart';
+import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
 
 class StaffIncentiveScreen extends StatefulWidget {
@@ -301,35 +301,29 @@ class _StaffIncentiveScreenState extends State<StaffIncentiveScreen> with Single
     }
 
     setState(() => _isExporting = true);
-
     try {
-      final schoolProfile = await _dbHelper.getSchoolProfile();
-      final totalIncentives = _incentives.fold<double>(
-        0,
-        (sum, i) => sum + (i['amount'] as num).toDouble(),
-      );
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Staff Incentives - $_selectedMonth',
+        successMessage: 'Staff incentives report exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _dbHelper.getSchoolProfile();
+          final totalIncentives = _incentives.fold<double>(
+            0,
+            (sum, i) => sum + (i['amount'] as num).toDouble(),
+          );
 
-      final filePath = await StaffIncentivePDFGenerator.generateIncentivePDF(
-        incentives: _incentives,
-        month: _selectedMonth,
-        schoolProfile: schoolProfile ?? {},
-        totalAmount: totalIncentives,
+          return StaffIncentivePDFGenerator.generateIncentivePDF(
+            incentives: _incentives,
+            month: _selectedMonth,
+            schoolProfile: schoolProfile ?? {},
+            totalAmount: totalIncentives,
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      if (mounted) {
-        setState(() => _isExporting = false);
-        await Share.shareXFiles(
-          [XFile(filePath)],
-          subject: 'Staff Incentives - $_selectedMonth',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isExporting = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to export: $e'), backgroundColor: Colors.red),
-        );
-      }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
     }
   }
 

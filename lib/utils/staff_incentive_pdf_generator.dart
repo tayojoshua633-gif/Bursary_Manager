@@ -3,8 +3,10 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'staff_incentive_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class StaffIncentivePDFGenerator {
   static final _currencyFormat = NumberFormat.currency(symbol: 'N', decimalDigits: 2);
@@ -14,7 +16,25 @@ class StaffIncentivePDFGenerator {
     required String month,
     required Map<String, dynamic> schoolProfile,
     required double totalAmount,
+    bool saveToDownloads = false,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'Staff_Incentives_${month.replaceAll(' ', '_')}_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = StaffIncentiveHtmlGenerator.build(
+        incentives: incentives,
+        month: month,
+        schoolProfile: schoolProfile,
+        totalAmount: totalAmount,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
 
     pdf.addPage(
@@ -35,10 +55,8 @@ class StaffIncentivePDFGenerator {
       ),
     );
 
-    final output = await getApplicationDocumentsDirectory();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'Staff_Incentives_${month.replaceAll(' ', '_')}_$timestamp.pdf';
-    final file = File('${output.path}/$fileName');
+    final output = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${output.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
 
     return file.path;

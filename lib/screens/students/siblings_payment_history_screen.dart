@@ -19,6 +19,7 @@ import '../../utils/permission_helper.dart';
 import '../../utils/payment_date_time_formatter.dart';
 import '../../utils/sms_service.dart';
 import '../../utils/family_payment_receipt_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 
 class SiblingsPaymentHistoryScreen extends StatefulWidget {
   final Map<String, dynamic> siblingGroup;
@@ -1452,9 +1453,11 @@ class _SiblingsPaymentHistoryScreenState
     final total = items.fold<double>(
         0.0, (sum, it) => sum + ((it['amount'] as num?)?.toDouble() ?? 0.0));
 
-    try {
-      _showLoading();
-      final pdf = FamilyPaymentReceiptPdfGenerator.generate(
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Family Payment Receipt - $parentName',
+      successMessage: 'Family payment receipt exported successfully!',
+      generate: ({required saveToDownloads}) => FamilyPaymentReceiptPdfGenerator.generateFile(
         schoolName: schoolName,
         schoolAddress: schoolAddress,
         parentName: parentName,
@@ -1468,6 +1471,8 @@ class _SiblingsPaymentHistoryScreenState
         familyTotalBilled: _groupTotalBills,
         familyTotalPaid: _groupTotalPaid,
         familyOutstanding: _groupTotalOutstanding,
+        fileNamePrefix: 'family_receipt_reprint_$familySurname',
+        saveToDownloads: saveToDownloads,
         items: items.map((it) {
           final student = it['student'] as Map<String, dynamic>;
           final name = '${student['surname']} ${student['firstName']}'.trim();
@@ -1482,26 +1487,8 @@ class _SiblingsPaymentHistoryScreenState
             amount: amount,
           );
         }).toList(),
-      );
-
-      final dir = await getApplicationDocumentsDirectory();
-      final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      final file = File(
-          '${dir.path}/family_receipt_reprint_${familySurname}_$dateStr.pdf');
-      await file.writeAsBytes(await pdf.save());
-
-      if (!mounted) return;
-      Navigator.pop(context); // close loading
-
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        subject: 'Family Payment Receipt - $parentName',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context);
-      _snack('Error generating PDF: $e');
-    }
+      ),
+    );
   }
 
   Future<void> _reprintReceiptThermal(Map<String, dynamic> group) async {

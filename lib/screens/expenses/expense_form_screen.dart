@@ -13,6 +13,11 @@ class ExpenseFormScreen extends StatefulWidget {
   final double? initialAmount;
   final String? initialCategory;
   final String? initialDescription;
+  /// Term/session to save a new expense against (ignored in edit mode,
+  /// which keeps the expense's original term/session). Falls back to the
+  /// active term/session if not provided.
+  final String? initialTerm;
+  final String? initialSession;
 
   const ExpenseFormScreen({
     super.key,
@@ -21,6 +26,8 @@ class ExpenseFormScreen extends StatefulWidget {
     this.initialAmount,
     this.initialCategory,
     this.initialDescription,
+    this.initialTerm,
+    this.initialSession,
   });
 
   @override
@@ -92,9 +99,19 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   }
 
   Future<void> _loadData({String? initialCategory}) async {
-    _activeTerm = await _db.getActiveTerm();
-    final sessionData = await _db.getActiveSession();
-    _activeSession = sessionData?['sessionName'];
+    final expense = widget.expense;
+    if (expense != null) {
+      _activeTerm = expense['term']?.toString();
+      _activeSession = expense['session']?.toString();
+    } else {
+      _activeTerm = widget.initialTerm;
+      _activeSession = widget.initialSession;
+    }
+    _activeTerm ??= await _db.getActiveTerm();
+    if (_activeSession == null) {
+      final sessionData = await _db.getActiveSession();
+      _activeSession = sessionData?['sessionName'];
+    }
 
     final cats = await _db.getAllExpenseCategories();
     final names = cats.map((c) => c['name'] as String).toList();
@@ -270,6 +287,33 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  if (_activeSession != null || _activeTerm != null) ...[
+                    Card(
+                      color: Colors.blue.shade50,
+                      elevation: 0,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        child: Row(
+                          children: [
+                            Icon(Icons.event, size: 18, color: Colors.blue.shade700),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Saving to: ${_activeSession ?? '-'} • ${_activeTerm ?? '-'}',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.blue.shade900,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
                   // Amount
                   TextFormField(
                     controller: _amountCtrl,

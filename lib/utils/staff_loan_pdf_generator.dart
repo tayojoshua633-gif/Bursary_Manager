@@ -3,8 +3,10 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'staff_loan_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class StaffLoanPDFGenerator {
   static final _currencyFormat = NumberFormat.currency(symbol: 'N', decimalDigits: 2);
@@ -15,7 +17,26 @@ class StaffLoanPDFGenerator {
     required String filterStatus,
     required double totalLoans,
     required double totalBalance,
+    bool saveToDownloads = false,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'Staff_Loans_${filterStatus}_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = StaffLoanHtmlGenerator.build(
+        loans: loans,
+        schoolProfile: schoolProfile,
+        filterStatus: filterStatus,
+        totalLoans: totalLoans,
+        totalBalance: totalBalance,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
 
     pdf.addPage(
@@ -37,10 +58,8 @@ class StaffLoanPDFGenerator {
       ),
     );
 
-    final output = await getApplicationDocumentsDirectory();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'Staff_Loans_${filterStatus}_$timestamp.pdf';
-    final file = File('${output.path}/$fileName');
+    final output = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${output.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
 
     return file.path;

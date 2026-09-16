@@ -1,11 +1,12 @@
 // lib/screens/billing/debt_notification_hub_screen.dart
 
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/debt_notification_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import 'debt_notification_screen.dart';
 import 'debt_notification_setup_screen.dart';
 
@@ -446,6 +447,40 @@ class _DebtNotificationHubScreenState
 
   // ── Export ────────────────────────────────────────────────────────────────
 
+  Future<({Uint8List bytes, String? filePath})> _generateBulk({
+    required bool saveToFile,
+    bool saveToDownloads = false,
+  }) {
+    return DebtNotificationPdfGenerator.generateBulk(
+      schoolProfile: _school ?? {},
+      students: _filtered,
+      term: _settings.letterType == 'last' ? _prevTerm : _term,
+      session: _settings.letterType == 'last' ? _prevSession : _session,
+      letterDate: _settings.letterDate,
+      signatoryName: _settings.signatoryName,
+      customOpening: _settings.customOpening.isEmpty
+          ? null
+          : _settings.customOpening,
+      customClosing: _settings.customClosing.isEmpty
+          ? null
+          : _settings.customClosing,
+      paymentDeadline: _settings.paymentDeadline,
+      twoUp: _settings.copiesPerPage == 2,
+      threeUp: _settings.copiesPerPage == 3,
+      isLastTerm: _settings.letterType == 'last',
+      isZeroPayment: _settings.letterType == 'zero',
+      isPta: _settings.letterType == 'pta',
+      isMidTerm: _settings.letterType == 'midterm',
+      ptaMeetingDate: _settings.ptaMeetingDate,
+      ptaMeetingTime: _settings.ptaMeetingTime,
+      ptaVenue: _settings.ptaVenue,
+      midTermStartDate: _settings.midTermStartDate,
+      midTermReturnDate: _settings.midTermReturnDate,
+      saveToFile: saveToFile,
+      saveToDownloads: saveToDownloads,
+    );
+  }
+
   Future<void> _exportAll({bool previewOnly = false}) async {
     if (_filtered.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -453,55 +488,41 @@ class _DebtNotificationHubScreenState
       );
       return;
     }
-    setState(() => _exporting = true);
-    try {
-      final result = await DebtNotificationPdfGenerator.generateBulk(
-        schoolProfile: _school ?? {},
-        students: _filtered,
-        term: _settings.letterType == 'last' ? _prevTerm : _term,
-        session: _settings.letterType == 'last' ? _prevSession : _session,
-        letterDate: _settings.letterDate,
-        signatoryName: _settings.signatoryName,
-        customOpening: _settings.customOpening.isEmpty
-            ? null
-            : _settings.customOpening,
-        customClosing: _settings.customClosing.isEmpty
-            ? null
-            : _settings.customClosing,
-        paymentDeadline: _settings.paymentDeadline,
-        twoUp: _settings.copiesPerPage == 2,
-        threeUp: _settings.copiesPerPage == 3,
-        isLastTerm: _settings.letterType == 'last',
-        isZeroPayment: _settings.letterType == 'zero',
-        isPta: _settings.letterType == 'pta',
-        isMidTerm: _settings.letterType == 'midterm',
-        ptaMeetingDate: _settings.ptaMeetingDate,
-        ptaMeetingTime: _settings.ptaMeetingTime,
-        ptaVenue: _settings.ptaVenue,
-        midTermStartDate: _settings.midTermStartDate,
-        midTermReturnDate: _settings.midTermReturnDate,
-        saveToFile: !previewOnly,
-      );
-      if (!mounted) return;
-      if (previewOnly) {
+
+    if (previewOnly) {
+      setState(() => _exporting = true);
+      try {
+        final result = await _generateBulk(saveToFile: false);
+        if (!mounted) return;
         await Printing.layoutPdf(
           onLayout: (_) async => result.bytes,
           name: 'DebtNotification_All',
         );
-      } else if (result.filePath != null) {
-        await Share.shareXFiles(
-          [XFile(result.filePath!)],
-          subject: 'Debt Notification Letters — $_term, $_session',
-        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                content: Text('Export failed: $e'),
+                backgroundColor: Colors.red),
+          );
+        }
+      } finally {
+        if (mounted) setState(() => _exporting = false);
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Export failed: $e'),
-              backgroundColor: Colors.red),
-        );
-      }
+      return;
+    }
+
+    setState(() => _exporting = true);
+    try {
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Debt Notification Letters — $_term, $_session',
+        successMessage: 'Debt notification letters exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final result = await _generateBulk(saveToFile: true, saveToDownloads: saveToDownloads);
+          return result.filePath!;
+        },
+      );
     } finally {
       if (mounted) setState(() => _exporting = false);
     }

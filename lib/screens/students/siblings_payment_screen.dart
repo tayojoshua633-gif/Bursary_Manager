@@ -1,10 +1,7 @@
 // lib/screens/students/siblings_payment_screen.dart
 
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/backup_reminder_helper.dart';
 import '../../utils/central_backup_helper.dart';
@@ -17,6 +14,7 @@ import '../settings/usb_printer_screen.dart';
 import '../../utils/navigation_helper.dart';
 import '../../utils/sms_service.dart';
 import '../../utils/family_payment_receipt_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 
 class SiblingsPaymentScreen extends StatefulWidget {
   final Map<String, dynamic> siblingGroup;
@@ -847,10 +845,12 @@ class _SiblingsPaymentScreenState extends State<SiblingsPaymentScreen> {
             : 'Family') as String? ??
         'Family';
 
-    try {
-      _showLoading(sheetContext);
-      final familyTotals = _familyTotalsAfter(savedPayments);
-      final pdf = FamilyPaymentReceiptPdfGenerator.generate(
+    final familyTotals = _familyTotalsAfter(savedPayments);
+    await PdfExportHelper.exportPdf(
+      sheetContext,
+      shareSubject: 'Family Payment Receipt - $parentName',
+      successMessage: 'Family payment receipt exported successfully!',
+      generate: ({required saveToDownloads}) => FamilyPaymentReceiptPdfGenerator.generateFile(
         schoolName: schoolName,
         schoolAddress: schoolAddress,
         parentName: parentName,
@@ -864,6 +864,8 @@ class _SiblingsPaymentScreenState extends State<SiblingsPaymentScreen> {
         familyTotalBilled: familyTotals.billed,
         familyTotalPaid: familyTotals.paidAfter,
         familyOutstanding: familyTotals.outstandingAfter,
+        fileNamePrefix: 'family_receipt_$familySurname',
+        saveToDownloads: saveToDownloads,
         items: savedPayments.map((p) {
           final s = p['studentData'] as Map<String, dynamic>;
           final name = '${s['surname']} ${s['firstName']}'.trim();
@@ -877,29 +879,11 @@ class _SiblingsPaymentScreenState extends State<SiblingsPaymentScreen> {
             amount: amount,
           );
         }).toList(),
-      );
+      ),
+    );
 
-      final dir = await getApplicationDocumentsDirectory();
-      final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      final file = File(
-          '${dir.path}/family_receipt_${familySurname}_$dateStr.pdf');
-      await file.writeAsBytes(await pdf.save());
-
-      if (!sheetContext.mounted) return;
-      Navigator.pop(sheetContext); // close loading
-
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        subject: 'Family Payment Receipt - $parentName',
-      );
-
-      if (!sheetContext.mounted) return;
-      Navigator.pop(sheetContext); // close the receipt sheet
-    } catch (e) {
-      if (!sheetContext.mounted) return;
-      Navigator.pop(sheetContext);
-      _snack('Error generating PDF: $e', ctx: sheetContext);
-    }
+    if (!sheetContext.mounted) return;
+    Navigator.pop(sheetContext); // close the receipt sheet
   }
 
   // ── Thermal receipt ────────────────────────────────────────────────────────

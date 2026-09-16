@@ -1,8 +1,12 @@
 // lib/utils/family_payment_receipt_pdf_generator.dart
 
+import 'dart:io';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'family_payment_receipt_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class FamilyReceiptPaymentItem {
   final String studentName;
@@ -20,6 +24,77 @@ class FamilyReceiptPaymentItem {
 // payment is first recorded, so a later reprint from history looks identical
 // to the original receipt.
 class FamilyPaymentReceiptPdfGenerator {
+  /// Generates the receipt and writes it to a file, returning the path.
+  /// On Android this renders via the native WebView print pipeline (see
+  /// custom_report_pdf_generator.dart); other platforms use [generate]
+  /// below (the pure-Dart `pdf` package).
+  static Future<String> generateFile({
+    required String schoolName,
+    required String schoolAddress,
+    required String parentName,
+    required String parentPhone,
+    required String term,
+    required String session,
+    required DateTime date,
+    required String method,
+    required String note,
+    required List<FamilyReceiptPaymentItem> items,
+    required double totalAmount,
+    double? familyTotalBilled,
+    double? familyTotalPaid,
+    double? familyOutstanding,
+    required String fileNamePrefix,
+    bool saveToDownloads = false,
+  }) async {
+    final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final baseName = '${fileNamePrefix}_$dateStr';
+
+    if (Platform.isAndroid) {
+      final html = FamilyPaymentReceiptHtmlGenerator.build(
+        schoolName: schoolName,
+        schoolAddress: schoolAddress,
+        parentName: parentName,
+        parentPhone: parentPhone,
+        term: term,
+        session: session,
+        date: date,
+        method: method,
+        note: note,
+        items: items,
+        totalAmount: totalAmount,
+        familyTotalBilled: familyTotalBilled,
+        familyTotalPaid: familyTotalPaid,
+        familyOutstanding: familyOutstanding,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
+    final pdf = generate(
+      schoolName: schoolName,
+      schoolAddress: schoolAddress,
+      parentName: parentName,
+      parentPhone: parentPhone,
+      term: term,
+      session: session,
+      date: date,
+      method: method,
+      note: note,
+      items: items,
+      totalAmount: totalAmount,
+      familyTotalBilled: familyTotalBilled,
+      familyTotalPaid: familyTotalPaid,
+      familyOutstanding: familyOutstanding,
+    );
+    final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${dir.path}/$baseName.pdf');
+    await file.writeAsBytes(await pdf.save());
+    return file.path;
+  }
+
   static pw.Document generate({
     required String schoolName,
     required String schoolAddress,

@@ -1,10 +1,10 @@
 // lib/screens/staff/staff_view/staff_table_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../utils/staff_listing_pdf_generator.dart';
+import '../../../utils/pdf_export_helper.dart';
 
 class StaffTableScreen extends StatefulWidget {
   const StaffTableScreen({super.key});
@@ -98,37 +98,31 @@ class _StaffTableScreenState extends State<StaffTableScreen> {
     }
 
     setState(() => _isExporting = true);
-
     try {
-      final schoolProfile = await _dbHelper.getSchoolProfile();
-      final teachingCount = _filteredStaff.where((s) => s.isTeachingStaff).length;
-      final nonTeachingCount = _filteredStaff.where((s) => !s.isTeachingStaff).length;
-      final totalSalary = _filteredStaff.fold<double>(0, (sum, s) => sum + s.salary);
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Staff Listing - $_filterType',
+        successMessage: 'Staff listing exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _dbHelper.getSchoolProfile();
+          final teachingCount = _filteredStaff.where((s) => s.isTeachingStaff).length;
+          final nonTeachingCount = _filteredStaff.where((s) => !s.isTeachingStaff).length;
+          final totalSalary = _filteredStaff.fold<double>(0, (sum, s) => sum + s.salary);
 
-      final filePath = await StaffListingPDFGenerator.generateStaffListingPDF(
-        staff: _filteredStaff,
-        schoolProfile: schoolProfile ?? {},
-        filterType: _filterType,
-        totalStaff: _filteredStaff.length,
-        teachingCount: teachingCount,
-        nonTeachingCount: nonTeachingCount,
-        totalSalary: totalSalary,
+          return StaffListingPDFGenerator.generateStaffListingPDF(
+            staff: _filteredStaff,
+            schoolProfile: schoolProfile ?? {},
+            filterType: _filterType,
+            totalStaff: _filteredStaff.length,
+            teachingCount: teachingCount,
+            nonTeachingCount: nonTeachingCount,
+            totalSalary: totalSalary,
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      if (mounted) {
-        setState(() => _isExporting = false);
-        await Share.shareXFiles(
-          [XFile(filePath)],
-          subject: 'Staff Listing - $_filterType',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isExporting = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to export: $e'), backgroundColor: Colors.red),
-        );
-      }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
     }
   }
 

@@ -1,12 +1,12 @@
 // lib/screens/staff/staff_payroll/staff_deduction_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../../data/database_helper_wrapper.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../models/staff_deduction.dart';
 import '../../../utils/staff_deduction_pdf_generator.dart';
+import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
 
 class StaffDeductionScreen extends StatefulWidget {
@@ -366,42 +366,36 @@ class _StaffDeductionScreenState extends State<StaffDeductionScreen> with Single
     }
 
     setState(() => _isExporting = true);
-
     try {
-      final schoolProfile = await _dbHelper.getSchoolProfile();
-      final totalDeductions = _deductions.fold<double>(
-        0,
-        (sum, d) => sum + (d['amount'] as num).toDouble(),
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Staff Deductions - $_selectedMonth',
+        successMessage: 'Staff deductions report exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _dbHelper.getSchoolProfile();
+          final totalDeductions = _deductions.fold<double>(
+            0,
+            (sum, d) => sum + (d['amount'] as num).toDouble(),
+          );
+
+          final Map<String, double> reasonTotals = {};
+          for (var d in _deductions) {
+            final reason = d['reason'] as String;
+            reasonTotals[reason] = (reasonTotals[reason] ?? 0) + (d['amount'] as num).toDouble();
+          }
+
+          return StaffDeductionPDFGenerator.generateDeductionPDF(
+            deductions: _deductions,
+            month: _selectedMonth,
+            schoolProfile: schoolProfile ?? {},
+            totalAmount: totalDeductions,
+            reasonTotals: reasonTotals,
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      final Map<String, double> reasonTotals = {};
-      for (var d in _deductions) {
-        final reason = d['reason'] as String;
-        reasonTotals[reason] = (reasonTotals[reason] ?? 0) + (d['amount'] as num).toDouble();
-      }
-
-      final filePath = await StaffDeductionPDFGenerator.generateDeductionPDF(
-        deductions: _deductions,
-        month: _selectedMonth,
-        schoolProfile: schoolProfile ?? {},
-        totalAmount: totalDeductions,
-        reasonTotals: reasonTotals,
-      );
-
-      if (mounted) {
-        setState(() => _isExporting = false);
-        await Share.shareXFiles(
-          [XFile(filePath)],
-          subject: 'Staff Deductions - $_selectedMonth',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isExporting = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to export: $e'), backgroundColor: Colors.red),
-        );
-      }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
     }
   }
 

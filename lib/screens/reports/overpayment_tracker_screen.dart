@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../models/student.dart';
 import '../students/student_details_screen.dart';
+import '../../utils/navigation_helper.dart';
 import '../../utils/overpayment_tracker_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 
 class OverpaymentTrackerScreen extends StatefulWidget {
   const OverpaymentTrackerScreen({super.key});
@@ -30,11 +32,29 @@ class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
   String? activeTerm;
   String? activeSession;
   Map<String, dynamic>? school;
+  Map<String, dynamic>? _currentUser;
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentUser();
     _loadOverpayments();
+  }
+
+  Future<void> _loadCurrentUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userType = prefs.getString('userType') ?? 'bursar';
+    final userId = prefs.getInt('userId') ?? 0;
+    final username = prefs.getString('username') ?? 'User';
+
+    if (!mounted) return;
+    setState(() {
+      _currentUser = {
+        'id': userId,
+        'userType': userType,
+        'username': username,
+      };
+    });
   }
 
   @override
@@ -220,36 +240,18 @@ class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
       return;
     }
 
-    // Show loading dialog
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
-
-    try {
-      final filePath = await OverpaymentTrackerPDFGenerator.generateOverpaymentTrackerPDF(
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Overpayment Tracker - $activeTerm $activeSession',
+      successMessage: 'Overpayment tracker exported successfully!',
+      generate: ({required saveToDownloads}) => OverpaymentTrackerPDFGenerator.generateOverpaymentTrackerPDF(
         term: activeTerm ?? '',
         session: activeSession ?? '',
         schoolProfile: school ?? {},
         overpayments: _overpayments,
-      );
-
-      if (!mounted) return;
-      Navigator.pop(context);
-
-      await Share.shareXFiles(
-        [XFile(filePath)],
-        text: 'Overpayment Tracker - $activeTerm $activeSession',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error generating PDF: $e')),
-      );
-    }
+        saveToDownloads: saveToDownloads,
+      ),
+    );
   }
 
   @override
@@ -452,11 +454,11 @@ class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
                                   // Convert to Student model for navigation using fromMap
                                   final student = Student.fromMap(item);
 
-                                  await Navigator.push(
+                                  await NavigationHelper.pushWithSidebar(
                                     context,
-                                    MaterialPageRoute(
-                                      builder: (_) => StudentDetailsScreen(student: student),
-                                    ),
+                                    page: StudentDetailsScreen(student: student),
+                                    currentUser: _currentUser ?? {},
+                                    pageId: 'student_management/students',
                                   );
                                   // Refresh after returning
                                   _loadOverpayments();

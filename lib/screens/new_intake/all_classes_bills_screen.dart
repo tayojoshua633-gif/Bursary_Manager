@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/all_classes_new_intake_bills_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 
 class AllClassesBillsScreen extends StatefulWidget {
   const AllClassesBillsScreen({super.key});
@@ -774,57 +775,38 @@ class _AllClassesBillsScreenState extends State<AllClassesBillsScreen> {
     }
 
     setState(() => _exporting = true);
-
     try {
-      // Organize classes by type for PDF
-      final classesByType = <String, List<Map<String, dynamic>>>{
-        'PRE-PRIMARY': _prePrimaryClasses,
-        'PRIMARY': _primaryClasses,
-        'JUNIOR SECONDARY': _juniorSecondaryClasses,
-        'SENIOR SECONDARY': _seniorSecondaryClasses,
-      };
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'New Intake Bills - All Classes',
+        successMessage: 'New Intake Bills PDF exported successfully!',
+        generate: ({required saveToDownloads}) {
+          // Organize classes by type for PDF
+          final classesByType = <String, List<Map<String, dynamic>>>{
+            'PRE-PRIMARY': _prePrimaryClasses,
+            'PRIMARY': _primaryClasses,
+            'JUNIOR SECONDARY': _juniorSecondaryClasses,
+            'SENIOR SECONDARY': _seniorSecondaryClasses,
+          };
 
-      // Remove empty sections
-      classesByType.removeWhere((key, value) => value.isEmpty);
+          // Remove empty sections
+          classesByType.removeWhere((key, value) => value.isEmpty);
 
-      final filePath = await AllClassesNewIntakeBillsPDFGenerator.generatePDF(
-        term: _activeTerm ?? '',
-        session: _activeSession ?? '',
-        schoolProfile: _schoolProfile!,
-        classesByType: classesByType,
-        classArmBills: _classArmBills,
-        categories: _categories,
-        standaloneItems: _standaloneItems,
-        childItemsMap: _childItemsMap,
+          return AllClassesNewIntakeBillsPDFGenerator.generatePDF(
+            term: _activeTerm ?? '',
+            session: _activeSession ?? '',
+            schoolProfile: _schoolProfile!,
+            classesByType: classesByType,
+            classArmBills: _classArmBills,
+            categories: _categories,
+            standaloneItems: _standaloneItems,
+            childItemsMap: _childItemsMap,
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      setState(() => _exporting = false);
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('PDF exported successfully to:\n$filePath'),
-          duration: const Duration(seconds: 5),
-          backgroundColor: Colors.green,
-          action: SnackBarAction(
-            label: 'OK',
-            textColor: Colors.white,
-            onPressed: () {},
-          ),
-        ),
-      );
-    } catch (e) {
-      setState(() => _exporting = false);
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error exporting PDF: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
   }
 

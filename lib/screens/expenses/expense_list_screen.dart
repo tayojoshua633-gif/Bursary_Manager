@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../utils/expenses_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import 'expense_form_screen.dart';
 
 enum DateFilter { all, today, thisWeek, thisMonth, custom }
@@ -233,6 +235,38 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
     _loadExpenses();
   }
 
+  Future<void> _exportToPDF() async {
+    if (_filteredExpenses.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No expenses to export')),
+      );
+      return;
+    }
+
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Expenses Report - ${_getFilterDisplayText()}',
+      successMessage: 'Expenses report exported successfully!',
+      generate: ({required saveToDownloads}) async {
+        final schoolProfile = await _db.getSchoolProfile();
+        final categoryLabel = _selectedCategoryTab == 'All' ? null : 'Category: $_selectedCategoryTab';
+        final filterLabel = [
+          _getFilterDisplayText(),
+          if (categoryLabel != null) categoryLabel,
+        ].join(' | ');
+
+        return ExpensesPDFGenerator.generateExpensesPDF(
+          expenses: _filteredExpenses,
+          schoolProfile: schoolProfile ?? {},
+          term: _selectedTerm,
+          session: _selectedSession,
+          filterLabel: filterLabel,
+          saveToDownloads: saveToDownloads,
+        );
+      },
+    );
+  }
+
   void _setFilter(DateFilter filter) {
     setState(() {
       _selectedFilter = filter;
@@ -281,7 +315,11 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
     final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => ExpenseFormScreen(currentUser: widget.currentUser),
+        builder: (_) => ExpenseFormScreen(
+          currentUser: widget.currentUser,
+          initialTerm: _selectedTerm,
+          initialSession: _selectedSession,
+        ),
       ),
     );
 
@@ -448,6 +486,13 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
         title: const Text('Expenses'),
         backgroundColor: Colors.brown,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf),
+            tooltip: 'Export PDF',
+            onPressed: _exportToPDF,
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())

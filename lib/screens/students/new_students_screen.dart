@@ -2,9 +2,13 @@
 
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../models/student.dart';
 import '../../utils/sibling_helper.dart';
+import '../../utils/navigation_helper.dart';
+import '../../utils/new_students_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import 'student_details_screen.dart';
 
@@ -26,11 +30,29 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   Set<String> _siblingPhones = {};
+  Map<String, dynamic>? _currentUser;
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentUser();
     _loadNewStudents();
+  }
+
+  Future<void> _loadCurrentUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userType = prefs.getString('userType') ?? 'bursar';
+    final userId = prefs.getInt('userId') ?? 0;
+    final username = prefs.getString('username') ?? 'User';
+
+    if (!mounted) return;
+    setState(() {
+      _currentUser = {
+        'id': userId,
+        'userType': userType,
+        'username': username,
+      };
+    });
   }
 
   @override
@@ -173,16 +195,41 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
 
   void _navigateToStudentDetails(Map<String, dynamic> studentData) {
     final student = Student.fromMap(studentData);
-    Navigator.push(
+    NavigationHelper.pushWithSidebar(
       context,
-      MaterialPageRoute(
-        builder: (_) => StudentDetailsScreen(student: student),
-      ),
+      page: StudentDetailsScreen(student: student),
+      currentUser: _currentUser ?? {},
+      pageId: 'student_management/students',
     ).then((value) {
       if (value == true) {
         _loadNewStudents();
       }
     });
+  }
+
+  Future<void> _exportToPDF() async {
+    if (_filteredStudents.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No new students to export')),
+      );
+      return;
+    }
+
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'New Students - $_activeTerm $_activeSession',
+      successMessage: 'New students list exported successfully!',
+      generate: ({required saveToDownloads}) async {
+        final schoolProfile = await _db.getSchoolProfile();
+        return NewStudentsPDFGenerator.generateNewStudentsPDF(
+          students: _filteredStudents,
+          schoolProfile: schoolProfile ?? {},
+          term: _activeTerm,
+          session: _activeSession,
+          saveToDownloads: saveToDownloads,
+        );
+      },
+    );
   }
 
   String _formatDate(String? dateStr) {
@@ -212,6 +259,11 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
         ),
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf),
+            onPressed: _exportToPDF,
+            tooltip: 'Export PDF',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadNewStudents,

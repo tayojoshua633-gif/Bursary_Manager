@@ -2,12 +2,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../../data/database_helper_wrapper.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../models/staff_loan.dart';
 import '../../../utils/staff_loan_pdf_generator.dart';
+import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
 
 class StaffLoanScreen extends StatefulWidget {
@@ -770,43 +770,37 @@ class _StaffLoanScreenState extends State<StaffLoanScreen> with SingleTickerProv
     }
 
     setState(() => _isExporting = true);
-
     try {
-      final schoolProfile = await _dbHelper.getSchoolProfile();
-      final totalLoans = _filteredLoans.fold<double>(
-        0,
-        (sum, l) => sum + (l['amount'] as num).toDouble(),
-      );
-      final totalBalance = _filteredLoans.fold<double>(
-        0,
-        (sum, l) {
-          final loan = StaffLoan.fromMap(l);
-          return sum + loan.balance;
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Staff Loans - $_filterStatus',
+        successMessage: 'Staff loans report exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _dbHelper.getSchoolProfile();
+          final totalLoans = _filteredLoans.fold<double>(
+            0,
+            (sum, l) => sum + (l['amount'] as num).toDouble(),
+          );
+          final totalBalance = _filteredLoans.fold<double>(
+            0,
+            (sum, l) {
+              final loan = StaffLoan.fromMap(l);
+              return sum + loan.balance;
+            },
+          );
+
+          return StaffLoanPDFGenerator.generateLoanPDF(
+            loans: _filteredLoans,
+            schoolProfile: schoolProfile ?? {},
+            filterStatus: _filterStatus,
+            totalLoans: totalLoans,
+            totalBalance: totalBalance,
+            saveToDownloads: saveToDownloads,
+          );
         },
       );
-
-      final filePath = await StaffLoanPDFGenerator.generateLoanPDF(
-        loans: _filteredLoans,
-        schoolProfile: schoolProfile ?? {},
-        filterStatus: _filterStatus,
-        totalLoans: totalLoans,
-        totalBalance: totalBalance,
-      );
-
-      if (mounted) {
-        setState(() => _isExporting = false);
-        await Share.shareXFiles(
-          [XFile(filePath)],
-          subject: 'Staff Loans - $_filterStatus',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isExporting = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to export: $e'), backgroundColor: Colors.red),
-        );
-      }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
     }
   }
 

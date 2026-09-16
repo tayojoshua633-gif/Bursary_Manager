@@ -3,9 +3,11 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'debt_notification_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class DebtNotificationPdfGenerator {
   static final _currency = NumberFormat('#,##0.00');
@@ -30,6 +32,7 @@ class DebtNotificationPdfGenerator {
     String? customClosing,
     DateTime? paymentDeadline,
     bool saveToFile = true,
+    bool saveToDownloads = false,
     bool twoUp = false,
     bool threeUp = false,
     bool isLastTerm = false,
@@ -42,6 +45,49 @@ class DebtNotificationPdfGenerator {
     DateTime? midTermStartDate,
     DateTime? midTermReturnDate,
   }) async {
+    if (Platform.isAndroid) {
+      final copiesPerPage = threeUp ? 3 : (twoUp ? 2 : 1);
+      final html = await DebtNotificationHtmlGenerator.buildSingle(
+        schoolProfile: schoolProfile,
+        studentName: studentName,
+        admissionNo: admissionNo,
+        className: className,
+        term: term,
+        session: session,
+        totalBills: totalBills,
+        totalPaid: totalPaid,
+        outstanding: outstanding,
+        letterDate: letterDate,
+        signatoryName: signatoryName,
+        customOpening: customOpening,
+        customClosing: customClosing,
+        paymentDeadline: paymentDeadline,
+        copiesPerPage: copiesPerPage,
+        isLastTerm: isLastTerm,
+        isZeroPayment: isZeroPayment,
+        isPta: isPta,
+        isMidTerm: isMidTerm,
+        ptaMeetingDate: ptaMeetingDate,
+        ptaMeetingTime: ptaMeetingTime,
+        ptaVenue: ptaVenue,
+        midTermStartDate: midTermStartDate,
+        midTermReturnDate: midTermReturnDate,
+      );
+
+      if (!saveToFile) {
+        return (bytes: await NativeHtmlPdfHelper.htmlToBytes(html), filePath: null);
+      }
+      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final safeName = studentName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+      final suffix = threeUp ? '_3up' : (twoUp ? '_2up' : '');
+      final path = await NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: 'DebtNotification_${safeName}_$ts$suffix',
+        saveToDownloads: saveToDownloads,
+      );
+      return (bytes: await File(path).readAsBytes(), filePath: path);
+    }
+
     final schoolName = (schoolProfile['name'] ?? 'School Name').toString();
     final schoolAddress = (schoolProfile['address'] ?? '').toString();
     final schoolPhone = (schoolProfile['phone'] ?? '').toString();
@@ -150,7 +196,7 @@ class DebtNotificationPdfGenerator {
 
     String? filePath;
     if (saveToFile) {
-      final dir = await getApplicationDocumentsDirectory();
+      final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
       final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
       final safeName = studentName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
       final suffix = threeUp ? '_3up' : (twoUp ? '_2up' : '');
@@ -187,7 +233,45 @@ class DebtNotificationPdfGenerator {
     DateTime? midTermStartDate,
     DateTime? midTermReturnDate,
     bool saveToFile = true,
+    bool saveToDownloads = false,
   }) async {
+    if (Platform.isAndroid) {
+      final copiesPerPage = threeUp ? 3 : (twoUp ? 2 : 1);
+      final html = await DebtNotificationHtmlGenerator.buildBulk(
+        schoolProfile: schoolProfile,
+        students: students,
+        term: term,
+        session: session,
+        letterDate: letterDate,
+        signatoryName: signatoryName,
+        customOpening: customOpening,
+        customClosing: customClosing,
+        paymentDeadline: paymentDeadline,
+        copiesPerPage: copiesPerPage,
+        isLastTerm: isLastTerm,
+        isZeroPayment: isZeroPayment,
+        isPta: isPta,
+        isMidTerm: isMidTerm,
+        ptaMeetingDate: ptaMeetingDate,
+        ptaMeetingTime: ptaMeetingTime,
+        ptaVenue: ptaVenue,
+        midTermStartDate: midTermStartDate,
+        midTermReturnDate: midTermReturnDate,
+      );
+
+      if (!saveToFile) {
+        return (bytes: await NativeHtmlPdfHelper.htmlToBytes(html), filePath: null);
+      }
+      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final suffix = threeUp ? '_3up' : (twoUp ? '_2up' : '');
+      final path = await NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: 'DebtNotification_Bulk_$ts$suffix',
+        saveToDownloads: saveToDownloads,
+      );
+      return (bytes: await File(path).readAsBytes(), filePath: path);
+    }
+
     final schoolName = (schoolProfile['name'] ?? 'School Name').toString();
     final schoolAddress = (schoolProfile['address'] ?? '').toString();
     final schoolPhone = (schoolProfile['phone'] ?? '').toString();
@@ -321,7 +405,7 @@ class DebtNotificationPdfGenerator {
 
     String? filePath;
     if (saveToFile) {
-      final dir = await getApplicationDocumentsDirectory();
+      final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
       final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
       final suffix = threeUp ? '_3up' : (twoUp ? '_2up' : '');
       final file =

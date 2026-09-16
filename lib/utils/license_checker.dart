@@ -1,6 +1,8 @@
 // lib/utils/license_checker.dart
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../db/database_helper.dart';
+import '../screens/license/license_management_screen.dart';
 import 'license_helper.dart';
 
 class LicenseChecker {
@@ -105,53 +107,70 @@ class LicenseChecker {
     }
   }
 
-  /// Show license warning dialog if expiry is approaching
+  /// Show license warning dialog if expiry is approaching, at most once per
+  /// calendar day -- so it nudges renewal on every app open during the
+  /// reminder window without nagging every single time.
   static Future<void> showExpiryWarningIfNeeded(BuildContext context) async {
     final status = await checkLicense();
+    if (!status.isExpiryApproaching || status.daysRemaining == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final todayKey = DateTime.now().toIso8601String().substring(0, 10); // 'YYYY-MM-DD'
+    const remindedKey = 'app_license_renewal_reminder_date';
+    if (prefs.getString(remindedKey) == todayKey) return;
+    await prefs.setString(remindedKey, todayKey);
 
     if (!context.mounted) return;
 
-    if (status.isExpiryApproaching && status.daysRemaining != null) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          icon: const Icon(Icons.warning, color: Colors.orange, size: 48),
-          title: const Text('License Expiring Soon'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.warning, color: Colors.orange, size: 48),
+        title: const Text('License Expiring Soon'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Your license will expire in ${status.daysRemaining} days',
+              style: const TextStyle(fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            if (status.expiryDate != null)
               Text(
-                'Your license will expire in ${status.daysRemaining} days',
-                style: const TextStyle(fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              if (status.expiryDate != null)
-                Text(
-                  'Expiry Date: ${_formatDate(status.expiryDate!)}',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                  ),
+                'Expiry Date: ${_formatDate(status.expiryDate!)}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
                 ),
-              const SizedBox(height: 16),
-              const Text(
-                'Please contact support to renew your license before it expires.',
-                style: TextStyle(fontSize: 14),
-                textAlign: TextAlign.center,
               ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
+            const SizedBox(height: 16),
+            const Text(
+              'Please contact support to renew your license before it expires.',
+              style: TextStyle(fontSize: 14),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
-      );
-    }
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Remind me later'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LicenseManagementScreen()),
+              );
+            },
+            child: const Text('View Details'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Format date for display

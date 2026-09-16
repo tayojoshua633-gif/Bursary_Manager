@@ -56,8 +56,11 @@ class _StaffEditScreenState extends State<StaffEditScreen> {
   late TextEditingController _accountNameController;
   late TextEditingController _accountNumberController;
   late TextEditingController _salaryController;
+  late TextEditingController _perPeriodRateController;
 
   late String _staffType;
+  late String _employmentType;
+  late String _paymentType;
   String? _title;
   late String _gender;
   late String _maritalStatus;
@@ -107,8 +110,13 @@ class _StaffEditScreenState extends State<StaffEditScreen> {
     _accountNameController = TextEditingController(text: s.accountName ?? '');
     _accountNumberController = TextEditingController(text: s.accountNumber ?? '');
     _salaryController = TextEditingController(text: s.salary > 0 ? s.salary.toString() : '');
+    _perPeriodRateController = TextEditingController(
+      text: (s.perPeriodRate ?? 0) > 0 ? s.perPeriodRate.toString() : '',
+    );
 
     _staffType = s.staffType;
+    _employmentType = s.employmentType ?? 'Full Time';
+    _paymentType = s.paymentType ?? 'Regular';
     _title = s.title;
     _gender = s.gender;
     _maritalStatus = s.maritalStatus ?? 'Single';
@@ -151,6 +159,7 @@ class _StaffEditScreenState extends State<StaffEditScreen> {
     _accountNameController.dispose();
     _accountNumberController.dispose();
     _salaryController.dispose();
+    _perPeriodRateController.dispose();
     super.dispose();
   }
 
@@ -515,7 +524,20 @@ class _StaffEditScreenState extends State<StaffEditScreen> {
             ? null
             : _nextOfKinAddressController.text.trim(),
         dateOfEmployment: _dateOfEmployment?.toIso8601String(),
-        salary: double.tryParse(_salaryController.text.trim()) ?? widget.staff.salary,
+        salary: _staffType == 'Teaching Staff' &&
+                _employmentType == 'Per-Time' &&
+                _paymentType == 'Per-Period'
+            ? 0
+            : double.tryParse(_salaryController.text.trim()) ?? widget.staff.salary,
+        employmentType: _staffType == 'Teaching Staff' ? _employmentType : null,
+        paymentType: _staffType == 'Teaching Staff' && _employmentType == 'Per-Time'
+            ? _paymentType
+            : null,
+        perPeriodRate: _staffType == 'Teaching Staff' &&
+                _employmentType == 'Per-Time' &&
+                _paymentType == 'Per-Period'
+            ? double.tryParse(_perPeriodRateController.text.trim()) ?? 0
+            : null,
         bankName: _bankNameController.text.trim().isEmpty
             ? null
             : _bankNameController.text.trim(),
@@ -647,8 +669,32 @@ class _StaffEditScreenState extends State<StaffEditScreen> {
                       items: ['Teaching Staff', 'Non-Teaching Staff']
                           .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                           .toList(),
-                      onChanged: (v) => setState(() => _staffType = v!),
+                      onChanged: (v) => setState(() {
+                        _staffType = v!;
+                        if (_staffType != 'Teaching Staff') {
+                          _employmentType = 'Full Time';
+                          _paymentType = 'Regular';
+                        }
+                      }),
                     ),
+                    if (_staffType == 'Teaching Staff') ...[
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: _employmentType,
+                        decoration: const InputDecoration(
+                          labelText: 'Employment Type',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.schedule),
+                        ),
+                        items: ['Full Time', 'Per-Time']
+                            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                            .toList(),
+                        onChanged: (v) => setState(() {
+                          _employmentType = v!;
+                          if (_employmentType != 'Per-Time') _paymentType = 'Regular';
+                        }),
+                      ),
+                    ],
                     const SizedBox(height: 24),
 
                     // Bio Data Section
@@ -1039,15 +1085,52 @@ class _StaffEditScreenState extends State<StaffEditScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _salaryController,
-                      decoration: const InputDecoration(
-                        labelText: 'Monthly Salary',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.payments),
+                    if (_staffType == 'Teaching Staff' && _employmentType == 'Per-Time') ...[
+                      const Text(
+                        'Payment Type',
+                        style: TextStyle(fontWeight: FontWeight.w500),
                       ),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    ),
+                      RadioListTile<String>(
+                        value: 'Regular',
+                        groupValue: _paymentType,
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Regular Payment (fixed monthly amount)'),
+                        onChanged: (v) => setState(() => _paymentType = v!),
+                      ),
+                      RadioListTile<String>(
+                        value: 'Per-Period',
+                        groupValue: _paymentType,
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Per-Period (rate × periods taken monthly)'),
+                        onChanged: (v) => setState(() => _paymentType = v!),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (_staffType == 'Teaching Staff' &&
+                        _employmentType == 'Per-Time' &&
+                        _paymentType == 'Per-Period')
+                      TextFormField(
+                        controller: _perPeriodRateController,
+                        decoration: const InputDecoration(
+                          labelText: 'Rate per Period',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.payments),
+                          helperText: 'Amount agreed per period; multiplied by periods taken each month on the Staff Payroll screen',
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      )
+                    else
+                      TextFormField(
+                        controller: _salaryController,
+                        decoration: const InputDecoration(
+                          labelText: 'Monthly Salary',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.payments),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      ),
                     const SizedBox(height: 24),
 
                     // Salary Account Details Section

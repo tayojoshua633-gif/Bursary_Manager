@@ -60,11 +60,41 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   bool _searchingParents = false;
   bool _admissionEditable = false;
 
+  // Track the last auto-generated values so we only keep the parent
+  // name/address in sync while the user hasn't typed a custom value.
+  String _autoParentName = '';
+  String _autoParentAddress = '';
+
   @override
   void initState() {
     super.initState();
     WriteGuard.enforce(context);
+    _nationalityCtrl.text = "Nigeria"; // Default nationality (editable)
+    _surnameCtrl.addListener(_syncParentNameFromSurname);
+    _addressCtrl.addListener(_syncParentAddressFromHomeAddress);
     _initForm();
+  }
+
+  // ----------------------------------------------------------
+  // KEEP PARENT NAME/ADDRESS IN SYNC WITH BIO DATA
+  // ----------------------------------------------------------
+  void _syncParentNameFromSurname() {
+    if (_useExistingParent) return;
+    final surname = _surnameCtrl.text.trim();
+    final newAuto = surname.isEmpty ? '' : 'Mr & Mrs $surname';
+    if (_parentNameCtrl.text.isEmpty || _parentNameCtrl.text == _autoParentName) {
+      _parentNameCtrl.text = newAuto;
+    }
+    _autoParentName = newAuto;
+  }
+
+  void _syncParentAddressFromHomeAddress() {
+    if (_useExistingParent) return;
+    final address = _addressCtrl.text;
+    if (_parentAddressCtrl.text.isEmpty || _parentAddressCtrl.text == _autoParentAddress) {
+      _parentAddressCtrl.text = address;
+    }
+    _autoParentAddress = address;
   }
 
   // ----------------------------------------------------------
@@ -328,6 +358,11 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       _parentAddressCtrl.clear();
       _parentOccupationCtrl.clear();
       _parentOfficeAddressCtrl.clear();
+      _autoParentName = '';
+      _autoParentAddress = '';
+      // Re-populate defaults from the student's bio data
+      _syncParentNameFromSurname();
+      _syncParentAddressFromHomeAddress();
     });
   }
 
@@ -569,6 +604,8 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
 
   @override
   void dispose() {
+    _surnameCtrl.removeListener(_syncParentNameFromSurname);
+    _addressCtrl.removeListener(_syncParentAddressFromHomeAddress);
     _surnameCtrl.dispose();
     _firstNameCtrl.dispose();
     _otherNameCtrl.dispose();

@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import '../../db/database_helper.dart';
+import '../../models/student.dart';
+import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import 'student_details_screen.dart';
 
 class InactiveStudentsScreen extends StatefulWidget {
   const InactiveStudentsScreen({super.key});
@@ -19,11 +23,39 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
   List<Map<String, dynamic>> students = [];
   bool loading = true;
   Set<String> _siblingPhones = {};
+  Map<String, dynamic> _currentUser = {};
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentUser();
     _load();
+  }
+
+  Future<void> _loadCurrentUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userType = prefs.getString('userType') ?? 'bursar';
+    final userId = prefs.getInt('userId') ?? 0;
+    final username = prefs.getString('username') ?? 'User';
+
+    if (!mounted) return;
+    setState(() {
+      _currentUser = {
+        'id': userId,
+        'userType': userType,
+        'username': username,
+      };
+    });
+  }
+
+  void _openStudentDetails(Map<String, dynamic> studentData) {
+    final student = Student.fromMap(studentData);
+    NavigationHelper.pushWithSidebar(
+      context,
+      page: StudentDetailsScreen(student: student),
+      currentUser: _currentUser,
+      pageId: 'student_management/students',
+    );
   }
 
   @override
@@ -204,6 +236,7 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
                               margin: const EdgeInsets.symmetric(
                                   horizontal: 10, vertical: 6),
                               child: ListTile(
+                                onTap: () => _openStudentDetails(s),
                                 title: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [

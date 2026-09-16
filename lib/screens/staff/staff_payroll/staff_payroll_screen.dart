@@ -2,11 +2,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../../data/database_helper_wrapper.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../utils/staff_payroll_pdf_generator.dart';
+import '../../../utils/staff_payslip_pdf_generator.dart';
+import '../../../utils/pdf_export_helper.dart';
 
 class StaffPayrollScreen extends StatefulWidget {
   const StaffPayrollScreen({super.key});
@@ -132,25 +133,49 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
         final totalDeductions = staffDeductionsList
             .fold<double>(0, (sum, d) => sum + (d['amount'] as num).toDouble());
 
-        // Use salary history to get correct salary for this month, then
-        // apply the resolved payroll basis (Full/Percentage/Days/Weeks)
-        final basicSalary = await _dbHelper.getProratedBasicSalaryForMonth(
-          staff.id!,
-          _selectedMonth,
-          fallbackSalary: staff.salary,
-        );
-        final payrollBasis = await _dbHelper.resolvePayrollBasis(staff.id!, _selectedMonth);
+        // Per-Period staff (Per-Time teaching staff paid by periods taken)
+        // are paid periodsWorked × periodRate for the month, saved on the
+        // Staff Payroll card — this replaces the usual salary-history +
+        // Full/Percentage/Days/Weeks proration entirely, since the periods
+        // entered already reflect the actual work done that month.
+        final isPerPeriodPay = staff.isPerPeriodPay;
+        double basicSalary;
+        Map<String, dynamic> payrollBasis;
+        double periodsWorked = 0;
+        double periodRate = staff.perPeriodRate ?? 0;
+        double arrears = 0;
+
+        if (isPerPeriodPay) {
+          final periodRecord = await _dbHelper.getStaffPeriodRecord(staff.id!, _selectedMonth);
+          if (periodRecord != null) {
+            periodsWorked = (periodRecord['periodsWorked'] as num).toDouble();
+            periodRate = (periodRecord['periodRate'] as num).toDouble();
+            basicSalary = (periodRecord['amount'] as num).toDouble();
+          } else {
+            basicSalary = 0;
+          }
+          payrollBasis = {'basisType': 'per_period', 'isOverride': false};
+        } else {
+          // Use salary history to get correct salary for this month, then
+          // apply the resolved payroll basis (Full/Percentage/Days/Weeks)
+          basicSalary = await _dbHelper.getProratedBasicSalaryForMonth(
+            staff.id!,
+            _selectedMonth,
+            fallbackSalary: staff.salary,
+          );
+          payrollBasis = await _dbHelper.resolvePayrollBasis(staff.id!, _selectedMonth);
+
+          // Calculate salary arrears from previous unpaid months
+          arrears = await _dbHelper.getSalaryArrearsForStaff(
+            staff.id!,
+            _selectedMonth,
+            fallbackSalary: basicSalary,
+            employmentDate: staff.dateOfEmployment,
+          );
+        }
 
         // Calculate current-month net salary
         final netSalary = basicSalary + totalIncentives - loanDeduction - totalDeductions;
-
-        // Calculate salary arrears from previous unpaid months
-        final arrears = await _dbHelper.getSalaryArrearsForStaff(
-          staff.id!,
-          _selectedMonth,
-          fallbackSalary: basicSalary,
-          employmentDate: staff.dateOfEmployment,
-        );
 
         // Calculate loan arrears (unpaid months loan accumulation)
         final loanArrears = await _dbHelper.getLoanArrearsForStaff(
@@ -169,9 +194,13 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
           'id': staff.id, // Include database ID for payment tracking
           'staffId': staff.staffId,
           'staffName': staff.fullName,
+          'staffType': staff.isPerTime ? '${staff.staffType} (${staff.employmentType})' : staff.staffType,
           'dateOfEmployment': staff.dateOfEmployment,
           'basicSalary': basicSalary,
           'payrollBasis': payrollBasis,
+          'isPerPeriodPay': isPerPeriodPay,
+          'periodsWorked': periodsWorked,
+          'periodRate': periodRate,
           'totalIncentives': totalIncentives,
           'loanDeduction': loanDeduction,
           'loanArrears': loanArrears,
@@ -422,6 +451,8 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
     if (basis == null) return 'Full Payment (100%)';
     final type = basis['basisType'] as String? ?? 'full';
     switch (type) {
+      case 'per_period':
+        return 'Per-Period Pay';
       case 'percentage':
         final pct = (basis['percentageValue'] as num?)?.toDouble() ?? 100;
         return '${_fmtNum(pct)}% of Salary';
@@ -625,6 +656,127 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
     );
   }
 
+  /// Opens the periods-worked entry dialog for a Per-Period staff member for
+  /// [_selectedMonth] — periodsWorked × periodRate is computed and saved as
+  /// that month's payable basic pay.
+  Future<void> _showPeriodDialog({
+    required int staffId,
+    required String staffName,
+    required double currentPeriodsWorked,
+    required double currentPeriodRate,
+  }) async {
+    final periodsController = TextEditingController(
+      text: currentPeriodsWorked > 0 ? _fmtNum(currentPeriodsWorked) : '',
+    );
+    final rateController = TextEditingController(
+      text: currentPeriodRate > 0 ? _fmtNum(currentPeriodRate) : '',
+    );
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final periods = double.tryParse(periodsController.text) ?? 0;
+          final rate = double.tryParse(rateController.text) ?? 0;
+          return AlertDialog(
+            title: Text('Periods This Month: $staffName'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Enter the number of periods taken in $_selectedMonth and the agreed rate per period.',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: periodsController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Periods Taken', isDense: true, border: OutlineInputBorder()),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: rateController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Rate per Period',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    prefixText: 'N ',
+                  ),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Amount to Pay', style: TextStyle(fontWeight: FontWeight.w600)),
+                      Text(
+                        _currencyFormat.format(periods * rate),
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  await _dbHelper.setStaffPeriodRecord(
+                    staffId,
+                    _selectedMonth,
+                    periodsWorked: periods,
+                    periodRate: rate,
+                  );
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  await _loadPayrollData(showSpinner: false);
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _sharePayslip(Map<String, dynamic> staff) async {
+    try {
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Payslip - ${staff['staffName']} - $_selectedMonth',
+        successMessage: 'Payslip exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _dbHelper.getSchoolProfile();
+          return StaffPayslipPDFGenerator.generatePayslipPDF(
+            staff: staff,
+            month: _selectedMonth,
+            schoolProfile: schoolProfile ?? {},
+            saveToDownloads: saveToDownloads,
+          );
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to share payslip: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _exportToPDF() async {
     if (_payrollData.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -634,29 +786,23 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
     }
 
     setState(() => _isExporting = true);
-
     try {
-      // Get school profile
-      final schoolProfile = await _dbHelper.getSchoolProfile();
-
-      final filePath = await StaffPayrollPDFGenerator.generatePayrollPDF(
-        payrollData: _payrollData,
-        month: _selectedMonth,
-        schoolProfile: schoolProfile ?? {},
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Staff Payroll - $_selectedMonth',
+        successMessage: 'Staff payroll exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _dbHelper.getSchoolProfile();
+          return StaffPayrollPDFGenerator.generatePayrollPDF(
+            payrollData: _payrollData,
+            month: _selectedMonth,
+            schoolProfile: schoolProfile ?? {},
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      if (mounted) {
-        setState(() => _isExporting = false);
-
-        // Share the file
-        await Share.shareXFiles(
-          [XFile(filePath)],
-          subject: 'Staff Payroll - $_selectedMonth',
-        );
-      }
     } catch (e) {
       if (mounted) {
-        setState(() => _isExporting = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to export PDF: $e'),
@@ -664,6 +810,8 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
     }
   }
 
@@ -1071,31 +1219,63 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                                         ],
                                       ),
 
-                                      // Per-staff payment basis (Full/Percentage/Days/Weeks) for this month
+                                      // Per-staff payment basis (Full/Percentage/Days/Weeks) for
+                                      // this month — Per-Period staff get a periods × rate entry
+                                      // instead, since their pay isn't prorated off a fixed salary.
                                       const SizedBox(height: 8),
-                                      InkWell(
-                                        onTap: () => _showBasisDialog(
-                                          staffId: staffDbId,
-                                          staffName: staff['staffName'] ?? '',
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.tune, size: 12, color: Colors.grey.shade600),
-                                            const SizedBox(width: 4),
-                                            Text(
-                                              'Basis: ${_basisSummary(staff['payrollBasis'] as Map<String, dynamic>?)}'
-                                              '${(staff['payrollBasis'] as Map<String, dynamic>?)?['isOverride'] == true ? ' (override)' : ''}',
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color: Colors.grey.shade600,
-                                                fontWeight: FontWeight.w500,
+                                      if (staff['isPerPeriodPay'] == true)
+                                        InkWell(
+                                          onTap: () => _showPeriodDialog(
+                                            staffId: staffDbId,
+                                            staffName: staff['staffName'] ?? '',
+                                            currentPeriodsWorked: (staff['periodsWorked'] as num? ?? 0).toDouble(),
+                                            currentPeriodRate: (staff['periodRate'] as num? ?? 0).toDouble(),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.calculate, size: 12, color: Colors.grey.shade600),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                (staff['periodsWorked'] as num? ?? 0) > 0
+                                                    ? '${_fmtNum((staff['periodsWorked'] as num).toDouble())} periods × '
+                                                        '${_currencyFormat.format(staff['periodRate'])} = '
+                                                        '${_currencyFormat.format(staff['basicSalary'])}'
+                                                    : 'Tap to enter periods taken this month',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: Colors.grey.shade600,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
                                               ),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Icon(Icons.edit, size: 10, color: Colors.grey.shade500),
-                                          ],
+                                              const SizedBox(width: 4),
+                                              Icon(Icons.edit, size: 10, color: Colors.grey.shade500),
+                                            ],
+                                          ),
+                                        )
+                                      else
+                                        InkWell(
+                                          onTap: () => _showBasisDialog(
+                                            staffId: staffDbId,
+                                            staffName: staff['staffName'] ?? '',
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.tune, size: 12, color: Colors.grey.shade600),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                'Basis: ${_basisSummary(staff['payrollBasis'] as Map<String, dynamic>?)}'
+                                                '${(staff['payrollBasis'] as Map<String, dynamic>?)?['isOverride'] == true ? ' (override)' : ''}',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: Colors.grey.shade600,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Icon(Icons.edit, size: 10, color: Colors.grey.shade500),
+                                            ],
+                                          ),
                                         ),
-                                      ),
 
                                       // Show details for the month (Incentives, Loans, Penalties)
                                       if (incentivesList.isNotEmpty || loansList.isNotEmpty || deductionsList.isNotEmpty) ...[
@@ -1227,11 +1407,21 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                                         ),
                                       ],
 
-                                      // Paid/Not Paid Toggle Button
+                                      // Share Payslip + Paid/Not Paid Toggle Buttons
                                       const SizedBox(height: 12),
                                       Row(
                                         mainAxisAlignment: MainAxisAlignment.end,
                                         children: [
+                                          OutlinedButton.icon(
+                                            onPressed: () => _sharePayslip(staff),
+                                            icon: const Icon(Icons.share, size: 16),
+                                            label: const Text('Payslip'),
+                                            style: OutlinedButton.styleFrom(
+                                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                              visualDensity: VisualDensity.compact,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
                                           InkWell(
                                             onTap: () => _togglePaymentStatus(staffDbId, isPaid),
                                             borderRadius: BorderRadius.circular(20),

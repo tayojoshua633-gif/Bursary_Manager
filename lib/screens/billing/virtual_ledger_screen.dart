@@ -6,8 +6,8 @@ import '../../data/database_helper_wrapper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../utils/virtual_ledger_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../widgets/sibling_mark.dart';
-import 'package:share_plus/share_plus.dart';
 
 class VirtualLedgerScreen extends StatefulWidget {
   const VirtualLedgerScreen({super.key});
@@ -209,91 +209,29 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
     }
 
     setState(() => _exporting = true);
-
     try {
-      final schoolProfile = await _db.getSchoolProfile();
       final className = _getSelectedClassName();
-
-      final filePath = await VirtualLedgerPDFGenerator.generateVirtualLedgerPDF(
-        ledger: _ledger,
-        maxInstalments: _maxInstalments,
-        className: className,
-        term: _term ?? '',
-        session: _session ?? '',
-        schoolProfile: schoolProfile ?? {},
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Virtual Ledger - $className',
+        shareText: 'Virtual Ledger for $_term $_session',
+        successMessage: 'Virtual Ledger exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _db.getSchoolProfile();
+          return VirtualLedgerPDFGenerator.generateVirtualLedgerPDF(
+            ledger: _ledger,
+            maxInstalments: _maxInstalments,
+            className: className,
+            term: _term ?? '',
+            session: _session ?? '',
+            schoolProfile: schoolProfile ?? {},
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      setState(() => _exporting = false);
-
-      if (!mounted) return;
-      _showShareDialog(filePath);
-    } catch (e) {
-      setState(() => _exporting = false);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: $e'), backgroundColor: Colors.red),
-      );
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
-  }
-
-  void _showShareDialog(String filePath) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.picture_as_pdf, color: Colors.red),
-            SizedBox(width: 8),
-            Text('PDF Exported'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.check_circle, color: Colors.green, size: 64),
-            const SizedBox(height: 16),
-            const Text(
-              'Virtual Ledger exported successfully as PDF!',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'File saved to device',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Close'),
-          ),
-          ElevatedButton.icon(
-            onPressed: () async {
-              final scaffoldContext = context;
-              Navigator.pop(dialogContext);
-              if (!mounted) return;
-              try {
-                await Share.shareXFiles(
-                  [XFile(filePath)],
-                  subject: 'Virtual Ledger - ${_getSelectedClassName()}',
-                  text: 'Virtual Ledger for $_term $_session',
-                );
-              } catch (e) {
-                if (!mounted) return;
-                if (scaffoldContext.mounted) {
-                  ScaffoldMessenger.of(scaffoldContext).showSnackBar(
-                    SnackBar(content: Text('Share failed: $e')),
-                  );
-                }
-              }
-            },
-            icon: const Icon(Icons.share),
-            label: const Text('Share'),
-          ),
-        ],
-      ),
-    );
   }
 
   String _getSelectedClassName() {

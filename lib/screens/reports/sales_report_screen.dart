@@ -1,9 +1,9 @@
 // lib/screens/reports/sales_report_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/sales_report_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 
 class SalesReportScreen extends StatefulWidget {
   const SalesReportScreen({super.key});
@@ -280,72 +280,49 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
       return;
     }
 
-    // Show loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Sales Report - ${DateFormat('MMM d, yyyy').format(_selectedDate)}',
+      successMessage: 'Sales report exported successfully!',
+      generate: ({required saveToDownloads}) async {
+        final summary = {
+          'totalRevenue': _totalRevenue,
+          'totalCost': _totalCost,
+          'totalProfit': _totalProfit,
+          'cashTotal': _cashTotal,
+          'posTotal': _posTotal,
+          'transferTotal': _transferTotal,
+        };
 
-    try {
-      final summary = {
-        'totalRevenue': _totalRevenue,
-        'totalCost': _totalCost,
-        'totalProfit': _totalProfit,
-        'cashTotal': _cashTotal,
-        'posTotal': _posTotal,
-        'transferTotal': _transferTotal,
-      };
-
-      // Flatten grouped transactions for PDF (keeping individual items)
-      final List<Map<String, dynamic>> flatSales = [];
-      for (final transaction in _groupedTransactions) {
-        for (final item in transaction['items'] as List<Map<String, dynamic>>) {
-          final isCustom = item['isCustomItem'] == true;
-          flatSales.add({
-            'buyerName': transaction['buyerName'],
-            'itemName': isCustom ? '${item['itemName']} [Custom]' : item['itemName'],
-            'quantity': item['quantity'],
-            'unitPrice': item['unitPrice'],
-            'totalAmount': item['totalAmount'],
-            'paymentMethod': transaction['paymentMethod'],
-            'saleDate': transaction['saleDate'],
-            'isCustomItem': isCustom,
-          });
+        // Flatten grouped transactions for PDF (keeping individual items)
+        final List<Map<String, dynamic>> flatSales = [];
+        for (final transaction in _groupedTransactions) {
+          for (final item in transaction['items'] as List<Map<String, dynamic>>) {
+            final isCustom = item['isCustomItem'] == true;
+            flatSales.add({
+              'buyerName': transaction['buyerName'],
+              'itemName': isCustom ? '${item['itemName']} [Custom]' : item['itemName'],
+              'quantity': item['quantity'],
+              'unitPrice': item['unitPrice'],
+              'totalAmount': item['totalAmount'],
+              'paymentMethod': transaction['paymentMethod'],
+              'saleDate': transaction['saleDate'],
+              'isCustomItem': isCustom,
+            });
+          }
         }
-      }
 
-      final pdfPath = await SalesReportPDFGenerator.generateSalesReportPDF(
-        sales: flatSales,
-        date: DateFormat('yyyy-MM-dd').format(_selectedDate),
-        schoolProfile: _school ?? {},
-        summary: summary,
-        term: _term ?? '',
-        session: _session ?? '',
-      );
-
-      if (!mounted) return;
-      Navigator.pop(context); // Dismiss loading dialog
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('PDF saved to: $pdfPath'),
-          backgroundColor: Colors.green,
-          action: SnackBarAction(
-            label: 'Share',
-            textColor: Colors.white,
-            onPressed: () => Share.shareXFiles([XFile(pdfPath)]),
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // Dismiss loading dialog
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error generating PDF: $e')),
-      );
-    }
+        return SalesReportPDFGenerator.generateSalesReportPDF(
+          sales: flatSales,
+          date: DateFormat('yyyy-MM-dd').format(_selectedDate),
+          schoolProfile: _school ?? {},
+          summary: summary,
+          term: _term ?? '',
+          session: _session ?? '',
+          saveToDownloads: saveToDownloads,
+        );
+      },
+    );
   }
 
   @override

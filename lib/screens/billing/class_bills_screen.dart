@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:printing/printing.dart';
-import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../models/student.dart';
 import '../../utils/class_bills_pdf_generator.dart';
+import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import '../students/student_details_screen.dart';
 
@@ -27,13 +28,31 @@ class _ClassBillsScreenState extends State<ClassBillsScreen> {
   int? _selectedClassId;
   String _currentTerm = '';
   String _currentSession = '';
+  Map<String, dynamic>? _currentUser;
 
   final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentUser();
     _loadData();
+  }
+
+  Future<void> _loadCurrentUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userType = prefs.getString('userType') ?? 'bursar';
+    final userId = prefs.getInt('userId') ?? 0;
+    final username = prefs.getString('username') ?? 'User';
+
+    if (!mounted) return;
+    setState(() {
+      _currentUser = {
+        'id': userId,
+        'userType': userType,
+        'username': username,
+      };
+    });
   }
 
   @override
@@ -221,105 +240,42 @@ class _ClassBillsScreenState extends State<ClassBillsScreen> {
       return;
     }
 
+    setState(() => _isLoading = true);
     try {
-      setState(() => _isLoading = true);
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Class Bills Report',
+        successMessage: 'Class Bills report exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfileData = await DatabaseHelperWrapper().getSchoolProfile();
+          final schoolProfile = schoolProfileData ?? {
+            'name': 'School Name',
+            'address': '',
+            'phone': '',
+            'email': '',
+          };
 
-      // Get school profile
-      final schoolProfileData = await DatabaseHelperWrapper().getSchoolProfile();
-      final schoolProfile = schoolProfileData ?? {
-        'name': 'School Name',
-        'address': '',
-        'phone': '',
-        'email': '',
-      };
+          String? filterClassName;
+          if (_selectedClassId != null) {
+            final selectedClass = _classes.firstWhere(
+              (c) => c['id'] == _selectedClassId,
+              orElse: () => {'name': ''},
+            );
+            filterClassName = selectedClass['name'] as String?;
+          }
 
-      // Get filter class name if applicable
-      String? filterClassName;
-      if (_selectedClassId != null) {
-        final selectedClass = _classes.firstWhere(
-          (c) => c['id'] == _selectedClassId,
-          orElse: () => {'name': ''},
-        );
-        filterClassName = selectedClass['name'] as String?;
-      }
-
-      // Generate PDF
-      final pdfPath = await ClassBillsPDFGenerator.generateClassBillsPDF(
-        studentBills: _filteredBills,
-        term: _currentTerm,
-        session: _currentSession,
-        schoolProfile: schoolProfile,
-        filterClassName: filterClassName,
+          return ClassBillsPDFGenerator.generateClassBillsPDF(
+            studentBills: _filteredBills,
+            term: _currentTerm,
+            session: _currentSession,
+            schoolProfile: schoolProfile,
+            filterClassName: filterClassName,
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      setState(() => _isLoading = false);
-
-      if (!mounted) return;
-
-      // Show success dialog with options
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.check_circle, color: Colors.green),
-              SizedBox(width: 8),
-              Text('PDF Generated Successfully'),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Your Class Bills report has been generated.'),
-              const SizedBox(height: 12),
-              Text(
-                'File saved to:',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade700,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                pdfPath.split('/').last,
-                style: const TextStyle(fontSize: 12),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-            ElevatedButton.icon(
-              onPressed: () async {
-                Navigator.pop(context);
-                await Printing.sharePdf(
-                  bytes: await File(pdfPath).readAsBytes(),
-                  filename: pdfPath.split('/').last,
-                );
-              },
-              icon: const Icon(Icons.share),
-              label: const Text('Share'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.indigo,
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error generating PDF: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -577,11 +533,11 @@ class _ClassBillsScreenState extends State<ClassBillsScreen> {
             final studentMap = await DatabaseHelperWrapper().getStudentById(studentId);
             if (studentMap != null && mounted) {
               final student = Student.fromMap(studentMap);
-              Navigator.push(
+              NavigationHelper.pushWithSidebar(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => StudentDetailsScreen(student: student),
-                ),
+                page: StudentDetailsScreen(student: student),
+                currentUser: _currentUser ?? {},
+                pageId: 'student_management/students',
               );
             }
           } catch (e) {

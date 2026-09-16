@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/fee_priority_helper.dart';
 import '../../utils/payment_progression_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
 
@@ -300,36 +300,40 @@ class _PaymentProgressionScreenState extends State<PaymentProgressionScreen> {
     if (_students.isEmpty) return;
 
     setState(() => _isExporting = true);
-
     try {
-      final schoolProfile = await _db.getSchoolProfile() ?? {};
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Payment Progression Report',
+        successMessage: 'Payment progression report exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _db.getSchoolProfile() ?? {};
 
-      final className = _students.isNotEmpty ? _students.first.className : '';
-      final armName = _students.isNotEmpty ? _students.first.armName : '';
+          final className = _students.isNotEmpty ? _students.first.className : '';
+          final armName = _students.isNotEmpty ? _students.first.armName : '';
 
-      // Build student maps with progression for the PDF generator
-      final studentMaps = _students.map((s) => {
-        'surname': s.surname,
-        'firstName': s.firstName,
-        'admissionNo': s.admissionNo,
-        'className': s.className,
-        'armName': s.armName,
-        'billTotal': s.billTotal,
-        'totalPaid': s.totalPaid,
-        'progression': s.progression,
-      }).toList();
+          // Build student maps with progression for the PDF generator
+          final studentMaps = _students.map((s) => {
+            'surname': s.surname,
+            'firstName': s.firstName,
+            'admissionNo': s.admissionNo,
+            'className': s.className,
+            'armName': s.armName,
+            'billTotal': s.billTotal,
+            'totalPaid': s.totalPaid,
+            'progression': s.progression,
+          }).toList();
 
-      final path = await PaymentProgressionPdfGenerator.generate(
-        students: studentMaps,
-        term: _activeTerm,
-        session: _activeSession,
-        className: className,
-        armName: armName,
-        schoolProfile: schoolProfile,
+          return PaymentProgressionPdfGenerator.generate(
+            students: studentMaps,
+            term: _activeTerm,
+            session: _activeSession,
+            className: className,
+            armName: armName,
+            schoolProfile: schoolProfile,
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      if (!mounted) return;
-      await Share.shareXFiles([XFile(path)], subject: 'Payment Progression Report');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

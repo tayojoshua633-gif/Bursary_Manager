@@ -6,6 +6,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../models/parent.dart';
 import '../../utils/navigation_helper.dart';
+import '../../utils/all_parents_pdf_generator.dart';
+import '../../utils/pdf_export_helper.dart';
 import 'parent_form_screen.dart';
 import 'parent_details_screen.dart';
 
@@ -95,6 +97,29 @@ class _AllParentsScreenState extends State<AllParentsScreen> {
         }).toList();
       }
     });
+  }
+
+  Future<void> _exportToPDF() async {
+    if (_parents.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No parents to export')),
+      );
+      return;
+    }
+
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'All Parents',
+      successMessage: 'Parents list exported successfully!',
+      generate: ({required saveToDownloads}) async {
+        final schoolProfile = await _db.getSchoolProfile();
+        return AllParentsPDFGenerator.generateAllParentsPDF(
+          parents: _parents,
+          schoolProfile: schoolProfile ?? {},
+          saveToDownloads: saveToDownloads,
+        );
+      },
+    );
   }
 
   Future<void> _navigateToAddParent() async {
@@ -312,6 +337,11 @@ class _AllParentsScreenState extends State<AllParentsScreen> {
         ),
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf),
+            onPressed: _exportToPDF,
+            tooltip: 'Export PDF',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadParents,

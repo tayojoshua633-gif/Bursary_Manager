@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'termly_report_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class TermlyReportPDFGenerator {
   static Future<String> generateTermlyReportPDF({
@@ -44,7 +46,52 @@ class TermlyReportPDFGenerator {
     required double salesTransferTotal,
     required double totalSales,
     required double totalSalesDebt,
+    bool saveToDownloads = false,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'Termly_Report_${term.replaceAll(' ', '_')}_${session.replaceAll('/', '_')}_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = TermlyReportHtmlGenerator.build(
+        term: term,
+        session: session,
+        schoolProfile: schoolProfile,
+        cashReceived: cashReceived,
+        posReceived: posReceived,
+        transferReceived: transferReceived,
+        totalIncome: totalIncome,
+        expenseCategoryTotals: expenseCategoryTotals,
+        expenseCash: expenseCash,
+        expensePos: expensePos,
+        expenseTransfer: expenseTransfer,
+        totalExpenses: totalExpenses,
+        netIncome: netIncome,
+        totalStudents: totalStudents,
+        totalDebtors: totalDebtors,
+        totalOutstanding: totalOutstanding,
+        newIntakeByClass: newIntakeByClass,
+        totalNewIntake: totalNewIntake,
+        billsPrinted: billsPrinted,
+        receiptsPrinted: receiptsPrinted,
+        paymentHistoryPrinted: paymentHistoryPrinted,
+        reprintsPrinted: reprintsPrinted,
+        totalPrints: totalPrints,
+        stockSummary: stockSummary,
+        salesDetails: salesDetails,
+        salesDebtors: salesDebtors,
+        salesCashTotal: salesCashTotal,
+        salesPosTotal: salesPosTotal,
+        salesTransferTotal: salesTransferTotal,
+        totalSales: totalSales,
+        totalSalesDebt: totalSalesDebt,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
     final formatter = NumberFormat('#,##0.00');
 
@@ -136,10 +183,8 @@ class TermlyReportPDFGenerator {
     );
 
     // Save file
-    final dir = await getApplicationDocumentsDirectory();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'Termly_Report_${term.replaceAll(' ', '_')}_${session.replaceAll('/', '_')}_$timestamp.pdf';
-    final file = File('${dir.path}/$fileName');
+    final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${dir.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
 
     return file.path;

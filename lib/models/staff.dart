@@ -37,6 +37,9 @@ class Staff {
   String? referee2Address;
   String? dateOfEmployment;
   double salary;
+  String? employmentType; // 'Full Time' or 'Per-Time' (Teaching Staff only)
+  String? paymentType; // 'Regular' or 'Per-Period' (Per-Time staff only)
+  double? perPeriodRate; // negotiated rate per period (Per-Period staff only)
   String? bankName;
   String? accountName;
   String? accountNumber;
@@ -83,6 +86,9 @@ class Staff {
     this.referee2Address,
     this.dateOfEmployment,
     this.salary = 0,
+    this.employmentType,
+    this.paymentType,
+    this.perPeriodRate,
     this.bankName,
     this.accountName,
     this.accountNumber,
@@ -96,6 +102,8 @@ class Staff {
   String get fullName => '${title != null ? '$title ' : ''}$surname $firstName ${otherName ?? ''}'.trim();
   bool get isTeachingStaff => staffType == 'Teaching Staff';
   bool get active => isActive == 1;
+  bool get isPerTime => isTeachingStaff && employmentType == 'Per-Time';
+  bool get isPerPeriodPay => isPerTime && paymentType == 'Per-Period';
 
   factory Staff.fromMap(Map<String, dynamic> map) {
     List<AcademicRecord>? academicInfo;
@@ -175,6 +183,9 @@ class Staff {
       referee2Address: map['referee2Address'],
       dateOfEmployment: map['dateOfEmployment'],
       salary: (map['salary'] ?? 0).toDouble(),
+      employmentType: map['employmentType'],
+      paymentType: map['paymentType'],
+      perPeriodRate: map['perPeriodRate'] == null ? null : (map['perPeriodRate'] as num).toDouble(),
       bankName: map['bankName'],
       accountName: map['accountName'],
       accountNumber: map['accountNumber'],
@@ -228,6 +239,9 @@ class Staff {
       'referee2Address': referee2Address,
       'dateOfEmployment': dateOfEmployment,
       'salary': salary,
+      'employmentType': employmentType,
+      'paymentType': paymentType,
+      'perPeriodRate': perPeriodRate,
       'bankName': bankName,
       'accountName': accountName,
       'accountNumber': accountNumber,

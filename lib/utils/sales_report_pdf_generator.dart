@@ -2,8 +2,10 @@
 import 'dart:io';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
+import 'sales_report_html_generator.dart';
+import 'native_html_pdf_helper.dart';
+import 'pdf_export_helper.dart';
 
 class SalesReportPDFGenerator {
   static Future<String> generateSalesReportPDF({
@@ -13,7 +15,27 @@ class SalesReportPDFGenerator {
     required Map<String, dynamic> summary,
     String? term,
     String? session,
+    bool saveToDownloads = false,
   }) async {
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final baseName = 'Sales_Report_$timestamp';
+
+    if (Platform.isAndroid) {
+      final html = SalesReportHtmlGenerator.build(
+        sales: sales,
+        date: date,
+        schoolProfile: schoolProfile,
+        summary: summary,
+        term: term,
+        session: session,
+      );
+      return NativeHtmlPdfHelper.saveHtmlAsPdf(
+        html: html,
+        baseFileName: baseName,
+        saveToDownloads: saveToDownloads,
+      );
+    }
+
     final pdf = pw.Document();
     final formatter = NumberFormat('#,##0.00');
 
@@ -54,10 +76,8 @@ class SalesReportPDFGenerator {
     );
 
     // Save to file
-    final output = await getApplicationDocumentsDirectory();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final fileName = 'Sales_Report_$timestamp.pdf';
-    final file = File('${output.path}/$fileName');
+    final output = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+    final file = File('${output.path}/$baseName.pdf');
     await file.writeAsBytes(await pdf.save());
 
     return file.path;

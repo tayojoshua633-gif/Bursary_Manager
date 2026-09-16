@@ -2,11 +2,11 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../../data/database_helper_wrapper.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../utils/salary_payment_pdf_generator.dart';
+import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
 import '../../expenses/expense_form_screen.dart';
 
@@ -245,35 +245,29 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
     }
 
     setState(() => _isExporting = true);
-
     try {
-      final schoolProfile = await _dbHelper.getSchoolProfile();
+      await PdfExportHelper.exportPdf(
+        context,
+        shareSubject: 'Salary Payment Record - $_selectedMonth',
+        successMessage: 'Salary payment record exported successfully!',
+        generate: ({required saveToDownloads}) async {
+          final schoolProfile = await _dbHelper.getSchoolProfile();
 
-      final filePath = await SalaryPaymentPDFGenerator.generateSalaryPaymentPDF(
-        paymentRecords: _paymentRecords,
-        month: _selectedMonth,
-        schoolProfile: schoolProfile ?? {},
-        totalStaff: _totalStaff,
-        paidCount: _paidCount,
-        unpaidCount: _unpaidCount,
-        totalPaidAmount: _totalPaidAmount,
-        totalUnpaidAmount: _totalUnpaidAmount,
+          return SalaryPaymentPDFGenerator.generateSalaryPaymentPDF(
+            paymentRecords: _paymentRecords,
+            month: _selectedMonth,
+            schoolProfile: schoolProfile ?? {},
+            totalStaff: _totalStaff,
+            paidCount: _paidCount,
+            unpaidCount: _unpaidCount,
+            totalPaidAmount: _totalPaidAmount,
+            totalUnpaidAmount: _totalUnpaidAmount,
+            saveToDownloads: saveToDownloads,
+          );
+        },
       );
-
-      if (mounted) {
-        setState(() => _isExporting = false);
-        await Share.shareXFiles(
-          [XFile(filePath)],
-          subject: 'Salary Payment Record - $_selectedMonth',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isExporting = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to export: $e'), backgroundColor: Colors.red),
-        );
-      }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
     }
   }
 
