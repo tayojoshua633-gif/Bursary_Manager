@@ -32,6 +32,7 @@ import '../settings/usb_printer_screen.dart';
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import '../../utils/payment_date_time_formatter.dart';
 import '../../utils/sms_service.dart';
+import '../../utils/age_helper.dart';
 
 class StudentDetailsScreen extends StatefulWidget {
   final Student student;
@@ -554,6 +555,7 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
                     info("Other Name:", current.otherName, ds),
                     info("Gender:", current.gender, ds),
                     info("Date of Birth:", current.dob, ds),
+                    info("Age:", AgeHelper.calculateAge(current.dob)?.toString(), ds),
                     info("Date of Admission:", current.dateOfAdmission ?? 'Not recorded', ds),
                     const Divider(),
                     info("Class:", current.className ?? 'Not Assigned', ds),

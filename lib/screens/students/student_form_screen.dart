@@ -9,6 +9,8 @@ import '../../utils/backup_reminder_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/admission_settings_helper.dart';
 import '../../utils/write_guard.dart';
+import '../../utils/age_helper.dart';
+import '../../utils/nigeria_states_lgas.dart';
 
 class StudentFormScreen extends StatefulWidget {
   const StudentFormScreen({super.key});
@@ -26,6 +28,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   final _firstNameCtrl = TextEditingController();
   final _otherNameCtrl = TextEditingController();
   final _dobCtrl = TextEditingController();
+  final _ageCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
   final _nationalityCtrl = TextEditingController();
   final _stateOfOriginCtrl = TextEditingController();
@@ -65,6 +68,16 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   String _autoParentName = '';
   String _autoParentAddress = '';
 
+  // Guards against DOB<->Age listeners re-triggering each other.
+  bool _syncingDobAge = false;
+
+  // State/LGA dropdown selections, used when Nationality is Nigeria.
+  String? _selectedState;
+  String? _selectedLga;
+
+  bool get _isNigeria =>
+      _nationalityCtrl.text.trim().toLowerCase() == 'nigeria';
+
   @override
   void initState() {
     super.initState();
@@ -72,7 +85,52 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     _nationalityCtrl.text = "Nigeria"; // Default nationality (editable)
     _surnameCtrl.addListener(_syncParentNameFromSurname);
     _addressCtrl.addListener(_syncParentAddressFromHomeAddress);
+    _ageCtrl.addListener(_syncDobFromAge);
+    _nationalityCtrl.addListener(_onNationalityChanged);
     _initForm();
+  }
+
+  // ----------------------------------------------------------
+  // NATIONALITY -> STATE/LGA DROPDOWN SWITCHING
+  // ----------------------------------------------------------
+  void _onNationalityChanged() {
+    setState(() {}); // rebuild to swap between dropdown/text fields
+  }
+
+  void _onStateSelected(String? state) {
+    setState(() {
+      _selectedState = state;
+      _stateOfOriginCtrl.text = state ?? '';
+      _selectedLga = null;
+      _lgaCtrl.clear();
+    });
+  }
+
+  void _onLgaSelected(String? lga) {
+    setState(() {
+      _selectedLga = lga;
+      _lgaCtrl.text = lga ?? '';
+    });
+  }
+
+  // ----------------------------------------------------------
+  // KEEP DATE OF BIRTH AND AGE IN SYNC
+  // ----------------------------------------------------------
+  void _syncAgeFromDob() {
+    if (_syncingDobAge) return;
+    _syncingDobAge = true;
+    final age = AgeHelper.calculateAge(_dobCtrl.text);
+    _ageCtrl.text = age == null ? '' : age.toString();
+    _syncingDobAge = false;
+  }
+
+  void _syncDobFromAge() {
+    if (_syncingDobAge) return;
+    final age = int.tryParse(_ageCtrl.text.trim());
+    if (age == null || age < 0) return;
+    _syncingDobAge = true;
+    _dobCtrl.text = AgeHelper.dobFromAge(age);
+    _syncingDobAge = false;
   }
 
   // ----------------------------------------------------------
@@ -288,6 +346,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     if (picked != null) {
       _dobCtrl.text =
           "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
+      _syncAgeFromDob();
     }
   }
 
@@ -606,10 +665,13 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   void dispose() {
     _surnameCtrl.removeListener(_syncParentNameFromSurname);
     _addressCtrl.removeListener(_syncParentAddressFromHomeAddress);
+    _ageCtrl.removeListener(_syncDobFromAge);
+    _nationalityCtrl.removeListener(_onNationalityChanged);
     _surnameCtrl.dispose();
     _firstNameCtrl.dispose();
     _otherNameCtrl.dispose();
     _dobCtrl.dispose();
+    _ageCtrl.dispose();
     _addressCtrl.dispose();
     _nationalityCtrl.dispose();
     _stateOfOriginCtrl.dispose();
@@ -734,6 +796,20 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
                       validator: (v) => v!.isEmpty ? "Required" : null,
                     ),
 
+                    SizedBox(height: ds.cardPadding * 0.75),
+
+                    // AGE (auto-synced with Date of Birth)
+                    TextFormField(
+                      controller: _ageCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: "Age",
+                        border: OutlineInputBorder(),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                    ),
+
                     SizedBox(height: ds.cardPadding),
 
                     // HOME ADDRESS
@@ -745,9 +821,39 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
                     // NATIONALITY, STATE OF ORIGIN, LGA (Optional)
                     _input(_nationalityCtrl, "Nationality (Optional)"),
                     SizedBox(height: ds.cardPadding * 0.75),
-                    _input(_stateOfOriginCtrl, "State of Origin (Optional)"),
+                    _isNigeria
+                        ? DropdownButtonFormField<String>(
+                            initialValue: _selectedState,
+                            decoration: const InputDecoration(
+                              labelText: "State of Origin",
+                              border: OutlineInputBorder(),
+                              filled: true,
+                              fillColor: Colors.white,
+                            ),
+                            items: NigeriaStatesLgas.states
+                                .map((s) => DropdownMenuItem(
+                                    value: s, child: Text(s)))
+                                .toList(),
+                            onChanged: _onStateSelected,
+                          )
+                        : _input(_stateOfOriginCtrl, "State of Origin (Optional)"),
                     SizedBox(height: ds.cardPadding * 0.75),
-                    _input(_lgaCtrl, "Local Government Area - LGA (Optional)"),
+                    _isNigeria
+                        ? DropdownButtonFormField<String>(
+                            initialValue: _selectedLga,
+                            decoration: const InputDecoration(
+                              labelText: "Local Government Area - LGA",
+                              border: OutlineInputBorder(),
+                              filled: true,
+                              fillColor: Colors.white,
+                            ),
+                            items: NigeriaStatesLgas.lgasForState(_selectedState)
+                                .map((l) => DropdownMenuItem(
+                                    value: l, child: Text(l)))
+                                .toList(),
+                            onChanged: _selectedState == null ? null : _onLgaSelected,
+                          )
+                        : _input(_lgaCtrl, "Local Government Area - LGA (Optional)"),
                   ],
                 ),
               ),

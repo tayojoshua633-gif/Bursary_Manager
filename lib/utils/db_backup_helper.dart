@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import '../db/database_helper.dart';
 import 'central_backup_helper.dart';
+import 'db_snapshot_helper.dart';
 
 class DBBackupHelper {
   static const String _backupFolderName = "BursaryBackups";
@@ -271,8 +272,7 @@ class DBBackupHelper {
       if (await destFile.exists()) await destFile.delete();
 
       final database = await DatabaseHelper().database;
-      final escapedPath = backupPath.replaceAll("'", "''");
-      await database.execute("VACUUM INTO '$escapedPath'");
+      await snapshotDatabaseTo(database, backupPath);
 
       // Best-effort copy to the central support server — never blocks or
       // fails the backup itself if it doesn't succeed.

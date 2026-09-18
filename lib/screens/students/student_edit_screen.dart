@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import '../../models/student.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/admission_settings_helper.dart';
+import '../../utils/age_helper.dart';
+import '../../utils/nigeria_states_lgas.dart';
 import '../../data/database_helper_wrapper.dart';
 
 class StudentEditScreen extends StatefulWidget {
@@ -26,6 +28,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
   late TextEditingController _firstNameCtrl;
   late TextEditingController _otherNameCtrl;
   late TextEditingController _dobCtrl;
+  late TextEditingController _ageCtrl;
   late TextEditingController _addressCtrl;
   late TextEditingController _parentNameCtrl;
   late TextEditingController _parentPhoneCtrl;
@@ -57,6 +60,16 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
   bool _searchingParents = false;
   bool _admissionEditable = false;
 
+  // Guards against DOB<->Age listeners re-triggering each other.
+  bool _syncingDobAge = false;
+
+  // State/LGA dropdown selections, used when Nationality is Nigeria.
+  String? _selectedState;
+  String? _selectedLga;
+
+  bool get _isNigeria =>
+      _nationalityCtrl.text.trim().toLowerCase() == 'nigeria';
+
   @override
   void initState() {
     super.initState();
@@ -66,6 +79,10 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
     _firstNameCtrl = TextEditingController(text: widget.student.firstName);
     _otherNameCtrl = TextEditingController(text: widget.student.otherName);
     _dobCtrl = TextEditingController(text: widget.student.dob);
+    _ageCtrl = TextEditingController(
+      text: AgeHelper.calculateAge(widget.student.dob)?.toString() ?? '',
+    );
+    _ageCtrl.addListener(_syncDobFromAge);
     _addressCtrl = TextEditingController(text: widget.student.address);
     _parentNameCtrl = TextEditingController(text: widget.student.parentName);
     _parentPhoneCtrl = TextEditingController(text: widget.student.parentPhone);
@@ -79,6 +96,16 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
     _lgaCtrl = TextEditingController(text: widget.student.lga);
     _admCtrl = TextEditingController(text: widget.student.admissionNo);
     _dateOfAdmissionCtrl = TextEditingController(text: widget.student.dateOfAdmission ?? '');
+    _nationalityCtrl.addListener(_onNationalityChanged);
+
+    // Pre-select the state/LGA dropdowns if the stored values match the list.
+    if (NigeriaStatesLgas.statesAndLgas.containsKey(_stateOfOriginCtrl.text)) {
+      _selectedState = _stateOfOriginCtrl.text;
+      final lgas = NigeriaStatesLgas.lgasForState(_selectedState);
+      if (lgas.contains(_lgaCtrl.text)) {
+        _selectedLga = _lgaCtrl.text;
+      }
+    }
 
     _gender = widget.student.gender;
     _classId = widget.student.classId;
@@ -143,6 +170,49 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
     }
   }
 
+  // ----------------------------------------------------------
+  // KEEP DATE OF BIRTH AND AGE IN SYNC
+  // ----------------------------------------------------------
+  void _syncAgeFromDob() {
+    if (_syncingDobAge) return;
+    _syncingDobAge = true;
+    final age = AgeHelper.calculateAge(_dobCtrl.text);
+    _ageCtrl.text = age == null ? '' : age.toString();
+    _syncingDobAge = false;
+  }
+
+  void _syncDobFromAge() {
+    if (_syncingDobAge) return;
+    final age = int.tryParse(_ageCtrl.text.trim());
+    if (age == null || age < 0) return;
+    _syncingDobAge = true;
+    _dobCtrl.text = AgeHelper.dobFromAge(age);
+    _syncingDobAge = false;
+  }
+
+  // ----------------------------------------------------------
+  // NATIONALITY -> STATE/LGA DROPDOWN SWITCHING
+  // ----------------------------------------------------------
+  void _onNationalityChanged() {
+    setState(() {}); // rebuild to swap between dropdown/text fields
+  }
+
+  void _onStateSelected(String? state) {
+    setState(() {
+      _selectedState = state;
+      _stateOfOriginCtrl.text = state ?? '';
+      _selectedLga = null;
+      _lgaCtrl.clear();
+    });
+  }
+
+  void _onLgaSelected(String? lga) {
+    setState(() {
+      _selectedLga = lga;
+      _lgaCtrl.text = lga ?? '';
+    });
+  }
+
   Future<void> _pickDate() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
@@ -153,7 +223,9 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
     );
 
     if (picked != null) {
-      _dobCtrl.text = "${picked.year}-${picked.month}-${picked.day}";
+      _dobCtrl.text =
+          "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
+      _syncAgeFromDob();
     }
   }
 
@@ -423,10 +495,13 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
 
   @override
   void dispose() {
+    _ageCtrl.removeListener(_syncDobFromAge);
+    _nationalityCtrl.removeListener(_onNationalityChanged);
     _surnameCtrl.dispose();
     _firstNameCtrl.dispose();
     _otherNameCtrl.dispose();
     _dobCtrl.dispose();
+    _ageCtrl.dispose();
     _addressCtrl.dispose();
     _parentNameCtrl.dispose();
     _parentPhoneCtrl.dispose();
@@ -541,6 +616,18 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
                 onTap: _pickDate,
               ),
 
+              const SizedBox(height: 12),
+
+              // AGE (auto-synced with Date of Birth)
+              TextFormField(
+                controller: _ageCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: "Age",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+
               const SizedBox(height: 20),
 
               // Date of Admission
@@ -612,19 +699,39 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
 
               const SizedBox(height: 12),
 
-              TextFormField(
-                controller: _stateOfOriginCtrl,
-                decoration: const InputDecoration(
-                    labelText: "State of Origin", border: OutlineInputBorder()),
-              ),
+              _isNigeria
+                  ? DropdownButtonFormField<String>(
+                      initialValue: _selectedState,
+                      decoration: const InputDecoration(
+                          labelText: "State of Origin", border: OutlineInputBorder()),
+                      items: NigeriaStatesLgas.states
+                          .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                          .toList(),
+                      onChanged: _onStateSelected,
+                    )
+                  : TextFormField(
+                      controller: _stateOfOriginCtrl,
+                      decoration: const InputDecoration(
+                          labelText: "State of Origin", border: OutlineInputBorder()),
+                    ),
 
               const SizedBox(height: 12),
 
-              TextFormField(
-                controller: _lgaCtrl,
-                decoration: const InputDecoration(
-                    labelText: "LGA (Local Govt. Area)", border: OutlineInputBorder()),
-              ),
+              _isNigeria
+                  ? DropdownButtonFormField<String>(
+                      initialValue: _selectedLga,
+                      decoration: const InputDecoration(
+                          labelText: "LGA (Local Govt. Area)", border: OutlineInputBorder()),
+                      items: NigeriaStatesLgas.lgasForState(_selectedState)
+                          .map((l) => DropdownMenuItem(value: l, child: Text(l)))
+                          .toList(),
+                      onChanged: _selectedState == null ? null : _onLgaSelected,
+                    )
+                  : TextFormField(
+                      controller: _lgaCtrl,
+                      decoration: const InputDecoration(
+                          labelText: "LGA (Local Govt. Area)", border: OutlineInputBorder()),
+                    ),
 
               const SizedBox(height: 20),
 

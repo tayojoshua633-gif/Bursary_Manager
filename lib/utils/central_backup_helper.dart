@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import '../db/database_helper.dart';
+import 'db_snapshot_helper.dart';
 import 'license_helper.dart';
 import 'school_sync_registry.dart';
 
@@ -141,8 +142,7 @@ class CentralBackupHelper {
       // devices until a later sync happened to catch a fully-checkpointed
       // copy. VACUUM INTO errors if the target file already exists, but
       // tempPath is freshly timestamped each call so that never collides.
-      final escapedPath = tempPath.replaceAll("'", "''");
-      await database.execute("VACUUM INTO '$escapedPath'");
+      await snapshotDatabaseTo(database, tempPath);
 
       final result = await _uploadBackupWithReason(tempPath);
       try {
