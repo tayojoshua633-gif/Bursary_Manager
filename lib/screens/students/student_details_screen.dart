@@ -1612,6 +1612,10 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
         });
       }
 
+      final paperSize = await ThermalPrinterManager.getPrinterPaperSizeEnum(
+        ThermalPrinterManager.connectedPrinter!.remoteId.toString(),
+      );
+
       await ThermalPrinterManager.printBill(
         schoolName: schoolName,
         schoolAddress: schoolAddress,
@@ -1622,7 +1626,10 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
         term: '$_activeTerm $_activeSession',
         feeItems: feeItems,
         total: _grandTotal,
+        totalPaid: _totalPaid,
+        outstanding: _outstanding,
         billDate: DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        paperSize: paperSize,
       );
       await PrintCounterHelper.incrementBillsPrinted();
 
@@ -1707,6 +1714,8 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
         term: '$_activeTerm $_activeSession',
         feeItems: feeItems,
         total: _grandTotal,
+        totalPaid: _totalPaid,
+        outstanding: _outstanding,
         billDate: DateFormat('yyyy-MM-dd').format(DateTime.now()),
         paperSize: paperSize == 'mm58' ? PaperSize.mm58 : PaperSize.mm80,
       );

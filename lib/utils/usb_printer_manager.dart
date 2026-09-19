@@ -92,11 +92,34 @@ class UsbPrinterManager {
     return 48;
   }
 
-  // Truncate text to fit a column so long names never wrap and break row alignment
-  static String _fitToWidth(String text, int maxChars) {
-    if (text.length <= maxChars) return text;
-    if (maxChars <= 1) return text.substring(0, maxChars);
-    return '${text.substring(0, maxChars - 1)}.';
+  // Lay out "label ..... amount" as plain full-width text lines (label flush left, amount flush right).
+  // Used instead of g.row(): row() positions with absolute-position commands sent before the
+  // alignment command, so a preceding centred line makes some printers indent the whole block.
+  // Long labels wrap onto continuation lines; the amount stays on the first line.
+  static List<String> _leftRightLines(String left, String right, int width) {
+    final maxLeft = (width - right.length - 1).clamp(8, width).toInt();
+    final lines = <String>[];
+    var rest = left.trim();
+    while (rest.length > maxLeft) {
+      var cut = rest.lastIndexOf(' ', maxLeft);
+      if (cut <= 0) cut = maxLeft;
+      lines.add(rest.substring(0, cut).trimRight());
+      rest = rest.substring(cut).trimLeft();
+    }
+    lines.add(rest);
+
+    final gap = (width - lines.first.length - right.length).clamp(1, width).toInt();
+    lines[0] = '${lines.first}${' ' * gap}$right';
+    return lines;
+  }
+
+  static List<int> _leftRightText(Generator g, String left, String right, int width,
+      {bool bold = false}) {
+    List<int> b = [];
+    for (final line in _leftRightLines(left, right, width)) {
+      b += g.text(line, styles: PosStyles(align: PosAlign.left, bold: bold));
+    }
+    return b;
   }
 
   static List<int> _phoneLine(Generator g, String? phone) {
@@ -520,6 +543,7 @@ class UsbPrinterManager {
     b += g.hr();
 
     int serialNumber = 0;
+    final lineWidth = _charsPerLine(paperSize);
 
     // Registration fees (standalone items) — shown first
     if (standaloneItems.isNotEmpty) {
@@ -534,32 +558,10 @@ class UsbPrinterManager {
         final amountValue = (item['amount'] as num?)?.toDouble() ?? 0.0;
         sectionTotal += amountValue;
 
-        b += g.row([
-          PosColumn(
-            text: '$serialNumber. $name',
-            width: 7,
-            styles: const PosStyles(align: PosAlign.left),
-          ),
-          PosColumn(
-            text: 'N ${_amt(amountValue)}',
-            width: 5,
-            styles: const PosStyles(align: PosAlign.right),
-          ),
-        ]);
+        b += _leftRightText(g, '$serialNumber. $name', 'N ${_amt(amountValue)}', lineWidth);
       }
 
-      b += g.row([
-        PosColumn(
-          text: 'Subtotal:',
-          width: 7,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-        PosColumn(
-          text: 'N ${_amt(sectionTotal)}',
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-      ]);
+      b += _leftRightText(g, 'Subtotal:', 'N ${_amt(sectionTotal)}', lineWidth, bold: true);
       b += g.hr(ch: '-');
     }
 
@@ -576,32 +578,10 @@ class UsbPrinterManager {
         final amountValue = (fee['amount'] as num?)?.toDouble() ?? 0.0;
         sectionTotal += amountValue;
 
-        b += g.row([
-          PosColumn(
-            text: '$serialNumber. $name',
-            width: 7,
-            styles: const PosStyles(align: PosAlign.left),
-          ),
-          PosColumn(
-            text: 'N ${_amt(amountValue)}',
-            width: 5,
-            styles: const PosStyles(align: PosAlign.right),
-          ),
-        ]);
+        b += _leftRightText(g, '$serialNumber. $name', 'N ${_amt(amountValue)}', lineWidth);
       }
 
-      b += g.row([
-        PosColumn(
-          text: 'Subtotal:',
-          width: 7,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-        PosColumn(
-          text: 'N ${_amt(sectionTotal)}',
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-      ]);
+      b += _leftRightText(g, 'Subtotal:', 'N ${_amt(sectionTotal)}', lineWidth, bold: true);
       b += g.hr(ch: '-');
     }
 
@@ -622,32 +602,10 @@ class UsbPrinterManager {
         final name = item['name'] ?? 'Unknown';
         final amountValue = (item['amount'] as num?)?.toDouble() ?? 0.0;
 
-        b += g.row([
-          PosColumn(
-            text: '$serialNumber. $name',
-            width: 7,
-            styles: const PosStyles(align: PosAlign.left),
-          ),
-          PosColumn(
-            text: 'N ${_amt(amountValue)}',
-            width: 5,
-            styles: const PosStyles(align: PosAlign.right),
-          ),
-        ]);
+        b += _leftRightText(g, '$serialNumber. $name', 'N ${_amt(amountValue)}', lineWidth);
       }
 
-      b += g.row([
-        PosColumn(
-          text: 'Subtotal:',
-          width: 7,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-        PosColumn(
-          text: 'N ${_amt(categoryTotal)}',
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-      ]);
+      b += _leftRightText(g, 'Subtotal:', 'N ${_amt(categoryTotal)}', lineWidth, bold: true);
       b += g.hr(ch: '-');
     }
 
@@ -700,6 +658,8 @@ class UsbPrinterManager {
     required String billDate,
     String? schoolPhone,
     List<Map<String, dynamic>>? bankAccounts,
+    double? totalPaid,
+    double? outstanding,
     PaperSize paperSize = PaperSize.mm80,
   }) async {
     final profile = await CapabilityProfile.load();
@@ -727,19 +687,35 @@ class UsbPrinterManager {
     b += g.text('FEE BREAKDOWN', styles: const PosStyles(align: PosAlign.center, bold: true));
     b += g.hr();
 
+    // Fee name flush left, amount flush right, full paper width
+    final width = _charsPerLine(paperSize);
     for (final item in feeItems) {
       final name = item['name']?.toString() ?? '';
       final amount = 'N ${_amt((item['amount'] as num?)?.toDouble() ?? 0.0)}';
-      b += g.row([
-        PosColumn(text: name, width: 7, styles: const PosStyles(align: PosAlign.left)),
-        PosColumn(text: amount, width: 5, styles: const PosStyles(align: PosAlign.right)),
-      ]);
+      b += _leftRightText(g, name, amount, width);
     }
 
     b += g.hr();
     b += g.text('TOTAL: N ${_amt(total)}',
         styles: const PosStyles(align: PosAlign.center, bold: true, height: PosTextSize.size2));
     b += g.hr();
+
+    // Total paid & outstanding (overpayment shown as a credit)
+    if (totalPaid != null || outstanding != null) {
+      if (totalPaid != null) {
+        b += _leftRightText(g, 'Total Paid', 'N ${_amt(totalPaid)}', width);
+      }
+      if (outstanding != null) {
+        b += _leftRightText(
+          g,
+          outstanding >= 0 ? 'Outstanding' : 'Overpayment',
+          'N ${_amt(outstanding.abs())}',
+          width,
+          bold: true,
+        );
+      }
+      b += g.hr();
+    }
 
     b += _bankSection(g, bankAccounts);
 
@@ -916,22 +892,11 @@ class UsbPrinterManager {
         styles: const PosStyles(align: PosAlign.center, bold: true));
     b += g.emptyLines(1);
 
-    final splitNameChars = (_charsPerLine(paperSize) * 7 / 12).floor();
+    final splitWidth = _charsPerLine(paperSize);
     for (final item in paymentItems) {
       final name = item['name']?.toString() ?? '';
       final amount = (item['amount'] as num?)?.toDouble() ?? 0.0;
-      b += g.row([
-        PosColumn(
-          text: _fitToWidth(name, splitNameChars),
-          width: 7,
-          styles: const PosStyles(align: PosAlign.left),
-        ),
-        PosColumn(
-          text: 'N ${_amt(amount)}',
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-      ]);
+      b += _leftRightText(g, name, 'N ${_amt(amount)}', splitWidth);
     }
 
     b += g.hr();

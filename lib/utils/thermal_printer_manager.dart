@@ -38,11 +38,34 @@ class ThermalPrinterManager {
     return 48;
   }
 
-  // Truncate text to fit a column so long names never wrap and break row alignment
-  static String _fitToWidth(String text, int maxChars) {
-    if (text.length <= maxChars) return text;
-    if (maxChars <= 1) return text.substring(0, maxChars);
-    return '${text.substring(0, maxChars - 1)}.';
+  // Lay out "label ..... amount" as plain full-width text lines (label flush left, amount flush right).
+  // Used instead of generator.row(): row() positions with absolute-position commands sent before the
+  // alignment command, so a preceding centred line makes some printers indent the whole block.
+  // Long labels wrap onto continuation lines; the amount stays on the first line.
+  static List<String> _leftRightLines(String left, String right, int width) {
+    final maxLeft = (width - right.length - 1).clamp(8, width).toInt();
+    final lines = <String>[];
+    var rest = left.trim();
+    while (rest.length > maxLeft) {
+      var cut = rest.lastIndexOf(' ', maxLeft);
+      if (cut <= 0) cut = maxLeft;
+      lines.add(rest.substring(0, cut).trimRight());
+      rest = rest.substring(cut).trimLeft();
+    }
+    lines.add(rest);
+
+    final gap = (width - lines.first.length - right.length).clamp(1, width).toInt();
+    lines[0] = '${lines.first}${' ' * gap}$right';
+    return lines;
+  }
+
+  static List<int> _leftRightText(Generator generator, String left, String right, int width,
+      {bool bold = false}) {
+    List<int> bytes = [];
+    for (final line in _leftRightLines(left, right, width)) {
+      bytes += generator.text(line, styles: PosStyles(align: PosAlign.left, bold: bold));
+    }
+    return bytes;
   }
 
   // Build phone line after school address
@@ -475,6 +498,8 @@ class ThermalPrinterManager {
     required String billDate,
     String? schoolPhone,
     List<Map<String, dynamic>>? bankAccounts,
+    double? totalPaid,
+    double? outstanding,
     PaperSize paperSize = PaperSize.mm58,
   }) async {
     final profile = await CapabilityProfile.load();
@@ -511,25 +536,12 @@ class ThermalPrinterManager {
         styles: const PosStyles(align: PosAlign.center, bold: true));
     bytes += generator.hr();
 
-    // Column widths for 58mm paper (32 chars total)
-    // Fee name: 8 columns, Amount: 4 columns (ratio 2:1)
+    // Fee name flush left, amount flush right, full paper width
+    final width = _charsPerLine(paperSize);
     for (final item in feeItems) {
-      final name = item['name'] ?? '';
+      final name = item['name']?.toString() ?? '';
       final amountValue = (item['amount'] as num?)?.toDouble() ?? 0.0;
-      final amount = 'N ${_formatAmount(amountValue)}';
-
-      bytes += generator.row([
-        PosColumn(
-          text: name,
-          width: 7,
-          styles: const PosStyles(align: PosAlign.left),
-        ),
-        PosColumn(
-          text: amount,
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right),
-        ),
-      ]);
+      bytes += _leftRightText(generator, name, 'N ${_formatAmount(amountValue)}', width);
     }
 
     bytes += generator.hr();
@@ -538,6 +550,23 @@ class ThermalPrinterManager {
     bytes += generator.text('TOTAL: N ${_formatAmount(total)}',
         styles: const PosStyles(align: PosAlign.center, bold: true, height: PosTextSize.size2));
     bytes += generator.hr();
+
+    // Total paid & outstanding (overpayment shown as a credit)
+    if (totalPaid != null || outstanding != null) {
+      if (totalPaid != null) {
+        bytes += _leftRightText(generator, 'Total Paid', 'N ${_formatAmount(totalPaid)}', width);
+      }
+      if (outstanding != null) {
+        bytes += _leftRightText(
+          generator,
+          outstanding >= 0 ? 'Outstanding' : 'Overpayment',
+          'N ${_formatAmount(outstanding.abs())}',
+          width,
+          bold: true,
+        );
+      }
+      bytes += generator.hr();
+    }
 
     // Bank details
     bytes += _buildBankDetailsSection(generator, bankAccounts);
@@ -851,22 +880,11 @@ class ThermalPrinterManager {
         styles: const PosStyles(align: PosAlign.center, bold: true));
     bytes += generator.emptyLines(1);
 
-    final splitNameChars = (_charsPerLine(paperSize) * 7 / 12).floor();
+    final splitWidth = _charsPerLine(paperSize);
     for (final item in paymentItems) {
       final name = item['name']?.toString() ?? '';
       final amount = (item['amount'] as num?)?.toDouble() ?? 0.0;
-      bytes += generator.row([
-        PosColumn(
-          text: _fitToWidth(name, splitNameChars),
-          width: 7,
-          styles: const PosStyles(align: PosAlign.left),
-        ),
-        PosColumn(
-          text: 'N ${_formatAmount(amount)}',
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-      ]);
+      bytes += _leftRightText(generator, name, 'N ${_formatAmount(amount)}', splitWidth);
     }
 
     bytes += generator.hr();
@@ -1203,6 +1221,7 @@ class ThermalPrinterManager {
     bytes += generator.hr();
 
     int serialNumber = 0;
+    final lineWidth = _charsPerLine(paperSize);
 
     // === REGISTRATION FEES (standalone items) - shown first ===
     if (standaloneItems.isNotEmpty) {
@@ -1217,32 +1236,13 @@ class ThermalPrinterManager {
         final amountValue = (item['amount'] as num?)?.toDouble() ?? 0.0;
         sectionTotal += amountValue;
 
-        bytes += generator.row([
-          PosColumn(
-            text: '$serialNumber. $name',
-            width: 7,
-            styles: const PosStyles(align: PosAlign.left),
-          ),
-          PosColumn(
-            text: 'N ${_formatAmount(amountValue)}',
-            width: 5,
-            styles: const PosStyles(align: PosAlign.right),
-          ),
-        ]);
+        bytes += _leftRightText(
+            generator, '$serialNumber. $name', 'N ${_formatAmount(amountValue)}', lineWidth);
       }
 
-      bytes += generator.row([
-        PosColumn(
-          text: 'Subtotal:',
-          width: 7,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-        PosColumn(
-          text: 'N ${_formatAmount(sectionTotal)}',
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-      ]);
+      bytes += _leftRightText(
+          generator, 'Subtotal:', 'N ${_formatAmount(sectionTotal)}', lineWidth,
+          bold: true);
       bytes += generator.hr(ch: '-');
     }
 
@@ -1259,32 +1259,13 @@ class ThermalPrinterManager {
         final amountValue = (fee['amount'] as num?)?.toDouble() ?? 0.0;
         sectionTotal += amountValue;
 
-        bytes += generator.row([
-          PosColumn(
-            text: '$serialNumber. $name',
-            width: 7,
-            styles: const PosStyles(align: PosAlign.left),
-          ),
-          PosColumn(
-            text: 'N ${_formatAmount(amountValue)}',
-            width: 5,
-            styles: const PosStyles(align: PosAlign.right),
-          ),
-        ]);
+        bytes += _leftRightText(
+            generator, '$serialNumber. $name', 'N ${_formatAmount(amountValue)}', lineWidth);
       }
 
-      bytes += generator.row([
-        PosColumn(
-          text: 'Subtotal:',
-          width: 7,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-        PosColumn(
-          text: 'N ${_formatAmount(sectionTotal)}',
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-      ]);
+      bytes += _leftRightText(
+          generator, 'Subtotal:', 'N ${_formatAmount(sectionTotal)}', lineWidth,
+          bold: true);
       bytes += generator.hr(ch: '-');
     }
 
@@ -1305,32 +1286,13 @@ class ThermalPrinterManager {
         final name = item['name'] ?? 'Unknown';
         final amountValue = (item['amount'] as num?)?.toDouble() ?? 0.0;
 
-        bytes += generator.row([
-          PosColumn(
-            text: '$serialNumber. $name',
-            width: 7,
-            styles: const PosStyles(align: PosAlign.left),
-          ),
-          PosColumn(
-            text: 'N ${_formatAmount(amountValue)}',
-            width: 5,
-            styles: const PosStyles(align: PosAlign.right),
-          ),
-        ]);
+        bytes += _leftRightText(
+            generator, '$serialNumber. $name', 'N ${_formatAmount(amountValue)}', lineWidth);
       }
 
-      bytes += generator.row([
-        PosColumn(
-          text: 'Subtotal:',
-          width: 7,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-        PosColumn(
-          text: 'N ${_formatAmount(categoryTotal)}',
-          width: 5,
-          styles: const PosStyles(align: PosAlign.right, bold: true),
-        ),
-      ]);
+      bytes += _leftRightText(
+          generator, 'Subtotal:', 'N ${_formatAmount(categoryTotal)}', lineWidth,
+          bold: true);
       bytes += generator.hr(ch: '-');
     }
 
