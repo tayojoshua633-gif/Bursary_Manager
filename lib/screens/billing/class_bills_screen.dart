@@ -7,6 +7,7 @@ import '../../utils/class_bills_pdf_generator.dart';
 import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../utils/pdf_export_helper.dart';
+import '../../utils/student_bill_actions.dart';
 import '../../widgets/sibling_mark.dart';
 import '../students/student_details_screen.dart';
 
@@ -31,6 +32,8 @@ class _ClassBillsScreenState extends State<ClassBillsScreen> {
   Map<String, dynamic>? _currentUser;
 
   final TextEditingController _searchController = TextEditingController();
+  // One key per student card so the JPEG print can capture that card
+  final Map<int, GlobalKey> _cardKeys = {};
 
   @override
   void initState() {
@@ -156,12 +159,31 @@ class _ClassBillsScreenState extends State<ClassBillsScreen> {
       ORDER BY c.name, COALESCE(a.name, ''), s.surname, s.firstName
     ''', [targetKey, targetKey, _currentTerm, _currentSession, _currentTerm, _currentSession]);
 
+    // Fee items for every student's current-term bill, fetched in one query
+    final itemRows = await db.rawQuery('''
+      SELECT b.studentId,
+             sfb.amount,
+             COALESCE(NULLIF(TRIM(sfb.label), ''), fi.name, 'Fee Item') as feeName
+      FROM student_fee_breakdown sfb
+      INNER JOIN student_bills b ON sfb.billId = b.id
+      LEFT JOIN fee_items fi ON sfb.feeItemId = fi.id
+      WHERE b.term = ? AND b.session = ?
+      ORDER BY sfb.id ASC
+    ''', [_currentTerm, _currentSession]);
+    final itemsByStudent = <int, List<Map<String, dynamic>>>{};
+    for (final item in itemRows) {
+      itemsByStudent
+          .putIfAbsent(item['studentId'] as int, () => [])
+          .add({'feeName': item['feeName'], 'amount': item['amount']});
+    }
+
     // Merge currentTermFee + freshPreviousBalance into a single grandTotal field
     final enriched = results.map((row) {
       final currentTermFee = (row['currentTermFee'] as num).toDouble();
       final freshPrev = (row['freshPreviousBalance'] as num).toDouble();
       return Map<String, dynamic>.from(row)
-        ..['totalBill'] = currentTermFee + freshPrev;
+        ..['totalBill'] = currentTermFee + freshPrev
+        ..['billItems'] = itemsByStudent[row['studentId'] as int] ?? [];
     }).toList();
 
     // DEBUG: Log sample results
@@ -220,6 +242,22 @@ class _ClassBillsScreenState extends State<ClassBillsScreen> {
   String _formatCurrency(num amount) {
     final formatter = NumberFormat('#,##0.00');
     return formatter.format(amount);
+  }
+
+  /// Loads the student's current bill data, then hands it to [action].
+  Future<void> _runBillAction(
+    int studentId,
+    void Function(StudentBillSnapshot snapshot) action,
+  ) async {
+    final snapshot = await StudentBillActions.load(studentId);
+    if (!mounted) return;
+    if (snapshot == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bill data is not available for this student')),
+      );
+      return;
+    }
+    action(snapshot);
   }
 
   Color _getStatusColor(num totalBill, num totalPaid) {
@@ -514,194 +552,307 @@ class _ClassBillsScreenState extends State<ClassBillsScreen> {
     final totalBill = (bill['totalBill'] as num).toDouble();
     final totalPaid = (bill['totalPaid'] as num).toDouble();
     final outstanding = totalBill - totalPaid;
+    final billItems = bill['billItems'] as List<Map<String, dynamic>>? ?? [];
+    final previousBalance = (bill['freshPreviousBalance'] as num).toDouble();
 
     final fullName = '$surname $firstName ${otherName ?? ''}'.trim();
     final classArm = armName != null ? '$className - $armName' : className;
     final statusColor = _getStatusColor(totalBill, totalPaid);
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      elevation: 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: Colors.grey.shade200),
-      ),
-      child: InkWell(
-        onTap: () async {
-          // Fetch student and navigate to details
-          try {
-            final studentMap = await DatabaseHelperWrapper().getStudentById(studentId);
-            if (studentMap != null && mounted) {
-              final student = Student.fromMap(studentMap);
-              NavigationHelper.pushWithSidebar(
-                context,
-                page: StudentDetailsScreen(student: student),
-                currentUser: _currentUser ?? {},
-                pageId: 'student_management/students',
-              );
-            }
-          } catch (e) {
-            debugPrint('Error loading student: $e');
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Error loading student details: $e'),
-                  backgroundColor: Colors.red,
-                ),
-              );
-            }
-          }
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  // Student Info
-                  Expanded(
-                    flex: 3,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                fullName,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.indigo,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            SiblingMark(show: isSiblingPhone(parentPhone, _siblingPhones)),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(Icons.class_, size: 14, color: Colors.grey.shade600),
-                            const SizedBox(width: 4),
-                            Text(
-                              classArm,
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey.shade700,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+    final cardKey = _cardKeys.putIfAbsent(studentId, GlobalKey.new);
+
+    return RepaintBoundary(
+      key: cardKey,
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        elevation: 1,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: Colors.grey.shade200),
+        ),
+        child: InkWell(
+          onTap: () async {
+            // Fetch student and navigate to details
+            try {
+              final studentMap = await DatabaseHelperWrapper().getStudentById(studentId);
+              if (studentMap != null && mounted) {
+                final student = Student.fromMap(studentMap);
+                NavigationHelper.pushWithSidebar(
+                  context,
+                  page: StudentDetailsScreen(student: student),
+                  currentUser: _currentUser ?? {},
+                  pageId: 'student_management/students',
+                );
+              }
+            } catch (e) {
+              debugPrint('Error loading student: $e');
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error loading student details: $e'),
+                    backgroundColor: Colors.red,
                   ),
-
-                  // Bill Amount
-                  Expanded(
-                    flex: 2,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          '₦${_formatCurrency(totalBill)}',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Total Bill',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 12),
-
-              // Payment Summary
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: statusColor.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                );
+              }
+            }
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    // Paid
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Paid',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey.shade600,
+                    // Student Info
+                    Expanded(
+                      flex: 3,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  fullName,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.indigo,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              SiblingMark(show: isSiblingPhone(parentPhone, _siblingPhones)),
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '₦${_formatCurrency(totalPaid)}',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.green,
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(Icons.class_, size: 14, color: Colors.grey.shade600),
+                              const SizedBox(width: 4),
+                              Text(
+                                classArm,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey.shade700,
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
 
-                    // Outstanding
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          'Outstanding',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey.shade600,
+                    // Bill Amount
+                    Expanded(
+                      flex: 2,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '₦${_formatCurrency(totalBill)}',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Row(
-                          children: [
-                            Icon(
-                              outstanding <= 0
-                                  ? Icons.check_circle
-                                  : Icons.warning,
-                              size: 14,
-                              color: statusColor,
+                          const SizedBox(height: 2),
+                          Text(
+                            'Total Bill',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
                             ),
-                            const SizedBox(width: 4),
-                            Text(
-                              '₦${_formatCurrency(outstanding)}',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: statusColor,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
-              ),
-            ],
+
+                // Fee items header with SMS / term comparison / print buttons
+                const SizedBox(height: 10),
+                Divider(height: 1, color: Colors.grey.shade200),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(Icons.list_alt, size: 14, color: Colors.teal.shade600),
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        'Bill Breakdown',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.teal.shade800,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => _runBillAction(
+                        studentId,
+                        (b) => StudentBillActions.sendSms(context, b),
+                      ),
+                      icon: Icon(Icons.sms_outlined, color: Colors.teal.shade700),
+                      tooltip: 'Send Bill/Payment SMS',
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    IconButton(
+                      onPressed: () => _runBillAction(
+                        studentId,
+                        (b) => StudentBillActions.showTermComparison(context, b),
+                      ),
+                      icon: Icon(Icons.compare_arrows, color: Colors.teal.shade700),
+                      tooltip: 'Previous Term Bills',
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    IconButton(
+                      onPressed: () => _runBillAction(
+                        studentId,
+                        (b) => StudentBillActions.showPrintOptions(
+                          context,
+                          b,
+                          captureKey: cardKey,
+                          currentUser: _currentUser,
+                        ),
+                      ),
+                      icon: Icon(Icons.print, color: Colors.teal.shade700),
+                      tooltip: 'Print Statement',
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ],
+                ),
+                if (billItems.isNotEmpty || previousBalance > 0) ...[
+                  const SizedBox(height: 4),
+                  ...billItems.map((item) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          children: [
+                            Icon(Icons.circle, size: 5, color: Colors.grey.shade400),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                item['feeName'] as String? ?? 'Fee Item',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                            Text(
+                              '₦${_formatCurrency((item['amount'] as num?) ?? 0)}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )),
+                  if (previousBalance > 0)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        children: [
+                          Icon(Icons.history, size: 13, color: Colors.orange.shade700),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Previous Balance (B/F)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontStyle: FontStyle.italic,
+                                color: Colors.orange.shade700,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '₦${_formatCurrency(previousBalance)}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.orange.shade700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+
+                const SizedBox(height: 12),
+
+                // Payment Summary
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      // Paid
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Paid',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '₦${_formatCurrency(totalPaid)}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.green,
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      // Outstanding
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            'Outstanding',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Icon(
+                                outstanding <= 0
+                                    ? Icons.check_circle
+                                    : Icons.warning,
+                                size: 14,
+                                color: statusColor,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                '₦${_formatCurrency(outstanding)}',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: statusColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

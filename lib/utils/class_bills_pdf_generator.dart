@@ -214,11 +214,12 @@ class ClassBillsPDFGenerator {
       columnWidths: {
         0: const pw.FlexColumnWidth(1), // S/N
         1: const pw.FlexColumnWidth(4), // Name
-        2: const pw.FlexColumnWidth(3), // Class/Arm
-        3: const pw.FlexColumnWidth(2.5), // Total Bill
-        4: const pw.FlexColumnWidth(2.5), // Paid
-        5: const pw.FlexColumnWidth(2.5), // Outstanding
-        6: const pw.FlexColumnWidth(2), // Status
+        2: const pw.FlexColumnWidth(2.5), // Class/Arm
+        3: const pw.FlexColumnWidth(6), // Fee Items
+        4: const pw.FlexColumnWidth(2.5), // Total Bill
+        5: const pw.FlexColumnWidth(2.5), // Paid
+        6: const pw.FlexColumnWidth(2.5), // Outstanding
+        7: const pw.FlexColumnWidth(1.8), // Status
       },
       children: [
         // Header Row
@@ -228,6 +229,7 @@ class ClassBillsPDFGenerator {
             _buildTableHeader('S/N'),
             _buildTableHeader('Student Name'),
             _buildTableHeader('Class/Arm'),
+            _buildTableHeader('Fee Items'),
             _buildTableHeader('Total Bill'),
             _buildTableHeader('Paid'),
             _buildTableHeader('Outstanding'),
@@ -271,6 +273,7 @@ class ClassBillsPDFGenerator {
               _buildTableCell((index + 1).toString(), align: pw.TextAlign.center),
               _buildTableCell(fullName),
               _buildTableCell(classArm),
+              _buildFeeItemsCell(bill, formatter),
               _buildTableCell('N${formatter.format(totalBill)}', align: pw.TextAlign.right),
               _buildTableCell('N${formatter.format(totalPaid)}', align: pw.TextAlign.right),
               _buildTableCell('N${formatter.format(outstanding)}', align: pw.TextAlign.right),
@@ -279,6 +282,53 @@ class ClassBillsPDFGenerator {
           );
         }),
       ],
+    );
+  }
+
+  /// One line per fee item (name left, amount right), plus the carried-forward
+  /// balance, so the items add up to the student's Total Bill.
+  static pw.Widget _buildFeeItemsCell(
+    Map<String, dynamic> bill,
+    NumberFormat formatter,
+  ) {
+    final items = (bill['billItems'] as List?) ?? const [];
+    final previousBalance = (bill['freshPreviousBalance'] as num?)?.toDouble() ?? 0;
+
+    pw.Widget line(String name, double amount, {PdfColor color = PdfColors.black}) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 1.5),
+        child: pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Expanded(
+              child: pw.Text(name, style: pw.TextStyle(fontSize: 7, color: color)),
+            ),
+            pw.SizedBox(width: 6),
+            pw.Text('N${formatter.format(amount)}',
+                style: pw.TextStyle(fontSize: 7, color: color)),
+          ],
+        ),
+      );
+    }
+
+    if (items.isEmpty && previousBalance <= 0) {
+      return _buildTableCell('-', align: pw.TextAlign.center);
+    }
+
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(6),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+        children: [
+          ...items.map((item) => line(
+                (item['feeName'] ?? 'Fee Item').toString(),
+                (item['amount'] as num?)?.toDouble() ?? 0,
+              )),
+          if (previousBalance > 0)
+            line('Previous Balance (B/F)', previousBalance, color: PdfColors.orange700),
+        ],
+      ),
     );
   }
 

@@ -38,6 +38,19 @@ class ClassBillsHtmlGenerator {
       final armName = bill['armName'] as String?;
       final classArm = armName != null ? '$className - $armName' : className;
 
+      final feeItems = (bill['billItems'] as List?) ?? const [];
+      final previousBalance = (bill['freshPreviousBalance'] as num?)?.toDouble() ?? 0;
+      final feeLines = StringBuffer();
+      for (final item in feeItems) {
+        feeLines.write('<div class="fee-line"><span>${_esc(item['feeName'] ?? 'Fee Item')}</span>'
+            '<span>N${f.format((item['amount'] as num?)?.toDouble() ?? 0)}</span></div>');
+      }
+      if (previousBalance > 0) {
+        feeLines.write('<div class="fee-line" style="color:#F57C00;"><span>Previous Balance (B/F)</span>'
+            '<span>N${f.format(previousBalance)}</span></div>');
+      }
+      final feeCell = feeLines.isEmpty ? '<td class="center">-</td>' : '<td>$feeLines</td>';
+
       final totalBill = (bill['totalBill'] as num).toDouble();
       final totalPaid0 = (bill['totalPaid'] as num).toDouble();
       final outstanding = totalBill - totalPaid0;
@@ -59,6 +72,7 @@ class ClassBillsHtmlGenerator {
           '<td class="center">${i + 1}</td>'
           '<td>${_esc(fullName)}</td>'
           '<td>${_esc(classArm)}</td>'
+          '$feeCell'
           '<td class="right">N${f.format(totalBill)}</td>'
           '<td class="right">N${f.format(totalPaid0)}</td>'
           '<td class="right">N${f.format(outstanding)}</td>'
@@ -95,6 +109,8 @@ class ClassBillsHtmlGenerator {
   table { width:100%; border-collapse: collapse; font-size: 9px; margin-bottom: 16px; }
   th, td { border:1px solid #BDBDBD; padding:6px; }
   th { background:#E0E0E0; font-weight:bold; }
+  tr { page-break-inside: avoid; }
+  .fee-line { display:flex; justify-content:space-between; gap:8px; font-size:8px; padding-bottom:1px; }
   .bank-box { border:1px solid #90CAF9; background:#E3F2FD; border-radius:6px; padding:10px; font-size:9px; margin-bottom: 12px; }
   .legend { display:flex; gap:16px; align-items:center; font-size:8px; border-top:1px solid #E0E0E0; padding-top:10px; }
   .legend .swatch { width:8px; height:8px; display:inline-block; margin-right:4px; }
@@ -117,7 +133,7 @@ class ClassBillsHtmlGenerator {
 
   <table>
     <thead><tr>
-      <th class="center">S/N</th><th>Student Name</th><th>Class/Arm</th>
+      <th class="center">S/N</th><th>Student Name</th><th>Class/Arm</th><th>Fee Items</th>
       <th class="right">Total Bill</th><th class="right">Paid</th>
       <th class="right">Outstanding</th><th class="center">Status</th>
     </tr></thead>
