@@ -6,6 +6,7 @@ import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import 'payment_record_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class PaymentStudentSelectScreen extends StatefulWidget {
   /// OPTIONAL callback for clear-data screen
@@ -177,7 +178,14 @@ class _PaymentStudentSelectScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.billsPayment,
+        currentId: 'payments',
+        enabled: widget.onStudentSelected == null,
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
     return Scaffold(
       appBar: AppBar(

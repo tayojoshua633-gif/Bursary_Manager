@@ -5,6 +5,7 @@ import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import 'staff_details_screen.dart';
 import 'staff_table_screen.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffListScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -144,7 +145,13 @@ class _StaffListScreenState extends State<StaffListScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.viewStaff,
+        currentId: 'list',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Staff List'),

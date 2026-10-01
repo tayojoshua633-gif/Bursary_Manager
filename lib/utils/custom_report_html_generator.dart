@@ -1,4 +1,5 @@
 import 'package:intl/intl.dart';
+import 'report_data/report_pdf_dates.dart';
 
 /// Builds the Custom Report as an HTML document, rendered on Android via
 /// the platform's native WebView print engine (see
@@ -178,7 +179,7 @@ class CustomReportHtmlGenerator {
 
   static String _paymentDetailsSection(List<Map<String, dynamic>> paymentDetails, NumberFormat f) {
     final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final p in paymentDetails) {
+    for (final p in sortByDateAscending(paymentDetails, 'paymentDate')) {
       final cat = (p['paymentFor']?.toString() ?? 'School Fees');
       (grouped[cat] ??= []).add(p);
     }
@@ -191,13 +192,13 @@ class CustomReportHtmlGenerator {
       buf.writeln('<div class="cat-label">${_esc(category.toUpperCase())} '
           '<span class="cat-total">— ${payments.length} transaction(s), Total: N ${f.format(categoryTotal)}</span></div>');
       buf.writeln('<table><thead><tr class="green-th">'
-          '<th class="green-td">Student Name</th><th class="green-td">Adm No</th>'
+          '<th class="green-td">Payment Date</th><th class="green-td">Student Name</th>'
           '<th class="green-td">Class/Arm</th><th class="green-td">Method</th>'
           '<th class="green-td right">Amount (N)</th></tr></thead><tbody>');
       for (final p in payments) {
         buf.writeln('<tr>'
+            '<td class="green-td">${_esc(formatReportDate(p['paymentDate']))}</td>'
             '<td class="green-td">${_esc(p['studentName'])}</td>'
-            '<td class="green-td">${_esc(p['admissionNo'])}</td>'
             '<td class="green-td">${_esc('${p['className']} - ${p['armName']}')}</td>'
             '<td class="green-td">${_esc(p['method'])}</td>'
             '<td class="green-td right">${f.format(p['amount'] as num)}</td>'
@@ -224,11 +225,13 @@ class CustomReportHtmlGenerator {
 
     buf.writeln('<div style="font-weight:bold; margin:10px 0 6px;">EXPENSES DETAILS (${expenseDetails.length} transactions)</div>');
     buf.writeln('<table><thead><tr class="orange-th">'
+        '<th class="orange-td">Date</th>'
         '<th class="orange-td">Description</th><th class="orange-td">Category</th>'
         '<th class="orange-td">Recipient</th><th class="orange-td">Method</th>'
         '<th class="orange-td right">Amount (N)</th></tr></thead><tbody>');
-    for (final e in expenseDetails) {
+    for (final e in sortByDateAscending(expenseDetails, 'expenseDate')) {
       buf.writeln('<tr>'
+          '<td class="orange-td">${_esc(formatReportDate(e['expenseDate']))}</td>'
           '<td class="orange-td">${_esc(e['description'])}</td>'
           '<td class="orange-td">${_esc(e['category'])}</td>'
           '<td class="orange-td">${_esc(e['recipient'])}</td>'
@@ -273,12 +276,13 @@ class CustomReportHtmlGenerator {
     final buf = StringBuffer();
     buf.writeln('<div class="section-title" style="color:#00796B;">SALES SUMMARY</div>');
     buf.writeln('<table><thead><tr class="teal-th">'
-        '<th class="teal-td">S/N</th><th class="teal-td">Item(s) Sold</th>'
+        '<th class="teal-td">S/N</th><th class="teal-td">Date</th><th class="teal-td">Item(s) Sold</th>'
         '<th class="teal-td center">Qty</th><th class="teal-td center">Payment Status</th>'
         '<th class="teal-td right">Amount Paid</th><th class="teal-td">Buyer Details</th>'
         '</tr></thead><tbody>');
-    for (var i = 0; i < salesDetails.length; i++) {
-      final sale = salesDetails[i];
+    final sortedSales = sortByDateAscending(salesDetails, 'saleDate');
+    for (var i = 0; i < sortedSales.length; i++) {
+      final sale = sortedSales[i];
       final items = sale['items'] as List<Map<String, dynamic>>;
       final itemsText = items.map((item) {
         final isCustom = item['isCustomItem'] == true;
@@ -293,6 +297,7 @@ class CustomReportHtmlGenerator {
 
       buf.writeln('<tr>'
           '<td class="teal-td">${i + 1}</td>'
+          '<td class="teal-td">${_esc(formatSaleDate(sale))}</td>'
           '<td class="teal-td">${_esc(itemsText)}</td>'
           '<td class="teal-td center">${_esc(sale['totalQtySold'])}</td>'
           '<td class="teal-td center">$status</td>'

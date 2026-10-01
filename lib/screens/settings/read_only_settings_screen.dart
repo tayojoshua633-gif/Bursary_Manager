@@ -5,6 +5,7 @@ import '../../utils/school_sync_registry.dart';
 import '../../utils/school_sync_client.dart';
 import '../../widgets/add_school_dialog.dart';
 import '../../widgets/auto_sync_settings_card.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ReadOnlySettingsScreen extends StatefulWidget {
   const ReadOnlySettingsScreen({super.key});
@@ -102,7 +103,13 @@ class _ReadOnlySettingsScreenState extends State<ReadOnlySettingsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'read_only',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Linked Schools'),

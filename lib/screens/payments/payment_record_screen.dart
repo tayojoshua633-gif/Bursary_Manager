@@ -12,6 +12,7 @@ import '../../utils/navigation_helper.dart';
 import '../../utils/sound_service.dart';
 import '../../utils/write_guard.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/student_quick_access_bar.dart';
 import '../students/siblings_information_screen.dart';
 
 class PaymentRecordScreen extends StatefulWidget {
@@ -435,6 +436,7 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
   @override
   Widget build(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
+    final showQuickAccessBar = shouldShowStudentQuickAccessBar(context);
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -448,7 +450,11 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
         backgroundColor: Colors.green,
         foregroundColor: Colors.white,
       ),
-      body: _loading
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
               padding: EdgeInsets.all(ds.cardPadding),
@@ -1034,6 +1040,10 @@ class _PaymentRecordScreenState extends State<PaymentRecordScreen> {
                 ],
               ),
             ),
+          ),
+          if (showQuickAccessBar) StudentQuickAccessBar(studentId: widget.studentId),
+        ],
+      ),
     );
   }
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/student_quick_actions_panel.dart';
 
 class StudentPromotionScreen extends StatefulWidget {
   const StudentPromotionScreen({super.key});
@@ -333,7 +334,11 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
       appBar: AppBar(
         title: const Text('Promote Students'),
       ),
-      body: _loading
+      endDrawer: StudentQuickAccess.buildEndDrawer(context, current: StudentQuickAction.promote),
+      body: StudentQuickAccess.wrapBody(
+        context,
+        current: StudentQuickAction.promote,
+        body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
@@ -642,6 +647,7 @@ class _StudentPromotionScreenState extends State<StudentPromotionScreen> {
                 ],
               ),
             ),
+      ),
     );
   }
 }

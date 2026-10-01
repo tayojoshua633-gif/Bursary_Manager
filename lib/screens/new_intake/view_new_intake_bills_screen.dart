@@ -16,6 +16,7 @@ import '../../utils/print_counter_helper.dart';
 import '../../utils/usb_printer_manager.dart';
 import '../../utils/sms_service.dart';
 import '../settings/usb_printer_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ViewNewIntakeBillsScreen extends StatefulWidget {
   const ViewNewIntakeBillsScreen({super.key});
@@ -861,7 +862,13 @@ class _ViewNewIntakeBillsScreenState extends State<ViewNewIntakeBillsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.newIntake,
+        currentId: 'view_bills',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final grandTotal = _regularTotal + _specialTotal;
     final hasBillData = _regularFees.isNotEmpty || _specialFees.isNotEmpty;
     final bankAccounts = _getBankAccounts();

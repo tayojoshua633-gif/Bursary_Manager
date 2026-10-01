@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/display_settings_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class FeesBalanceReportScreen extends StatefulWidget {
   const FeesBalanceReportScreen({super.key});
@@ -131,7 +132,13 @@ class _FeesBalanceReportScreenState extends State<FeesBalanceReportScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.reports,
+        currentId: 'fees_balance',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
     return Scaffold(
       appBar: AppBar(

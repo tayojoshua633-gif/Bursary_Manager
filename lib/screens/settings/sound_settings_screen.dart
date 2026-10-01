@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/sound_service.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SoundSettingsScreen extends StatefulWidget {
   const SoundSettingsScreen({super.key});
@@ -29,7 +30,13 @@ class _SoundSettingsScreenState extends State<SoundSettingsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'sound',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
 
     return Scaffold(

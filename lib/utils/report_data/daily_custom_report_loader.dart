@@ -279,8 +279,12 @@ Future<DailyCustomReportData> loadDailyCustomReportData({
           'totalAmount': 0.0,
           'totalPaid': 0.0,
           'paymentStatus': paymentStatus,
+          // Rows arrive newest-first, so the first one seen is the latest
+          // sale and 'saleDate' is overwritten down to the earliest.
+          'lastSaleDate': sale['saleDate'],
         };
       }
+      salesByBuyer[buyerKey]!['saleDate'] = sale['saleDate'];
 
       salesByBuyer[buyerKey]!['items'].add({
         'itemName': itemName,

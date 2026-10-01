@@ -4,6 +4,7 @@ import '../../data/database_helper_wrapper.dart';
 import '../../utils/fee_priority_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class TrackFeeItemScreen extends StatefulWidget {
   const TrackFeeItemScreen({super.key});
@@ -582,7 +583,13 @@ class _TrackFeeItemScreenState extends State<TrackFeeItemScreen>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.feeTracker,
+        currentId: 'track_fee_item',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Track Fee Item'),

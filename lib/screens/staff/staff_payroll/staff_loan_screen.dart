@@ -9,6 +9,7 @@ import '../../../models/staff_loan.dart';
 import '../../../utils/staff_loan_pdf_generator.dart';
 import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffLoanScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -805,7 +806,13 @@ class _StaffLoanScreenState extends State<StaffLoanScreen> with SingleTickerProv
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.viewStaff,
+        currentId: 'loan',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Staff Loans'),

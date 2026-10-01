@@ -14,12 +14,13 @@ class PdfExportHelper {
     required String shareSubject,
     String? shareText,
     String successMessage = 'PDF exported successfully!',
+    String fileLabel = 'PDF',
   }) async {
     final choice = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Export PDF'),
-        content: const Text('Download the PDF to your device, or share it via another app?'),
+        title: Text('Export $fileLabel'),
+        content: Text('Download the $fileLabel to your device, or share it via another app?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -81,7 +82,7 @@ class PdfExportHelper {
       if (!context.mounted) return;
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error exporting PDF: $e')),
+        SnackBar(content: Text('Error exporting $fileLabel: $e')),
       );
     }
   }

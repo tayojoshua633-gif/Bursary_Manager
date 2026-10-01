@@ -7,6 +7,7 @@ import 'backup_reminder_settings_screen.dart';
 import 'offline_backup_screen.dart';
 import 'online_backup_screen.dart';
 import 'sync_dsm_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class BackupScreen extends StatefulWidget {
   const BackupScreen({super.key});
@@ -45,7 +46,13 @@ class _BackupScreenState extends State<BackupScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'backup',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Backup & Restore'),

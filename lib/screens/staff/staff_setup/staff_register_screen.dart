@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffRegisterScreen extends StatefulWidget {
   const StaffRegisterScreen({super.key});
@@ -537,7 +538,13 @@ class _StaffRegisterScreenState extends State<StaffRegisterScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.staffSetup,
+        currentId: 'register',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Register Staff'),

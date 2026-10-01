@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../data/database_helper_wrapper.dart';
 import '../../../models/staff.dart';
 import '../../../utils/display_settings_helper.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffPhotoCaptureScreen extends StatefulWidget {
   const StaffPhotoCaptureScreen({super.key});
@@ -237,7 +238,13 @@ class _StaffPhotoCaptureScreenState extends State<StaffPhotoCaptureScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.staffSetup,
+        currentId: 'photo',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
 
     final withPhotoCount = _staffList.where((s) => s.photoPath != null && s.photoPath!.isNotEmpty).length;

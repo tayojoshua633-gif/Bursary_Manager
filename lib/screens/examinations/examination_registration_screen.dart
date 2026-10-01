@@ -4,6 +4,7 @@ import '../../models/external_examination.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ExaminationRegistrationScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -296,7 +297,13 @@ class _ExaminationRegistrationScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.examinations,
+        currentId: 'registration',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
 
     return Scaffold(

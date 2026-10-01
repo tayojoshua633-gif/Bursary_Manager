@@ -10,7 +10,6 @@ import '../students/deactivate_student_screen.dart';
 import '../students/inactive_students_screen.dart';
 import '../students/siblings_screen.dart';
 import '../reports/debtors_list_screen.dart';
-import '../billing/class_bills_screen.dart';
 
 class StudentManagementMenu extends StatelessWidget {
   final Map<String, dynamic> currentUser;
@@ -103,16 +102,6 @@ class StudentManagementMenu extends StatelessWidget {
             color: Colors.red,
             page: const DebtorsListScreen(),
             pageId: 'student_management/debtors',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'bills_generate',
-            title: 'Class Bills',
-            subtitle: 'Student bill overview',
-            icon: Icons.receipt_long_outlined,
-            color: Colors.indigo,
-            page: const ClassBillsScreen(),
-            pageId: 'student_management/class_bills',
           ),
         ],
       ),

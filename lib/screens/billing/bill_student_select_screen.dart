@@ -6,6 +6,7 @@ import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import 'bill_generate_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class BillStudentSelectScreen extends StatefulWidget {
   const BillStudentSelectScreen({super.key});
@@ -164,7 +165,13 @@ class _BillStudentSelectScreenState extends State<BillStudentSelectScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.billsPayment,
+        currentId: 'student_bills',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
     return Scaffold(
       appBar: AppBar(

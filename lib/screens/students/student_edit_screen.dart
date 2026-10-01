@@ -9,6 +9,7 @@ import '../../utils/admission_settings_helper.dart';
 import '../../utils/age_helper.dart';
 import '../../utils/nigeria_states_lgas.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../widgets/student_quick_access_bar.dart';
 
 class StudentEditScreen extends StatefulWidget {
   final Student student;
@@ -527,9 +528,15 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
+    final showQuickAccessBar = shouldShowStudentQuickAccessBar(context);
+
     return Scaffold(
       appBar: AppBar(title: const Text("Edit Student")),
-      body: SingleChildScrollView(
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
         padding: EdgeInsets.all(ds.cardPadding),
         child: Form(
           key: _formKey,
@@ -942,6 +949,10 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
             ],
           ),
         ),
+      ),
+          ),
+          if (showQuickAccessBar) StudentQuickAccessBar(studentId: widget.student.id!),
+        ],
       ),
     );
   }

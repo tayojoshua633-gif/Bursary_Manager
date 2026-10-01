@@ -4,6 +4,7 @@ import '../../data/database_helper_wrapper.dart';
 import '../../utils/termly_report_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
 import '../../utils/report_data/termly_report_loader.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class TermlyReportScreen extends StatefulWidget {
   const TermlyReportScreen({super.key});
@@ -183,7 +184,13 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
   // UI
   // -----------------------------------------------------------
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.reports,
+        currentId: 'termly',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text("Termly Report - $activeTerm, $activeSession"),

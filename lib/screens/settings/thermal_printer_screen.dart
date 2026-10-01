@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../utils/thermal_printer_manager.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ThermalPrinterScreen extends StatefulWidget {
   const ThermalPrinterScreen({super.key});
@@ -586,7 +587,13 @@ class _ThermalPrinterScreenState extends State<ThermalPrinterScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'thermal_printer',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Thermal Printer'),

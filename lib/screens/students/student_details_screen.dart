@@ -11,6 +11,7 @@ import '../../models/student.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../payments/payment_record_screen.dart';
 import '../payments/payment_history_screen.dart';
+import '../new_intake/items_given_screen.dart';
 import '../billing/bill_generate_screen.dart';
 import 'student_edit_screen.dart';
 import 'siblings_information_screen.dart';
@@ -412,6 +413,18 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
       pageId: 'student_management/students',
     );
     if (mounted) _loadBillData();
+  }
+
+  Future<void> _openItemsGiven() async {
+    await NavigationHelper.pushWithSidebar(
+      context,
+      page: ItemsGivenScreen(
+        studentId: current.id!,
+        studentName: "${current.surname} ${current.firstName}",
+      ),
+      currentUser: _currentUser ?? {},
+      pageId: 'student_management/students',
+    );
   }
 
   /// Scrolls the details page to the "Bills & Payments" card.
@@ -1052,7 +1065,7 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
 
               SizedBox(height: ds.cardPadding * 0.75),
 
-              // BILLING + PAYMENTS + PAYMENT HISTORY
+              // BILLING + PAYMENTS + PAYMENT HISTORY + SIBLINGS/PARENT/EDIT
               Wrap(
                 spacing: ds.cardPadding * 0.5,
                 runSpacing: ds.cardPadding * 0.5,
@@ -1060,16 +1073,16 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
                 children: [
                   ElevatedButton.icon(
                     icon: Icon(Icons.receipt_long, size: ds.iconSize),
-                    label: Text("Generate Bill", style: TextStyle(fontSize: ds.bodyFontSize)),
+                    label: Text("Bills & Payments", style: TextStyle(fontSize: ds.bodyFontSize)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
+                      backgroundColor: Colors.teal,
                       foregroundColor: Colors.white,
                       padding: EdgeInsets.symmetric(
                         horizontal: ds.cardPadding,
                         vertical: ds.cardPadding * 0.75,
                       ),
                     ),
-                    onPressed: _openGenerateBill,
+                    onPressed: _scrollToBillsAndPayments,
                   ),
                   ElevatedButton.icon(
                     icon: Icon(Icons.payment, size: ds.iconSize),
@@ -1085,10 +1098,23 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
                     onPressed: _openRecordPayment,
                   ),
                   ElevatedButton.icon(
+                    icon: Icon(Icons.request_quote, size: ds.iconSize),
+                    label: Text("Generate Bill", style: TextStyle(fontSize: ds.bodyFontSize)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: ds.cardPadding,
+                        vertical: ds.cardPadding * 0.75,
+                      ),
+                    ),
+                    onPressed: _openGenerateBill,
+                  ),
+                  ElevatedButton.icon(
                     icon: Icon(Icons.history, size: ds.iconSize),
                     label: Text("Payment History", style: TextStyle(fontSize: ds.bodyFontSize)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.purple,
+                      backgroundColor: Colors.deepPurple,
                       foregroundColor: Colors.white,
                       padding: EdgeInsets.symmetric(
                         horizontal: ds.cardPadding,
@@ -1097,6 +1123,61 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
                     ),
                     onPressed: _openPaymentHistory,
                   ),
+                  ElevatedButton.icon(
+                    icon: Icon(Icons.inventory_2_outlined, size: ds.iconSize),
+                    label: Text("Items Given", style: TextStyle(fontSize: ds.bodyFontSize)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.cyan.shade700,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: ds.cardPadding,
+                        vertical: ds.cardPadding * 0.75,
+                      ),
+                    ),
+                    onPressed: _openItemsGiven,
+                  ),
+                  if (_siblings.isNotEmpty)
+                    ElevatedButton.icon(
+                      icon: Icon(Icons.family_restroom, size: ds.iconSize),
+                      label: Text("Siblings", style: TextStyle(fontSize: ds.bodyFontSize)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.purple,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: ds.cardPadding,
+                          vertical: ds.cardPadding * 0.75,
+                        ),
+                      ),
+                      onPressed: _openSiblingsInformation,
+                    ),
+                  if (current.parentPhone.trim().isNotEmpty)
+                    ElevatedButton.icon(
+                      icon: Icon(Icons.call, size: ds.iconSize),
+                      label: Text("Dial Parent", style: TextStyle(fontSize: ds.bodyFontSize)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade700,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: ds.cardPadding,
+                          vertical: ds.cardPadding * 0.75,
+                        ),
+                      ),
+                      onPressed: () => _dialPhone(current.parentPhone),
+                    ),
+                  if (_canManageStudents)
+                    ElevatedButton.icon(
+                      icon: Icon(Icons.edit, size: ds.iconSize),
+                      label: Text("Edit Student", style: TextStyle(fontSize: ds.bodyFontSize)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange.shade800,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: ds.cardPadding,
+                          vertical: ds.cardPadding * 0.75,
+                        ),
+                      ),
+                      onPressed: _openEditStudent,
+                    ),
                 ],
               ),
 
@@ -1171,6 +1252,13 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
               color: Colors.deepPurple,
               label: 'Payment History',
               onTap: _openPaymentHistory,
+            ),
+            _quickAccessTile(
+              ds,
+              icon: Icons.inventory_2_outlined,
+              color: Colors.cyan.shade700,
+              label: 'Items Given',
+              onTap: _openItemsGiven,
             ),
             if (_siblings.isNotEmpty)
               _quickAccessTile(

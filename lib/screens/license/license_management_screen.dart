@@ -8,6 +8,7 @@ import '../../utils/license_helper.dart';
 import '../../utils/license_checker.dart';
 import '../../utils/license_tier_helper.dart';
 import 'license_activation_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class LicenseManagementScreen extends StatefulWidget {
   const LicenseManagementScreen({super.key});
@@ -166,7 +167,13 @@ class _LicenseManagementScreenState extends State<LicenseManagementScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'license',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('License Management'),

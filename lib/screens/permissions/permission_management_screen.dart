@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../models/permission.dart';
 import '../../utils/permission_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class PermissionManagementScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -329,7 +330,13 @@ class _PermissionManagementScreenState extends State<PermissionManagementScreen>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'permissions',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     // Access check - only super_admin can access this screen
     if (widget.currentUser['userType'] != 'super_admin') {
       return Scaffold(

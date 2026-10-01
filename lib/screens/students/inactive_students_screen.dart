@@ -6,6 +6,7 @@ import '../../models/student.dart';
 import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/student_quick_actions_panel.dart';
 import 'student_details_screen.dart';
 
 class InactiveStudentsScreen extends StatefulWidget {
@@ -191,7 +192,16 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
       appBar: AppBar(
         title: const Text("Inactive Students"),
       ),
-      body: loading
+      endDrawer: StudentQuickAccess.buildEndDrawer(
+        context,
+        current: StudentQuickAction.inactive,
+        onReturn: _load,
+      ),
+      body: StudentQuickAccess.wrapBody(
+        context,
+        current: StudentQuickAction.inactive,
+        onReturn: _load,
+        body: loading
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
@@ -271,6 +281,7 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
                 ),
               ],
             ),
+      ),
     );
   }
 }

@@ -103,7 +103,14 @@ class DatabaseHelper {
   //      the staff_period_records table, which stores the periods worked
   //      and computed amount (periods × rate) per Per-Period staff member
   //      per payroll month.
-  static const int _dbVersion = 61;
+  // v62: Added special_item_disbursements table — tracks whether a student
+  //      has received a special/new-intake item (uniform, textbook, etc.)
+  //      they were billed for, per term/session.
+  // v63: Added disbursement_settings table — marks which special fee items
+  //      are trackable for physical disbursement (e.g. uniforms, textbooks
+  //      vs. plain registration fees) per class, configured via the
+  //      Disburse Settings screen and consumed by Disburse Items.
+  static const int _dbVersion = 63;
   static const String _defaultDbName = 'bursary_manager.db';
   // Which file the singleton currently points at — mutable (not const) so a
   // Read-Only device can switch between multiple linked schools' cached
@@ -329,6 +336,38 @@ class DatabaseHelper {
         term TEXT NOT NULL,
         session TEXT NOT NULL,
         UNIQUE(classId, classFeeId, term, session)
+      )
+    ''');
+
+    // SPECIAL ITEM DISBURSEMENTS (received/not received tracking for
+    // special/new-intake items such as uniforms and textbooks)
+    await db.execute('''
+      CREATE TABLE special_item_disbursements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        studentId INTEGER NOT NULL,
+        specialFeeItemId INTEGER NOT NULL,
+        term TEXT NOT NULL,
+        session TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'not_given',
+        markedBy TEXT,
+        markedAt TEXT,
+        FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY (specialFeeItemId) REFERENCES special_fee_items(id) ON DELETE CASCADE,
+        UNIQUE(studentId, specialFeeItemId, term, session)
+      )
+    ''');
+
+    // DISBURSEMENT SETTINGS (marks which special fee items are trackable
+    // for physical disbursement, per class)
+    await db.execute('''
+      CREATE TABLE disbursement_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        specialFeeItemId INTEGER NOT NULL,
+        classId INTEGER NOT NULL,
+        createdAt TEXT,
+        FOREIGN KEY (specialFeeItemId) REFERENCES special_fee_items(id) ON DELETE CASCADE,
+        FOREIGN KEY (classId) REFERENCES classes(id) ON DELETE CASCADE,
+        UNIQUE(specialFeeItemId, classId)
       )
     ''');
 
@@ -2847,6 +2886,40 @@ class DatabaseHelper {
         )
       ''');
       print('✅ v61: Full Time/Per-Time staff category + staff_period_records table added');
+    }
+
+    if (oldVersion < 62) {
+      await _safeExec(db, '''
+        CREATE TABLE IF NOT EXISTS special_item_disbursements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          studentId INTEGER NOT NULL,
+          specialFeeItemId INTEGER NOT NULL,
+          term TEXT NOT NULL,
+          session TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'not_given',
+          markedBy TEXT,
+          markedAt TEXT,
+          FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE,
+          FOREIGN KEY (specialFeeItemId) REFERENCES special_fee_items(id) ON DELETE CASCADE,
+          UNIQUE(studentId, specialFeeItemId, term, session)
+        )
+      ''');
+      print('✅ v62: special_item_disbursements table added');
+    }
+
+    if (oldVersion < 63) {
+      await _safeExec(db, '''
+        CREATE TABLE IF NOT EXISTS disbursement_settings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          specialFeeItemId INTEGER NOT NULL,
+          classId INTEGER NOT NULL,
+          createdAt TEXT,
+          FOREIGN KEY (specialFeeItemId) REFERENCES special_fee_items(id) ON DELETE CASCADE,
+          FOREIGN KEY (classId) REFERENCES classes(id) ON DELETE CASCADE,
+          UNIQUE(specialFeeItemId, classId)
+        )
+      ''');
+      print('✅ v63: disbursement_settings table added');
     }
 
     // ensure session/term exists

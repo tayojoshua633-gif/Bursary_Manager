@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import '../../utils/google_drive_backup_helper.dart';
 import '../../utils/db_backup_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SyncDsmScreen extends StatefulWidget {
   const SyncDsmScreen({super.key});
@@ -412,7 +413,13 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
   // ── Build ─────────────────────────────────────────────────────
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.backup,
+        currentId: 'sync_dsm',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Sync with DSM'),

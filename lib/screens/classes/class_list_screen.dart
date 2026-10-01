@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import 'package:bursary_manager/models/class_model.dart';
 import 'class_form_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 import 'class_arm_screen.dart'; // for managing arms
 
 class ClassListScreen extends StatefulWidget {
@@ -254,7 +255,14 @@ class _ClassListScreenState extends State<ClassListScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.schoolManagement,
+        currentId: 'classes',
+        enabled: widget.onClassSelected == null,
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Classes')),
       body: _loading

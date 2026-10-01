@@ -223,14 +223,6 @@ class MenuData {
               permissionModule: 'debtors_report',
               pageBuilder: (_) => const DebtorsListScreen(),
             ),
-            SidebarMenuItem(
-              id: 'student_management/class_bills',
-              title: 'Class Bills',
-              icon: Icons.receipt_long_outlined,
-              color: Colors.indigo,
-              permissionModule: 'bills_generate',
-              pageBuilder: (_) => const ClassBillsScreen(),
-            ),
           ],
         ),
 
@@ -284,6 +276,14 @@ class MenuData {
               color: Colors.purple,
               permissionModule: 'bills_generate',
               pageBuilder: (_) => const ViewTermBillsScreen(),
+            ),
+            SidebarMenuItem(
+              id: 'bills_payment/class_bills',
+              title: 'Class Bills',
+              icon: Icons.receipt_long_outlined,
+              color: Colors.indigo,
+              permissionModule: 'bills_generate',
+              pageBuilder: (_) => const ClassBillsScreen(),
             ),
             SidebarMenuItem(
               id: 'bills_payment/payments',

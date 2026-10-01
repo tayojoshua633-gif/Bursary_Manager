@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../../data/database_helper_wrapper.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class SalaryIncrementScreen extends StatefulWidget {
   const SalaryIncrementScreen({super.key});
@@ -102,7 +103,13 @@ class _SalaryIncrementScreenState extends State<SalaryIncrementScreen> with Sing
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.viewStaff,
+        currentId: 'salary_increment',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Salary Increment'),

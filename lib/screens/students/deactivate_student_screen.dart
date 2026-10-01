@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/student_quick_actions_panel.dart';
 
 class DeactivateStudentScreen extends StatefulWidget {
   const DeactivateStudentScreen({super.key});
@@ -176,7 +177,16 @@ class _DeactivateStudentScreenState extends State<DeactivateStudentScreen> {
         backgroundColor: Colors.red.shade700,
         foregroundColor: Colors.white,
       ),
-      body: Column(
+      endDrawer: StudentQuickAccess.buildEndDrawer(
+        context,
+        current: StudentQuickAction.deactivate,
+        onReturn: _loadAll,
+      ),
+      body: StudentQuickAccess.wrapBody(
+        context,
+        current: StudentQuickAction.deactivate,
+        onReturn: _loadAll,
+        body: Column(
         children: [
           // CLASS AND ARM FILTER DROPDOWNS
           Padding(
@@ -392,6 +402,7 @@ class _DeactivateStudentScreenState extends State<DeactivateStudentScreen> {
                     ),
             ),
         ],
+      ),
       ),
     );
   }

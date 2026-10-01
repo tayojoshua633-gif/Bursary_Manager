@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'custom_report_html_generator.dart';
 import 'native_html_pdf_helper.dart';
 import 'pdf_export_helper.dart';
+import 'report_data/report_pdf_dates.dart';
 
 // Shared row cap for every detail table in the report. Kept low (relative to
 // the old per-section caps of 100/100/100/50/50, and the old per-category —
@@ -283,10 +284,11 @@ class CustomReportPDFGenerator {
     // capping per-category only (as before) left the section effectively
     // unbounded when a report had many categories, which is a major
     // contributor to out-of-memory failures on large "Full Report" exports.
-    final isOverallTruncated = paymentDetails.length > kMaxReportDetailRows;
+    final sortedPayments = sortByDateAscending(paymentDetails, 'paymentDate');
+    final isOverallTruncated = sortedPayments.length > kMaxReportDetailRows;
     final cappedPayments = isOverallTruncated
-        ? paymentDetails.sublist(0, kMaxReportDetailRows)
-        : paymentDetails;
+        ? sortedPayments.sublist(0, kMaxReportDetailRows)
+        : sortedPayments;
 
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final p in cappedPayments) {
@@ -333,11 +335,11 @@ class CustomReportPDFGenerator {
           4: pw.Alignment.centerRight,
         },
         data: [
-          ['Student Name', 'Adm No', 'Class/Arm', 'Method', 'Amount (N)'],
+          ['Payment Date', 'Student Name', 'Class/Arm', 'Method', 'Amount (N)'],
           ...payments.map((p) {
             return [
+              formatReportDate(p['paymentDate']),
               p['studentName'],
-              p['admissionNo'],
               '${p['className']} - ${p['armName']}',
               p['method'],
               formatter.format(p['amount'] as num),
@@ -362,9 +364,10 @@ class CustomReportPDFGenerator {
     List<Map<String, dynamic>> expenseDetails,
     NumberFormat formatter,
   ) {
-    final limited = expenseDetails.length > kMaxReportDetailRows
-        ? expenseDetails.sublist(0, kMaxReportDetailRows)
-        : expenseDetails;
+    final sortedExpenses = sortByDateAscending(expenseDetails, 'expenseDate');
+    final limited = sortedExpenses.length > kMaxReportDetailRows
+        ? sortedExpenses.sublist(0, kMaxReportDetailRows)
+        : sortedExpenses;
     final isTruncated = expenseDetails.length > kMaxReportDetailRows;
 
     return pw.Column(
@@ -414,13 +417,15 @@ class CustomReportPDFGenerator {
             0: pw.Alignment.centerLeft,
             1: pw.Alignment.centerLeft,
             2: pw.Alignment.centerLeft,
-            3: pw.Alignment.center,
-            4: pw.Alignment.centerRight,
+            3: pw.Alignment.centerLeft,
+            4: pw.Alignment.center,
+            5: pw.Alignment.centerRight,
           },
           data: [
-            ['Description', 'Category', 'Recipient', 'Method', 'Amount (N)'],
+            ['Date', 'Description', 'Category', 'Recipient', 'Method', 'Amount (N)'],
             ...limited.map((e) {
               return [
+                formatReportDate(e['expenseDate']),
                 e['description'],
                 e['category'],
                 e['recipient'],
@@ -522,9 +527,10 @@ class CustomReportPDFGenerator {
     List<Map<String, dynamic>> salesDetails,
     NumberFormat formatter,
   ) {
-    final limited = salesDetails.length > kMaxReportDetailRows
-        ? salesDetails.sublist(0, kMaxReportDetailRows)
-        : salesDetails;
+    final sortedSales = sortByDateAscending(salesDetails, 'saleDate');
+    final limited = sortedSales.length > kMaxReportDetailRows
+        ? sortedSales.sublist(0, kMaxReportDetailRows)
+        : sortedSales;
     final isTruncated = salesDetails.length > kMaxReportDetailRows;
 
     return pw.Column(
@@ -550,13 +556,14 @@ class CustomReportPDFGenerator {
           cellAlignments: {
             0: pw.Alignment.centerLeft,
             1: pw.Alignment.centerLeft,
-            2: pw.Alignment.center,
+            2: pw.Alignment.centerLeft,
             3: pw.Alignment.center,
-            4: pw.Alignment.centerRight,
-            5: pw.Alignment.centerLeft,
+            4: pw.Alignment.center,
+            5: pw.Alignment.centerRight,
+            6: pw.Alignment.centerLeft,
           },
           data: [
-            ['S/N', 'Item(s) Sold', 'Qty', 'Payment Status', 'Amount Paid', 'Buyer Details'],
+            ['S/N', 'Date', 'Item(s) Sold', 'Qty', 'Payment Status', 'Amount Paid', 'Buyer Details'],
             ...limited.asMap().entries.map((entry) {
               final index = entry.key;
               final sale = entry.value;
@@ -582,6 +589,7 @@ class CustomReportPDFGenerator {
 
               return [
                 '${index + 1}',
+                formatSaleDate(sale),
                 itemsText,
                 '${sale['totalQtySold']}',
                 paymentStatus,

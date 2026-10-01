@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import 'package:bursary_manager/utils/active_session_term_notifier.dart';
 import 'package:sqflite/sqflite.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SessionTermManagementScreen extends StatefulWidget {
   const SessionTermManagementScreen({super.key});
@@ -443,7 +444,13 @@ class _SessionTermManagementScreenState
   // UI
   // ----------------------
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.schoolManagement,
+        currentId: 'session_term',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Session & Term Management"),

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/db_backup_helper.dart';
 import '../../utils/storage_permission_helper.dart';
 import 'selective_restore_dialog.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class OfflineBackupScreen extends StatefulWidget {
   const OfflineBackupScreen({super.key});
@@ -603,7 +604,13 @@ class _OfflineBackupScreenState extends State<OfflineBackupScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.backup,
+        currentId: 'offline',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Offline Backup'),

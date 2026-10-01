@@ -6,6 +6,7 @@ import '../../utils/payment_progression_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class PaymentProgressionScreen extends StatefulWidget {
   const PaymentProgressionScreen({super.key});
@@ -345,7 +346,13 @@ class _PaymentProgressionScreenState extends State<PaymentProgressionScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.feeTracker,
+        currentId: 'payment_progression',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Payment Progression'),

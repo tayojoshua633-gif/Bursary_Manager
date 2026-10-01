@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff_office.dart';
 import 'staff_office_form_screen.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffOfficesScreen extends StatefulWidget {
   const StaffOfficesScreen({super.key});
@@ -80,7 +81,13 @@ class _StaffOfficesScreenState extends State<StaffOfficesScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.staffSetup,
+        currentId: 'offices',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Staff Offices'),

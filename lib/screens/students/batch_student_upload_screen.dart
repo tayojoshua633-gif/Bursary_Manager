@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/batch_student_upload_helper.dart';
+import '../../widgets/student_quick_actions_panel.dart';
 
 class BatchStudentUploadScreen extends StatefulWidget {
   const BatchStudentUploadScreen({super.key});
@@ -49,7 +50,11 @@ class _BatchStudentUploadScreenState extends State<BatchStudentUploadScreen> {
           ),
         ],
       ),
-      body: _processing
+      endDrawer: StudentQuickAccess.buildEndDrawer(context, current: StudentQuickAction.batchUpload),
+      body: StudentQuickAccess.wrapBody(
+        context,
+        current: StudentQuickAction.batchUpload,
+        body: _processing
           ? const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -73,6 +78,7 @@ class _BatchStudentUploadScreenState extends State<BatchStudentUploadScreen> {
                 ],
               ),
             ),
+      ),
     );
   }
 

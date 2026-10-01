@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../utils/print_counter_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class DailyPrintCountScreen extends StatefulWidget {
   const DailyPrintCountScreen({super.key});
@@ -65,7 +66,13 @@ class _DailyPrintCountScreenState extends State<DailyPrintCountScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.reports,
+        currentId: 'print_count',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final totalPrints = _printStats['bills']! +
         _printStats['receipts']! +
         _printStats['paymentHistory']! +

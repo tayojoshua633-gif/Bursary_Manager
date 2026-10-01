@@ -6,8 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/student.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 // FIXED: Hide Border to avoid conflict with Flutter's Border
 import 'package:excel/excel.dart' hide Border;
 
@@ -17,6 +15,12 @@ import 'student_details_screen.dart';
 // 👇 ADD THIS IMPORT
 // ========================================
 import 'batch_student_upload_screen.dart';
+import 'new_students_screen.dart';
+import 'student_promotion_screen.dart';
+import 'deactivate_student_screen.dart';
+import 'inactive_students_screen.dart';
+import 'siblings_screen.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../utils/permission_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/navigation_helper.dart';
@@ -142,7 +146,10 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
       // Then apply search keyword
       if (keyword.isNotEmpty) {
-        final kw = keyword.toLowerCase();
+        // Split into words so names can be searched in any order/combination,
+        // e.g. "John Doe" or "Doe John" both match surname=Doe, firstName=John.
+        final words = keyword.toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
+
         filtered = filtered.where((student) {
           final surname = student.surname.toLowerCase();
           final firstName = student.firstName.toLowerCase();
@@ -151,12 +158,10 @@ class _StudentListScreenState extends State<StudentListScreen> {
           final className = (student.className ?? '').toLowerCase();
           final armName = (student.armName ?? '').toLowerCase();
 
-          return surname.contains(kw) ||
-                 firstName.contains(kw) ||
-                 otherName.contains(kw) ||
-                 admissionNo.contains(kw) ||
-                 className.contains(kw) ||
-                 armName.contains(kw);
+          final searchable = '$surname $firstName $otherName $admissionNo $className $armName';
+
+          // Every typed word must appear somewhere in the combined fields.
+          return words.every((w) => searchable.contains(w));
         }).toList();
       }
 
@@ -236,6 +241,147 @@ class _StudentListScreenState extends State<StudentListScreen> {
     }
   }
   // ========================================
+
+  // Quick-access sidebar: navigate to a related student-management screen
+  // and refresh the list on return (in case class/status changed).
+  Future<void> _openQuickAction(Widget page, String pageId) async {
+    await NavigationHelper.pushWithSidebar(
+      context,
+      page: page,
+      currentUser: _currentUser ?? {},
+      pageId: pageId,
+    );
+    if (!mounted) return;
+    _loadStudents();
+  }
+
+  Widget _quickActionButton({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    required DisplaySettings ds,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: ds.cardPadding * 0.5),
+      child: ElevatedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: ds.iconSize * 0.85),
+        label: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            label,
+            style: TextStyle(fontSize: ds.bodyFontSize, fontWeight: FontWeight.w600),
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          alignment: Alignment.centerLeft,
+          minimumSize: const Size.fromHeight(0),
+          padding: EdgeInsets.symmetric(horizontal: ds.cardPadding * 0.75, vertical: ds.cardPadding * 0.8),
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickActionsPanel(DisplaySettings ds) {
+    final buttons = <Widget>[];
+
+    if (_canManageStudents) {
+      buttons.add(_quickActionButton(
+        label: 'Register',
+        icon: Icons.person_add,
+        color: Colors.green,
+        ds: ds,
+        onTap: () {
+          NavigationHelper.pushWithSidebar(
+            context,
+            page: const StudentFormScreen(),
+            currentUser: _currentUser ?? {},
+            pageId: 'student_management/students',
+          ).then((value) {
+            if (value == true) _loadStudents();
+          });
+        },
+      ));
+
+      buttons.add(_quickActionButton(
+        label: 'Batch Upload',
+        icon: Icons.upload_file,
+        color: Colors.orange,
+        ds: ds,
+        onTap: _openBatchUpload,
+      ));
+    }
+
+    buttons.add(_quickActionButton(
+      label: 'View New Students',
+      icon: Icons.person_add_outlined,
+      color: Colors.teal,
+      ds: ds,
+      onTap: () => _openQuickAction(const NewStudentsScreen(), 'student_management/new_students'),
+    ));
+
+    if (_canManageStudents) {
+      buttons.add(_quickActionButton(
+        label: 'Promote Students',
+        icon: Icons.arrow_upward_outlined,
+        color: Colors.deepPurple,
+        ds: ds,
+        onTap: () => _openQuickAction(const StudentPromotionScreen(), 'student_management/promote'),
+      ));
+
+      buttons.add(_quickActionButton(
+        label: 'Deactivate Student',
+        icon: Icons.person_remove_outlined,
+        color: Colors.redAccent,
+        ds: ds,
+        onTap: () => _openQuickAction(const DeactivateStudentScreen(), 'student_management/deactivate'),
+      ));
+
+      buttons.add(_quickActionButton(
+        label: 'Inactive Students',
+        icon: Icons.archive_outlined,
+        color: Colors.blueGrey,
+        ds: ds,
+        onTap: () => _openQuickAction(const InactiveStudentsScreen(), 'student_management/inactive'),
+      ));
+    }
+
+    buttons.add(_quickActionButton(
+      label: 'Siblings',
+      icon: Icons.family_restroom_outlined,
+      color: Colors.cyan.shade700,
+      ds: ds,
+      onTap: () => _openQuickAction(const SiblingsScreen(), 'student_management/siblings'),
+    ));
+
+    return Padding(
+      padding: EdgeInsets.all(ds.cardPadding * 0.75),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(bottom: ds.cardPadding * 0.5, left: ds.cardPadding * 0.25),
+            child: Text(
+              'Quick Actions',
+              style: TextStyle(
+                fontSize: ds.subtitleFontSize,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade600,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+          ...buttons,
+        ],
+      ),
+    );
+  }
 
   // Show export dialog
   Future<void> _showExportDialog() async {
@@ -423,315 +569,173 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
   // Export to PDF
   Future<void> _exportToPDF(int classId) async {
-    try {
-      // Show loading
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
+    final classMap = _classes.firstWhere((c) => c['id'] == classId);
+    final className = classMap['name'];
 
-      // Find class name
-      final classMap = _classes.firstWhere((c) => c['id'] == classId);
-      final className = classMap['name'];
+    // Filter students for this class
+    final classStudents = _allStudents.where((s) => s.classId == classId).toList();
 
-      // Filter students for this class
-      final classStudents = _allStudents.where((s) => s.classId == classId).toList();
-
-      if (classStudents.isEmpty) {
-        if (!mounted) return;
-        Navigator.pop(context); // Close loading
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No students found in this class')),
-        );
-        return;
-      }
-
-      // Create PDF
-      final pdf = pw.Document();
-      pdf.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(40),
-          build: (pw.Context ctx) {
-            return [
-              // Title
-              pw.Text(
-                'Student List - $className',
-                style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                'Total Students: ${classStudents.length}',
-                style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
-              ),
-              pw.SizedBox(height: 20),
-
-              // Table
-              pw.TableHelper.fromTextArray(
-                headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
-                cellStyle: const pw.TextStyle(fontSize: 9),
-                headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
-                cellAlignments: {
-                  0: pw.Alignment.centerLeft,
-                  1: pw.Alignment.centerLeft,
-                  2: pw.Alignment.centerLeft,
-                  3: pw.Alignment.centerLeft,
-                },
-                data: [
-                  ['No.', 'Surname', 'First Name', 'Admission No'],
-                  ...classStudents.asMap().entries.map((entry) {
-                    final idx = entry.key + 1;
-                    final s = entry.value;
-                    return [
-                      idx.toString(),
-                      s.surname,
-                      s.firstName,
-                      s.admissionNo,
-                    ];
-                  }),
-                ],
-              ),
-
-              // Footer
-              pw.SizedBox(height: 30),
-              pw.Divider(),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                'Generated on: ${DateTime.now().toString().split('.')[0]}',
-                style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
-              ),
-            ];
-          },
-        ),
-      );
-
-      // Save
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/students_${className.replaceAll(' ', '_')}.pdf');
-      await file.writeAsBytes(await pdf.save());
-
-      if (!mounted) return;
-      Navigator.pop(context); // Close loading
-
-      // Share
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        subject: 'Student List - $className',
-        text: 'Active student list for $className (${classStudents.length} students)',
-      );
-
-      if (!mounted) return;
+    if (classStudents.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('PDF exported successfully!')),
+        const SnackBar(content: Text('No students found in this class')),
       );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // Close loading
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error exporting PDF: $e')),
-      );
+      return;
     }
+
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Student List - $className',
+      shareText: 'Active student list for $className (${classStudents.length} students)',
+      successMessage: 'PDF exported successfully!',
+      generate: ({required saveToDownloads}) async {
+        // Create PDF
+        final pdf = pw.Document();
+        pdf.addPage(
+          pw.MultiPage(
+            pageFormat: PdfPageFormat.a4,
+            margin: const pw.EdgeInsets.all(40),
+            build: (pw.Context ctx) {
+              return [
+                // Title
+                pw.Text(
+                  'Student List - $className',
+                  style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+                ),
+                pw.SizedBox(height: 10),
+                pw.Text(
+                  'Total Students: ${classStudents.length}',
+                  style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
+                ),
+                pw.SizedBox(height: 20),
+
+                // Table
+                pw.TableHelper.fromTextArray(
+                  headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+                  cellStyle: const pw.TextStyle(fontSize: 9),
+                  headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
+                  cellAlignments: {
+                    0: pw.Alignment.centerLeft,
+                    1: pw.Alignment.centerLeft,
+                    2: pw.Alignment.centerLeft,
+                    3: pw.Alignment.centerLeft,
+                  },
+                  data: [
+                    ['No.', 'Surname', 'First Name', 'Admission No'],
+                    ...classStudents.asMap().entries.map((entry) {
+                      final idx = entry.key + 1;
+                      final s = entry.value;
+                      return [
+                        idx.toString(),
+                        s.surname,
+                        s.firstName,
+                        s.admissionNo,
+                      ];
+                    }),
+                  ],
+                ),
+
+                // Footer
+                pw.SizedBox(height: 30),
+                pw.Divider(),
+                pw.SizedBox(height: 10),
+                pw.Text(
+                  'Generated on: ${DateTime.now().toString().split('.')[0]}',
+                  style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
+                ),
+              ];
+            },
+          ),
+        );
+
+        // Save
+        final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+        final file = File('${dir.path}/students_${className.replaceAll(' ', '_')}.pdf');
+        await file.writeAsBytes(await pdf.save());
+        return file.path;
+      },
+    );
   }
 
   // Export to Excel
   Future<void> _exportToExcel(int classId) async {
-    try {
-      // Show loading
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
+    final classMap = _classes.firstWhere((c) => c['id'] == classId);
+    final className = classMap['name'];
 
-      // Find class name
-      final classMap = _classes.firstWhere((c) => c['id'] == classId);
-      final className = classMap['name'];
+    // Filter students for this class
+    final classStudents = _allStudents.where((s) => s.classId == classId).toList();
 
-      // Filter students for this class
-      final classStudents = _allStudents.where((s) => s.classId == classId).toList();
-
-      if (classStudents.isEmpty) {
-        if (!mounted) return;
-        Navigator.pop(context); // Close loading
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No students found in this class')),
-        );
-        return;
-      }
-
-      // Create Excel
-      final excel = Excel.createExcel();
-      final sheet = excel['Students'];
-
-      // Headers with styling
-      final headers = ['No.', 'Surname', 'First Name', 'Other Name', 'Admission No', 'Arm'];
-      for (var i = 0; i < headers.length; i++) {
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
-          ..value = TextCellValue(headers[i])
-          ..cellStyle = CellStyle(
-            bold: true,
-            backgroundColorHex: ExcelColor.blue,
-            fontColorHex: ExcelColor.white,
-          );
-      }
-
-      // Data rows
-      for (var i = 0; i < classStudents.length; i++) {
-        final s = classStudents[i];
-        final row = i + 1;
-
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value =
-            TextCellValue((i + 1).toString());
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value =
-            TextCellValue(s.surname);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value =
-            TextCellValue(s.firstName);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value =
-            TextCellValue(s.otherName ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value =
-            TextCellValue(s.admissionNo);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value =
-            TextCellValue(s.armName ?? 'N/A');
-      }
-
-      // Save
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/students_${className.replaceAll(' ', '_')}.xlsx');
-      final bytes = excel.encode();
-      if (bytes != null) {
-        await file.writeAsBytes(bytes);
-
-        if (!mounted) return;
-        Navigator.pop(context); // Close loading
-
-        // Share
-        await Share.shareXFiles(
-          [XFile(file.path)],
-          subject: 'Student List - $className',
-          text: 'Active student list for $className (${classStudents.length} students)',
-        );
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Excel file exported successfully!')),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // Close loading
+    if (classStudents.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error exporting Excel: $e')),
+        const SnackBar(content: Text('No students found in this class')),
       );
+      return;
     }
+
+    await PdfExportHelper.exportPdf(
+      context,
+      fileLabel: 'Excel file',
+      shareSubject: 'Student List - $className',
+      shareText: 'Active student list for $className (${classStudents.length} students)',
+      successMessage: 'Excel file exported successfully!',
+      generate: ({required saveToDownloads}) async {
+        // Create Excel
+        final excel = Excel.createExcel();
+        final sheet = excel['Students'];
+
+        // Headers with styling
+        final headers = ['No.', 'Surname', 'First Name', 'Other Name', 'Admission No', 'Arm'];
+        for (var i = 0; i < headers.length; i++) {
+          sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
+            ..value = TextCellValue(headers[i])
+            ..cellStyle = CellStyle(
+              bold: true,
+              backgroundColorHex: ExcelColor.blue,
+              fontColorHex: ExcelColor.white,
+            );
+        }
+
+        // Data rows
+        for (var i = 0; i < classStudents.length; i++) {
+          final s = classStudents[i];
+          final row = i + 1;
+
+          sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: row)).value =
+              TextCellValue((i + 1).toString());
+          sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: row)).value =
+              TextCellValue(s.surname);
+          sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: row)).value =
+              TextCellValue(s.firstName);
+          sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: row)).value =
+              TextCellValue(s.otherName ?? '');
+          sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: row)).value =
+              TextCellValue(s.admissionNo);
+          sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: row)).value =
+              TextCellValue(s.armName ?? 'N/A');
+        }
+
+        final bytes = excel.encode();
+        if (bytes == null) throw Exception('Could not encode Excel file');
+
+        // Save
+        final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+        final file = File('${dir.path}/students_${className.replaceAll(' ', '_')}.xlsx');
+        await file.writeAsBytes(bytes);
+        return file.path;
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
+    final showSidePanel = MediaQuery.of(context).size.shortestSide >= 700;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Students"),
-        actions: [
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: ds.cardPadding * 0.5, vertical: ds.cardPadding * 0.5),
-            child: ElevatedButton.icon(
-              onPressed: _showExportDialog,
-              icon: Icon(Icons.file_download, size: ds.iconSize * 0.85),
-              label: Text(
-                'Export',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: ds.bodyFontSize),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.blue.shade700,
-                elevation: 2,
-                padding: EdgeInsets.symmetric(horizontal: ds.cardPadding, vertical: ds.cardPadding * 0.6),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadStudents,
-              child: Column(
+    final listBody = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : RefreshIndicator(
+            onRefresh: _loadStudents,
+            child: Column(
                 children: [
-                  // ========================================
-                  // 👇 UPDATED SECTION WITH BATCH UPLOAD (PERMISSION-PROTECTED)
-                  // ========================================
-                  // BUTTONS ROW - Only show for users with students_manage permission
-                  if (_canManageStudents)
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(ds.cardPadding * 0.75, ds.cardPadding * 0.75, ds.cardPadding * 0.75, ds.cardPadding * 0.5),
-                      child: Row(
-                        children: [
-                          // REGISTER NEW STUDENT BUTTON
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: () {
-                                NavigationHelper.pushWithSidebar(
-                                  context,
-                                  page: const StudentFormScreen(),
-                                  currentUser: _currentUser ?? {},
-                                  pageId: 'student_management/students',
-                                ).then((value) {
-                                  if (value == true) _loadStudents();
-                                });
-                              },
-                              icon: Icon(Icons.person_add, size: ds.iconSize * 0.85),
-                              label: Text(
-                                'Register',
-                                style: TextStyle(fontSize: ds.bodyFontSize, fontWeight: FontWeight.w600),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                padding: EdgeInsets.symmetric(vertical: ds.cardPadding * 0.9),
-                                backgroundColor: Colors.green,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          SizedBox(width: ds.cardPadding * 0.75),
-
-                          // BATCH UPLOAD BUTTON
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: _openBatchUpload,
-                              icon: Icon(Icons.upload_file, size: ds.iconSize * 0.85),
-                              label: Text(
-                                'Batch Upload',
-                                style: TextStyle(fontSize: ds.bodyFontSize, fontWeight: FontWeight.w600),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                padding: EdgeInsets.symmetric(vertical: ds.cardPadding * 0.9),
-                                backgroundColor: Colors.orange,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  // ========================================
-
                   // CLASS AND ARM FILTER DROPDOWNS
                   Padding(
                     padding: EdgeInsets.fromLTRB(ds.cardPadding * 0.75, ds.cardPadding * 0.25, ds.cardPadding * 0.75, ds.cardPadding * 0.5),
@@ -956,7 +960,63 @@ class _StudentListScreenState extends State<StudentListScreen> {
                   ),
                 ],
               ),
+          );
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Students"),
+        actions: [
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: ds.cardPadding * 0.5, vertical: ds.cardPadding * 0.5),
+            child: ElevatedButton.icon(
+              onPressed: _showExportDialog,
+              icon: Icon(Icons.file_download, size: ds.iconSize * 0.85),
+              label: Text(
+                'Export',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: ds.bodyFontSize),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.blue.shade700,
+                elevation: 2,
+                padding: EdgeInsets.symmetric(horizontal: ds.cardPadding, vertical: ds.cardPadding * 0.6),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
             ),
+          ),
+        ],
+      ),
+      // On narrow screens the quick-actions panel becomes a drawer
+      // (Flutter auto-adds the AppBar icon to open it).
+      endDrawer: showSidePanel
+          ? null
+          : Drawer(
+              child: SafeArea(
+                child: SingleChildScrollView(
+                  child: _buildQuickActionsPanel(ds),
+                ),
+              ),
+            ),
+      body: showSidePanel
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: listBody),
+                Container(
+                  width: 220,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    border: Border(left: BorderSide(color: Colors.grey.shade300)),
+                  ),
+                  child: SingleChildScrollView(
+                    child: _buildQuickActionsPanel(ds),
+                  ),
+                ),
+              ],
+            )
+          : listBody,
     );
   }
 }

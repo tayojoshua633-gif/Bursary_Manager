@@ -1,6 +1,7 @@
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter/material.dart';
 import '../../utils/usb_printer_manager.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class UsbPrinterScreen extends StatefulWidget {
   const UsbPrinterScreen({super.key});
@@ -122,7 +123,13 @@ class _UsbPrinterScreenState extends State<UsbPrinterScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'usb_printer',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('USB Printer'),

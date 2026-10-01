@@ -16,6 +16,7 @@ import '../../utils/print_counter_helper.dart';
 import '../../utils/usb_printer_manager.dart';
 import '../../utils/sms_service.dart';
 import '../settings/usb_printer_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ViewTermBillsScreen extends StatefulWidget {
   const ViewTermBillsScreen({super.key});
@@ -779,7 +780,13 @@ class _ViewTermBillsScreenState extends State<ViewTermBillsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.billsPayment,
+        currentId: 'view_term_bills',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final hasBillData = _feeItems.isNotEmpty;
     final bankAccounts = _getBankAccounts();
 

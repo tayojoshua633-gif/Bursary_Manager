@@ -2,8 +2,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/database_helper_wrapper.dart';
+import '../../models/student.dart';
+import '../../utils/navigation_helper.dart';
+import 'student_details_screen.dart';
 import '../../db/database_helper.dart' show StudentLimitExceededException;
 import '../../utils/backup_reminder_helper.dart';
 import '../../utils/display_settings_helper.dart';
@@ -11,6 +15,7 @@ import '../../utils/admission_settings_helper.dart';
 import '../../utils/write_guard.dart';
 import '../../utils/age_helper.dart';
 import '../../utils/nigeria_states_lgas.dart';
+import '../../widgets/student_quick_actions_panel.dart';
 
 class StudentFormScreen extends StatefulWidget {
   const StudentFormScreen({super.key});
@@ -544,7 +549,77 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     }
 
     if (!mounted) return;
-    Navigator.pop(context, true);
+    await _showRegistrationSuccess(studentId);
+  }
+
+  // ----------------------------------------------------------
+  // REGISTRATION SUCCESS DIALOG
+  // ----------------------------------------------------------
+  Future<void> _showRegistrationSuccess(int studentId) async {
+    final fullName = [
+      _surnameCtrl.text.trim(),
+      _firstNameCtrl.text.trim(),
+      _otherNameCtrl.text.trim(),
+    ].where((n) => n.isNotEmpty).join(' ');
+
+    final viewDetails = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.check_circle, color: Colors.green, size: 56),
+        title: const Text('Registration Successful'),
+        content: Text(
+          '$fullName has been registered successfully.\n'
+          'Admission No: ${_admCtrl.text.trim()}',
+          textAlign: TextAlign.center,
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Close'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.person),
+            label: const Text('Proceed to Student Details'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    if (viewDetails != true) {
+      Navigator.pop(context, true);
+      return;
+    }
+
+    Map<String, dynamic>? studentMap;
+    try {
+      studentMap = await _db.getStudentById(studentId);
+    } catch (e) {
+      debugPrint('Failed to load newly registered student: $e');
+    }
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    if (studentMap == null) {
+      Navigator.pop(context, true);
+      return;
+    }
+
+    // Replace the form with the details screen; `result: true` still tells
+    // the caller (e.g. the student list) to refresh.
+    NavigationHelper.pushReplacementWithSidebar(
+      context,
+      page: StudentDetailsScreen(student: Student.fromMap(studentMap)),
+      currentUser: {
+        'id': prefs.getInt('userId') ?? 0,
+        'userType': prefs.getString('userType') ?? 'bursar',
+        'username': prefs.getString('username') ?? 'User',
+      },
+      pageId: 'student_management/students',
+      result: true,
+    );
   }
 
   // ----------------------------------------------------------
@@ -704,7 +779,11 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text("New Student Registration")),
-      body: SingleChildScrollView(
+      endDrawer: StudentQuickAccess.buildEndDrawer(context, current: StudentQuickAction.register),
+      body: StudentQuickAccess.wrapBody(
+        context,
+        current: StudentQuickAction.register,
+        body: SingleChildScrollView(
         padding: EdgeInsets.all(ds.cardPadding),
         child: Form(
           key: _formKey,
@@ -1138,6 +1217,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
             ],
           ),
         ),
+      ),
       ),
     );
   }

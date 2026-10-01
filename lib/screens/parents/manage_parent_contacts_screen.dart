@@ -5,6 +5,7 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../models/parent.dart';
 import '../../utils/display_settings_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ManageParentContactsScreen extends StatefulWidget {
   const ManageParentContactsScreen({super.key});
@@ -618,7 +619,13 @@ class _ManageParentContactsScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.parents,
+        currentId: 'manage_contacts',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
 
     return Scaffold(

@@ -8,6 +8,7 @@ import '../../../models/staff_deduction.dart';
 import '../../../utils/staff_deduction_pdf_generator.dart';
 import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffDeductionScreen extends StatefulWidget {
   const StaffDeductionScreen({super.key});
@@ -434,7 +435,13 @@ class _StaffDeductionScreenState extends State<StaffDeductionScreen> with Single
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.viewStaff,
+        currentId: 'deduction',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Penalty/Deduction'),

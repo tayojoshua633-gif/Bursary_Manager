@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/navigation_helper.dart';
 import 'route_form_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class RouteListScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -113,7 +114,13 @@ class _RouteListScreenState extends State<RouteListScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.transportation,
+        currentId: 'routes',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Transport Routes')),
       body: _loading

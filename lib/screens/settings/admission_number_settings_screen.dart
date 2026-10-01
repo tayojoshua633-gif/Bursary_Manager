@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../../utils/admission_settings_helper.dart';
 import '../../utils/display_settings_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class AdmissionNumberSettingsScreen extends StatefulWidget {
   const AdmissionNumberSettingsScreen({super.key});
@@ -44,7 +45,13 @@ class _AdmissionNumberSettingsScreenState extends State<AdmissionNumberSettingsS
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'admission_number',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
 
     return Scaffold(

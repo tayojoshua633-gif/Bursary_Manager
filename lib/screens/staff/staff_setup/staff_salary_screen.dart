@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffSalaryScreen extends StatefulWidget {
   const StaffSalaryScreen({super.key});
@@ -115,7 +116,13 @@ class _StaffSalaryScreenState extends State<StaffSalaryScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.staffSetup,
+        currentId: 'salary',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Staff Salary'),

@@ -2,13 +2,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/report_data/daily_custom_report_loader.dart';
+import '../../utils/report_data/report_pdf_dates.dart';
 import '../../utils/display_settings_helper.dart';
+import '../../utils/pdf_export_helper.dart';
 import '../../utils/thermal_printer_manager.dart';
 import '../../utils/usb_printer_manager.dart';
 import '../../utils/print_counter_helper.dart';
@@ -16,6 +16,7 @@ import '../../utils/navigation_helper.dart';
 import '../../screens/settings/thermal_printer_screen.dart';
 import '../../screens/settings/usb_printer_screen.dart';
 import '../../screens/payments/payment_receipt_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class DailyReportScreen extends StatefulWidget {
   const DailyReportScreen({super.key});
@@ -311,7 +312,7 @@ class DailyReportScreenState extends State<DailyReportScreen>
   List<pw.Widget> _buildPaymentCategoriesPdf() {
     // Group payments by paymentFor, preserving insertion order
     final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final p in paymentDetails) {
+    for (final p in sortByDateAscending(paymentDetails, 'paymentDate')) {
       final cat = p['paymentFor']?.toString() ?? 'School Fees';
       (grouped[cat] ??= []).add(p);
     }
@@ -348,12 +349,12 @@ class DailyReportScreenState extends State<DailyReportScreen>
           4: pw.Alignment.centerRight,
         },
         data: [
-          ['Student Name', 'Adm No', 'Class/Arm', 'Method', 'Amount (N)'],
+          ['Payment Date', 'Student Name', 'Class/Arm', 'Method', 'Amount (N)'],
           ...payments.map((p) {
             final amount = p['amount'] as num;
             return [
+              formatReportDate(p['paymentDate']),
               p['studentName'],
-              p['admissionNo'],
               '${p['className']} - ${p['armName']}',
               p['method'],
               NumberFormat('#,##0.00').format(amount),
@@ -629,136 +630,294 @@ class DailyReportScreenState extends State<DailyReportScreen>
       return;
     }
 
-    try {
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(child: CircularProgressIndicator()),
-      );
+    final dateStr = DateFormat('yyyy-MM-dd').format(selectedDate);
 
-      final pdf = pw.Document();
+    // Build share message
+    String shareMessage = 'Daily Financial Report for $dateStr\n';
+    shareMessage += '${paymentDetails.length} payment transactions, N ${totalIncome.toStringAsFixed(2)} total income\n';
+    if (expenseDetails.isNotEmpty) {
+      shareMessage += '${expenseDetails.length} expense transactions, N ${totalExpenses.toStringAsFixed(2)} total expenses\n';
+    }
+    if (salesDetails.isNotEmpty || stockSummary.isNotEmpty) {
+      shareMessage += 'Includes Stock & Sales Report with ${stockSummary.length} items and ${salesDetails.length} sales';
+    }
 
-      pdf.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(40),
-          build: (pw.Context context) {
-            return [
-              // School Name
+    await PdfExportHelper.exportPdf(
+      context,
+      shareSubject: 'Daily Financial Report - $dateStr',
+      shareText: shareMessage,
+      successMessage: 'Daily report PDF exported successfully!',
+      generate: ({required saveToDownloads}) async {
+        final pdf = _buildDailyReportDocument();
+        final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
+        final file = File('${dir.path}/daily_report_$dateStr.pdf');
+        await file.writeAsBytes(await pdf.save());
+        return file.path;
+      },
+    );
+  }
+
+  pw.Document _buildDailyReportDocument() {
+    final pdf = pw.Document();
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(40),
+        build: (pw.Context context) {
+          return [
+            // School Name
+            pw.Center(
+              child: pw.Text(
+                _school?['name']?.toString().toUpperCase() ?? 'SCHOOL NAME',
+                style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold, color: PdfColors.indigo700),
+              ),
+            ),
+            pw.SizedBox(height: 5),
+            if (_school?['address'] != null)
               pw.Center(
                 child: pw.Text(
-                  _school?['name']?.toString().toUpperCase() ?? 'SCHOOL NAME',
-                  style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold, color: PdfColors.indigo700),
+                  _school!['address'].toString(),
+                  style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
                 ),
               ),
-              pw.SizedBox(height: 5),
-              if (_school?['address'] != null)
-                pw.Center(
-                  child: pw.Text(
-                    _school!['address'].toString(),
-                    style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+            pw.SizedBox(height: 15),
+
+            // Title
+            pw.Center(
+              child: pw.Text(
+                'DAILY FINANCIAL REPORT',
+                style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold),
+              ),
+            ),
+            pw.SizedBox(height: 10),
+            pw.Center(
+              child: pw.Text(
+                'Date: ${DateFormat('EEEE, MMMM d, yyyy').format(selectedDate)}',
+                style: const pw.TextStyle(fontSize: 14),
+              ),
+            ),
+            pw.Center(
+              child: pw.Text(
+                'Term: $activeTerm | Session: $activeSession',
+                style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
+              ),
+            ),
+            pw.SizedBox(height: 20),
+            pw.Divider(),
+            pw.SizedBox(height: 20),
+
+            // INCOME Section
+            pw.Text(
+              'INCOME',
+              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.green700),
+            ),
+            pw.SizedBox(height: 10),
+
+            // Income Summary Box (School Fees & Office Sales)
+            pw.Container(
+              padding: const pw.EdgeInsets.all(15),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.green400),
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text('INCOME SUMMARY (SCHOOL FEES & OFFICE SALES)', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
+                  pw.SizedBox(height: 10),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('Cash Received (School Fees):', style: const pw.TextStyle(fontSize: 12)),
+                      pw.Text('N ${NumberFormat('#,##0.00').format(cashTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                    ],
                   ),
-                ),
-              pw.SizedBox(height: 15),
+                  pw.SizedBox(height: 5),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('Cash Received (Office Sales):', style: const pw.TextStyle(fontSize: 12)),
+                      pw.Text('N ${NumberFormat('#,##0.00').format(salesCashTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                  pw.SizedBox(height: 10),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('POS Received (School Fees):', style: const pw.TextStyle(fontSize: 12)),
+                      pw.Text('N ${NumberFormat('#,##0.00').format(posTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                  pw.SizedBox(height: 5),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('POS Received (Office Sales):', style: const pw.TextStyle(fontSize: 12)),
+                      pw.Text('N ${NumberFormat('#,##0.00').format(salesPosTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                  pw.SizedBox(height: 10),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('Transfer Received (School Fees):', style: const pw.TextStyle(fontSize: 12)),
+                      pw.Text('N ${NumberFormat('#,##0.00').format(transferTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                  pw.SizedBox(height: 5),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('Transfer Received (Office Sales):', style: const pw.TextStyle(fontSize: 12)),
+                      pw.Text('N ${NumberFormat('#,##0.00').format(salesTransferTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                  pw.Divider(),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('TOTAL INCOME:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
+                      pw.Text('N ${NumberFormat('#,##0.00').format(totalIncome + totalSales)}',
+                          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14, color: PdfColors.green)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
 
-              // Title
-              pw.Center(
-                child: pw.Text(
-                  'DAILY FINANCIAL REPORT',
-                  style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold),
-                ),
-              ),
-              pw.SizedBox(height: 10),
-              pw.Center(
-                child: pw.Text(
-                  'Date: ${DateFormat('EEEE, MMMM d, yyyy').format(selectedDate)}',
-                  style: const pw.TextStyle(fontSize: 14),
-                ),
-              ),
-              pw.Center(
-                child: pw.Text(
-                  'Term: $activeTerm | Session: $activeSession',
-                  style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
-                ),
-              ),
-              pw.SizedBox(height: 20),
-              pw.Divider(),
-              pw.SizedBox(height: 20),
+            pw.SizedBox(height: 20),
 
-              // INCOME Section
+            // School Fees Payment Details — grouped by Payment For
+            pw.Text(
+              'SCHOOL FEES PAYMENT DETAILS (${paymentDetails.length} transactions)',
+              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 10),
+
+            // Build one table per category
+            ..._buildPaymentCategoriesPdf(),
+
+            pw.SizedBox(height: 30),
+
+            // SALES SUMMARY (Moved from Stock & Sales Report Section)
+            if (salesDetails.isNotEmpty) ...[
               pw.Text(
-                'INCOME',
-                style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.green700),
+                'SALES SUMMARY',
+                style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.teal700),
               ),
               pw.SizedBox(height: 10),
 
-              // Income Summary Box (School Fees & Office Sales)
+              pw.TableHelper.fromTextArray(
+                headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
+                cellStyle: const pw.TextStyle(fontSize: 8),
+                headerDecoration: const pw.BoxDecoration(color: PdfColors.teal200),
+                cellAlignments: {
+                  0: pw.Alignment.centerLeft,
+                  1: pw.Alignment.centerLeft,
+                  2: pw.Alignment.centerLeft,
+                  3: pw.Alignment.center,
+                  4: pw.Alignment.center,
+                  5: pw.Alignment.centerRight,
+                  6: pw.Alignment.centerLeft,
+                },
+                data: [
+                  ['S/N', 'Date', 'Item(s) Sold', 'Qty', 'Payment Status', 'Amount Paid', 'Buyer Details'],
+                  ...sortByDateAscending(salesDetails, 'saleDate').asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final sale = entry.value;
+                    final items = sale['items'] as List<Map<String, dynamic>>;
+                    final itemsText = items.map((item) {
+                      final isCustom = item['isCustomItem'] == true;
+                      return isCustom
+                          ? '${item['itemName']} [Custom] (x${item['quantity']})'
+                          : '${item['itemName']} (x${item['quantity']})';
+                    }).join(', ');
+                    final totalPaid = (sale['totalPaid'] as num).toDouble();
+                    final totalAmount = (sale['totalAmount'] as num).toDouble();
+                    final outstanding = totalAmount - totalPaid;
+
+                    String paymentStatus;
+                    if (outstanding <= 0) {
+                      paymentStatus = 'Paid';
+                    } else if (totalPaid > 0) {
+                      paymentStatus = 'Part Payment';
+                    } else {
+                      paymentStatus = 'Unpaid';
+                    }
+
+                    return [
+                      '${index + 1}',
+                      formatSaleDate(sale),
+                      itemsText,
+                      '${sale['totalQtySold']}',
+                      paymentStatus,
+                      'N ${NumberFormat('#,##0.00').format(totalPaid)}',
+                      '${sale['buyerName']} (${sale['buyerType']})',
+                    ];
+                  }),
+                ],
+              ),
+
+              pw.SizedBox(height: 30),
+            ],
+
+            // EXPENSES Section
+            if (expenseDetails.isNotEmpty) ...[
+              pw.Text(
+                'EXPENSES',
+                style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.orange800),
+              ),
+              pw.SizedBox(height: 10),
+
+              // Expenses Summary Box
               pw.Container(
                 padding: const pw.EdgeInsets.all(15),
                 decoration: pw.BoxDecoration(
-                  border: pw.Border.all(color: PdfColors.green400),
+                  border: pw.Border.all(color: PdfColors.orange400),
                   borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
                 ),
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    pw.Text('INCOME SUMMARY (SCHOOL FEES & OFFICE SALES)', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
+                    pw.Text('EXPENSES SUMMARY',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
                     pw.SizedBox(height: 10),
                     pw.Row(
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
-                        pw.Text('Cash Received (School Fees):', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('N ${NumberFormat('#,##0.00').format(cashTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                        pw.Text('Cash Paid:', style: const pw.TextStyle(fontSize: 12)),
+                        pw.Text('N ${NumberFormat('#,##0.00').format(expenseCashTotal)}',
+                            style: const pw.TextStyle(fontSize: 12)),
                       ],
                     ),
                     pw.SizedBox(height: 5),
                     pw.Row(
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
-                        pw.Text('Cash Received (Office Sales):', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('N ${NumberFormat('#,##0.00').format(salesCashTotal)}', style: const pw.TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                    pw.SizedBox(height: 10),
-                    pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                      children: [
-                        pw.Text('POS Received (School Fees):', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('N ${NumberFormat('#,##0.00').format(posTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                        pw.Text('POS Paid:', style: const pw.TextStyle(fontSize: 12)),
+                        pw.Text('N ${NumberFormat('#,##0.00').format(expensePosTotal)}',
+                            style: const pw.TextStyle(fontSize: 12)),
                       ],
                     ),
                     pw.SizedBox(height: 5),
                     pw.Row(
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
-                        pw.Text('POS Received (Office Sales):', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('N ${NumberFormat('#,##0.00').format(salesPosTotal)}', style: const pw.TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                    pw.SizedBox(height: 10),
-                    pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                      children: [
-                        pw.Text('Transfer Received (School Fees):', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('N ${NumberFormat('#,##0.00').format(transferTotal)}', style: const pw.TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                    pw.SizedBox(height: 5),
-                    pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                      children: [
-                        pw.Text('Transfer Received (Office Sales):', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('N ${NumberFormat('#,##0.00').format(salesTransferTotal)}', style: const pw.TextStyle(fontSize: 12)),
+                        pw.Text('Transfers Paid:', style: const pw.TextStyle(fontSize: 12)),
+                        pw.Text('N ${NumberFormat('#,##0.00').format(expenseTransferTotal)}',
+                            style: const pw.TextStyle(fontSize: 12)),
                       ],
                     ),
                     pw.Divider(),
                     pw.Row(
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
-                        pw.Text('TOTAL INCOME:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
-                        pw.Text('N ${NumberFormat('#,##0.00').format(totalIncome + totalSales)}',
-                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14, color: PdfColors.green)),
+                        pw.Text('TOTAL EXPENSES:',
+                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
+                        pw.Text('N ${NumberFormat('#,##0.00').format(totalExpenses)}',
+                            style: pw.TextStyle(
+                                fontWeight: pw.FontWeight.bold, fontSize: 14, color: PdfColors.red)),
                       ],
                     ),
                   ],
@@ -767,368 +926,206 @@ class DailyReportScreenState extends State<DailyReportScreen>
 
               pw.SizedBox(height: 20),
 
-              // School Fees Payment Details — grouped by Payment For
+              // Expenses Details
               pw.Text(
-                'SCHOOL FEES PAYMENT DETAILS (${paymentDetails.length} transactions)',
+                'EXPENSES DETAILS (${expenseDetails.length} transactions)',
                 style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
               ),
               pw.SizedBox(height: 10),
 
-              // Build one table per category
-              ..._buildPaymentCategoriesPdf(),
+              // Expenses Details Table
+              pw.TableHelper.fromTextArray(
+                headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+                cellStyle: const pw.TextStyle(fontSize: 9),
+                headerDecoration: const pw.BoxDecoration(color: PdfColors.orange100),
+                cellAlignments: {
+                  0: pw.Alignment.centerLeft,
+                  1: pw.Alignment.centerLeft,
+                  2: pw.Alignment.centerLeft,
+                  3: pw.Alignment.centerLeft,
+                  4: pw.Alignment.center,
+                  5: pw.Alignment.centerRight,
+                },
+                data: [
+                  ['Date', 'Description', 'Category', 'Recipient', 'Method', 'Amount (N)'],
+                  ...sortByDateAscending(expenseDetails, 'expenseDate').map((e) {
+                    final amount = e['amount'] as num;
+                    return [
+                      formatReportDate(e['expenseDate']),
+                      e['description'],
+                      e['category'],
+                      e['recipient'],
+                      e['method'],
+                      NumberFormat('#,##0.00').format(amount),
+                    ];
+                  }),
+                ],
+              ),
 
               pw.SizedBox(height: 30),
+            ],
 
-              // SALES SUMMARY (Moved from Stock & Sales Report Section)
-              if (salesDetails.isNotEmpty) ...[
+            // Net Income
+            pw.Container(
+              padding: const pw.EdgeInsets.all(15),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.blue400, width: 2),
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text('NET INCOME (Income - Expenses):',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)),
+                  pw.Text('N ${NumberFormat('#,##0.00').format((totalIncome + totalSales) - totalExpenses)}',
+                      style: pw.TextStyle(
+                          fontWeight: pw.FontWeight.bold,
+                          fontSize: 16,
+                          color: ((totalIncome + totalSales) - totalExpenses) >= 0 ? PdfColors.green : PdfColors.red)),
+                ],
+              ),
+            ),
+
+            pw.SizedBox(height: 40),
+
+            // STOCK & SALES REPORT SECTION
+            if (stockSummary.isNotEmpty || salesDetails.isNotEmpty || salesDebtors.isNotEmpty) ...[
+              pw.Divider(),
+              pw.SizedBox(height: 20),
+
+              // Section Title
+              pw.Text(
+                'STOCK & SALES REPORT',
+                style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.brown700),
+              ),
+              pw.SizedBox(height: 20),
+
+              // STOCK SUMMARY
+              if (stockSummary.isNotEmpty) ...[
                 pw.Text(
-                  'SALES SUMMARY',
-                  style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.teal700),
+                  'STOCK SUMMARY',
+                  style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.brown700),
+                ),
+                pw.SizedBox(height: 10),
+
+                pw.TableHelper.fromTextArray(
+                  headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+                  cellStyle: const pw.TextStyle(fontSize: 9),
+                  headerDecoration: const pw.BoxDecoration(color: PdfColors.brown200),
+                  cellAlignments: {
+                    0: pw.Alignment.centerLeft,
+                    1: pw.Alignment.centerLeft,
+                    2: pw.Alignment.center,
+                    3: pw.Alignment.center,
+                    4: pw.Alignment.center,
+                  },
+                  data: [
+                    ['S/N', 'Item Name', 'Total in Stock', 'Qty Sold', 'Qty Remain'],
+                    ...stockSummary.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final item = entry.value;
+                      return [
+                        '${index + 1}',
+                        item['itemName'],
+                        '${item['beginningQuantity']}',
+                        '${item['qtySold']}',
+                        '${item['remainingQuantity']}',
+                      ];
+                    }),
+                  ],
+                ),
+
+                pw.SizedBox(height: 20),
+              ],
+
+              // SALES DEBTORS
+              if (salesDebtors.isNotEmpty) ...[
+                pw.Text(
+                  'SALES DEBTORS',
+                  style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.red700),
                 ),
                 pw.SizedBox(height: 10),
 
                 pw.TableHelper.fromTextArray(
                   headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
                   cellStyle: const pw.TextStyle(fontSize: 8),
-                  headerDecoration: const pw.BoxDecoration(color: PdfColors.teal200),
-                  cellAlignments: {
-                    0: pw.Alignment.centerLeft,
-                    1: pw.Alignment.centerLeft,
-                    2: pw.Alignment.center,
-                    3: pw.Alignment.center,
-                    4: pw.Alignment.centerRight,
-                    5: pw.Alignment.centerLeft,
-                  },
-                  data: [
-                    ['S/N', 'Item(s) Sold', 'Qty', 'Payment Status', 'Amount Paid', 'Buyer Details'],
-                    ...salesDetails.asMap().entries.map((entry) {
-                      final index = entry.key;
-                      final sale = entry.value;
-                      final items = sale['items'] as List<Map<String, dynamic>>;
-                      final itemsText = items.map((item) {
-                        final isCustom = item['isCustomItem'] == true;
-                        return isCustom
-                            ? '${item['itemName']} [Custom] (x${item['quantity']})'
-                            : '${item['itemName']} (x${item['quantity']})';
-                      }).join(', ');
-                      final totalPaid = (sale['totalPaid'] as num).toDouble();
-                      final totalAmount = (sale['totalAmount'] as num).toDouble();
-                      final outstanding = totalAmount - totalPaid;
-
-                      String paymentStatus;
-                      if (outstanding <= 0) {
-                        paymentStatus = 'Paid';
-                      } else if (totalPaid > 0) {
-                        paymentStatus = 'Part Payment';
-                      } else {
-                        paymentStatus = 'Unpaid';
-                      }
-
-                      return [
-                        '${index + 1}',
-                        itemsText,
-                        '${sale['totalQtySold']}',
-                        paymentStatus,
-                        'N ${NumberFormat('#,##0.00').format(totalPaid)}',
-                        '${sale['buyerName']} (${sale['buyerType']})',
-                      ];
-                    }),
-                  ],
-                ),
-
-                pw.SizedBox(height: 30),
-              ],
-
-              // EXPENSES Section
-              if (expenseDetails.isNotEmpty) ...[
-                pw.Text(
-                  'EXPENSES',
-                  style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.orange800),
-                ),
-                pw.SizedBox(height: 10),
-
-                // Expenses Summary Box
-                pw.Container(
-                  padding: const pw.EdgeInsets.all(15),
-                  decoration: pw.BoxDecoration(
-                    border: pw.Border.all(color: PdfColors.orange400),
-                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-                  ),
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text('EXPENSES SUMMARY',
-                          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
-                      pw.SizedBox(height: 10),
-                      pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                        children: [
-                          pw.Text('Cash Paid:', style: const pw.TextStyle(fontSize: 12)),
-                          pw.Text('N ${NumberFormat('#,##0.00').format(expenseCashTotal)}',
-                              style: const pw.TextStyle(fontSize: 12)),
-                        ],
-                      ),
-                      pw.SizedBox(height: 5),
-                      pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                        children: [
-                          pw.Text('POS Paid:', style: const pw.TextStyle(fontSize: 12)),
-                          pw.Text('N ${NumberFormat('#,##0.00').format(expensePosTotal)}',
-                              style: const pw.TextStyle(fontSize: 12)),
-                        ],
-                      ),
-                      pw.SizedBox(height: 5),
-                      pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                        children: [
-                          pw.Text('Transfers Paid:', style: const pw.TextStyle(fontSize: 12)),
-                          pw.Text('N ${NumberFormat('#,##0.00').format(expenseTransferTotal)}',
-                              style: const pw.TextStyle(fontSize: 12)),
-                        ],
-                      ),
-                      pw.Divider(),
-                      pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                        children: [
-                          pw.Text('TOTAL EXPENSES:',
-                              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
-                          pw.Text('N ${NumberFormat('#,##0.00').format(totalExpenses)}',
-                              style: pw.TextStyle(
-                                  fontWeight: pw.FontWeight.bold, fontSize: 14, color: PdfColors.red)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-
-                pw.SizedBox(height: 20),
-
-                // Expenses Details
-                pw.Text(
-                  'EXPENSES DETAILS (${expenseDetails.length} transactions)',
-                  style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
-                ),
-                pw.SizedBox(height: 10),
-
-                // Expenses Details Table
-                pw.TableHelper.fromTextArray(
-                  headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
-                  cellStyle: const pw.TextStyle(fontSize: 9),
-                  headerDecoration: const pw.BoxDecoration(color: PdfColors.orange100),
+                  headerDecoration: const pw.BoxDecoration(color: PdfColors.red200),
                   cellAlignments: {
                     0: pw.Alignment.centerLeft,
                     1: pw.Alignment.centerLeft,
                     2: pw.Alignment.centerLeft,
-                    3: pw.Alignment.center,
+                    3: pw.Alignment.centerRight,
                     4: pw.Alignment.centerRight,
+                    5: pw.Alignment.centerRight,
                   },
                   data: [
-                    ['Description', 'Category', 'Recipient', 'Method', 'Amount (N)'],
-                    ...expenseDetails.map((e) {
-                      final amount = e['amount'] as num;
+                    ['S/N', 'Name of Debtor', 'Item(s) Purchased', 'Total Amount', 'Total Paid', 'Outstanding'],
+                    ...salesDebtors.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final debtor = entry.value;
                       return [
-                        e['description'],
-                        e['category'],
-                        e['recipient'],
-                        e['method'],
-                        NumberFormat('#,##0.00').format(amount),
+                        '${index + 1}',
+                        '${debtor['buyerName']} (${debtor['buyerType']})',
+                        debtor['itemsPurchased'],
+                        'N ${NumberFormat('#,##0.00').format(debtor['totalAmount'])}',
+                        'N ${NumberFormat('#,##0.00').format(debtor['totalPaid'])}',
+                        'N ${NumberFormat('#,##0.00').format(debtor['outstandingBalance'])}',
                       ];
                     }),
                   ],
                 ),
 
-                pw.SizedBox(height: 30),
-              ],
-
-              // Net Income
-              pw.Container(
-                padding: const pw.EdgeInsets.all(15),
-                decoration: pw.BoxDecoration(
-                  border: pw.Border.all(color: PdfColors.blue400, width: 2),
-                  borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-                ),
-                child: pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('NET INCOME (Income - Expenses):',
-                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)),
-                    pw.Text('N ${NumberFormat('#,##0.00').format((totalIncome + totalSales) - totalExpenses)}',
-                        style: pw.TextStyle(
-                            fontWeight: pw.FontWeight.bold,
-                            fontSize: 16,
-                            color: ((totalIncome + totalSales) - totalExpenses) >= 0 ? PdfColors.green : PdfColors.red)),
-                  ],
-                ),
-              ),
-
-              pw.SizedBox(height: 40),
-
-              // STOCK & SALES REPORT SECTION
-              if (stockSummary.isNotEmpty || salesDetails.isNotEmpty || salesDebtors.isNotEmpty) ...[
-                pw.Divider(),
-                pw.SizedBox(height: 20),
-
-                // Section Title
-                pw.Text(
-                  'STOCK & SALES REPORT',
-                  style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.brown700),
-                ),
-                pw.SizedBox(height: 20),
-
-                // STOCK SUMMARY
-                if (stockSummary.isNotEmpty) ...[
-                  pw.Text(
-                    'STOCK SUMMARY',
-                    style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.brown700),
+                pw.SizedBox(height: 15),
+                pw.Container(
+                  padding: const pw.EdgeInsets.all(10),
+                  decoration: pw.BoxDecoration(
+                    border: pw.Border.all(color: PdfColors.red400),
+                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
                   ),
-                  pw.SizedBox(height: 10),
-
-                  pw.TableHelper.fromTextArray(
-                    headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
-                    cellStyle: const pw.TextStyle(fontSize: 9),
-                    headerDecoration: const pw.BoxDecoration(color: PdfColors.brown200),
-                    cellAlignments: {
-                      0: pw.Alignment.centerLeft,
-                      1: pw.Alignment.centerLeft,
-                      2: pw.Alignment.center,
-                      3: pw.Alignment.center,
-                      4: pw.Alignment.center,
-                    },
-                    data: [
-                      ['S/N', 'Item Name', 'Total in Stock', 'Qty Sold', 'Qty Remain'],
-                      ...stockSummary.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final item = entry.value;
-                        return [
-                          '${index + 1}',
-                          item['itemName'],
-                          '${item['beginningQuantity']}',
-                          '${item['qtySold']}',
-                          '${item['remainingQuantity']}',
-                        ];
-                      }),
+                  child: pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('TOTAL SALES DEBT:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
+                      pw.Text('N ${NumberFormat('#,##0.00').format(totalSalesDebt)}',
+                          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14, color: PdfColors.red)),
                     ],
                   ),
+                ),
 
-                  pw.SizedBox(height: 20),
-                ],
-
-                // SALES DEBTORS
-                if (salesDebtors.isNotEmpty) ...[
-                  pw.Text(
-                    'SALES DEBTORS',
-                    style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.red700),
-                  ),
-                  pw.SizedBox(height: 10),
-
-                  pw.TableHelper.fromTextArray(
-                    headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
-                    cellStyle: const pw.TextStyle(fontSize: 8),
-                    headerDecoration: const pw.BoxDecoration(color: PdfColors.red200),
-                    cellAlignments: {
-                      0: pw.Alignment.centerLeft,
-                      1: pw.Alignment.centerLeft,
-                      2: pw.Alignment.centerLeft,
-                      3: pw.Alignment.centerRight,
-                      4: pw.Alignment.centerRight,
-                      5: pw.Alignment.centerRight,
-                    },
-                    data: [
-                      ['S/N', 'Name of Debtor', 'Item(s) Purchased', 'Total Amount', 'Total Paid', 'Outstanding'],
-                      ...salesDebtors.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final debtor = entry.value;
-                        return [
-                          '${index + 1}',
-                          '${debtor['buyerName']} (${debtor['buyerType']})',
-                          debtor['itemsPurchased'],
-                          'N ${NumberFormat('#,##0.00').format(debtor['totalAmount'])}',
-                          'N ${NumberFormat('#,##0.00').format(debtor['totalPaid'])}',
-                          'N ${NumberFormat('#,##0.00').format(debtor['outstandingBalance'])}',
-                        ];
-                      }),
-                    ],
-                  ),
-
-                  pw.SizedBox(height: 15),
-                  pw.Container(
-                    padding: const pw.EdgeInsets.all(10),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.red400),
-                      borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-                    ),
-                    child: pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                      children: [
-                        pw.Text('TOTAL SALES DEBT:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
-                        pw.Text('N ${NumberFormat('#,##0.00').format(totalSalesDebt)}',
-                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14, color: PdfColors.red)),
-                      ],
-                    ),
-                  ),
-
-                  pw.SizedBox(height: 20),
-                ],
+                pw.SizedBox(height: 20),
               ],
+            ],
 
-              // Bank Account Details
-              ..._buildBankDetailsPdf(),
+            // Bank Account Details
+            ..._buildBankDetailsPdf(),
 
-              // Footer
-              pw.SizedBox(height: 30),
-              pw.Divider(),
-              pw.SizedBox(height: 10),
-              pw.Text(
-                'Generated on: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
-                style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
-              ),
-            ];
-          },
-        ),
-      );
+            // Footer
+            pw.SizedBox(height: 30),
+            pw.Divider(),
+            pw.SizedBox(height: 10),
+            pw.Text(
+              'Generated on: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
+              style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
+            ),
+          ];
+        },
+      ),
+    );
 
-      final dir = await getApplicationDocumentsDirectory();
-      final dateStr = DateFormat('yyyy-MM-dd').format(selectedDate);
-      final file = File('${dir.path}/daily_report_$dateStr.pdf');
-      await file.writeAsBytes(await pdf.save());
-
-      if (!mounted) return;
-      Navigator.pop(context);
-
-      // Build share message
-      String shareMessage = 'Daily Financial Report for $dateStr\n';
-      shareMessage += '${paymentDetails.length} payment transactions, N ${totalIncome.toStringAsFixed(2)} total income\n';
-      if (expenseDetails.isNotEmpty) {
-        shareMessage += '${expenseDetails.length} expense transactions, N ${totalExpenses.toStringAsFixed(2)} total expenses\n';
-      }
-      if (salesDetails.isNotEmpty || stockSummary.isNotEmpty) {
-        shareMessage += 'Includes Stock & Sales Report with ${stockSummary.length} items and ${salesDetails.length} sales';
-      }
-
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        subject: 'Daily Financial Report - $dateStr',
-        text: shareMessage,
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Daily report PDF exported successfully!')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error exporting PDF: $e')),
-      );
-    }
+    return pdf;
   }
 
   // -----------------------------------------------------------
   // UI
   // -----------------------------------------------------------
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.reports,
+        currentId: 'daily',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
     return Scaffold(
       appBar: AppBar(

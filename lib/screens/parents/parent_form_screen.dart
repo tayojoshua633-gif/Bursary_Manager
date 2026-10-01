@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../models/parent.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ParentFormScreen extends StatefulWidget {
   final Parent? parent; // For editing existing parent
@@ -103,7 +104,14 @@ class _ParentFormScreenState extends State<ParentFormScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.parents,
+        currentId: 'add_parent',
+        enabled: widget.parent == null,
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final isEdit = widget.parent != null;
 
     return Scaffold(

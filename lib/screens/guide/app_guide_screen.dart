@@ -957,8 +957,6 @@ class AppGuideScreen extends StatelessWidget {
           _Feature(Icons.warning_amber, 'Debtors List',
               'Quick view of all students with outstanding balances in the active term. '
               'Filter by class or arm, and export the list.'),
-          _Feature(Icons.receipt_long_outlined, 'Class Bills',
-              'View all bills and payment statuses for every student in a selected class at once.'),
         ],
       ),
       _ModuleData(
@@ -991,6 +989,8 @@ class AppGuideScreen extends StatelessWidget {
           _Feature(Icons.receipt_outlined, 'Student Bills',
               'Generate a bill for a specific student. The bill auto-includes all fee items '
               'assigned to the student\'s class for the active term, plus any previous unpaid balance.'),
+          _Feature(Icons.receipt_long_outlined, 'Class Bills',
+              'View all bills and payment statuses for every student in a selected class at once.'),
           _Feature(Icons.payment_outlined, 'Payments',
               'Record payments against a student\'s bill. Supports Cash, POS, Bank Transfer, '
               'and other payment methods. Each payment generates a printable/shareable receipt. '

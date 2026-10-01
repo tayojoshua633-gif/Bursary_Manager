@@ -1,26 +1,16 @@
-// lib/screens/menus/bills_payment_menu.dart
+// lib/screens/new_intake/item_disbursement_menu.dart
 import 'package:flutter/material.dart';
 import '../../utils/permission_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../navigation/sidebar_scaffold.dart';
-import '../fees/fee_item_list_screen.dart';
-import '../billing/bill_student_select_screen.dart';
-import '../payments/payment_student_select_screen.dart';
-import '../reports/overpayment_tracker_screen.dart';
-import '../reports/debtors_list_screen.dart';
-import '../billing/last_term_debtors_screen.dart';
-import '../billing/view_term_bills_screen.dart';
-import '../billing/class_bills_screen.dart';
-import '../new_intake/new_intake_menu.dart';
-import '../new_intake/item_disbursement_menu.dart';
-import '../billing/debt_notification_hub_screen.dart';
-import '../billing/virtual_ledger_screen.dart';
-import 'fee_tracker_menu.dart';
+import 'disburse_settings_screen.dart';
+import 'disburse_items_screen.dart';
+import 'disburse_report_screen.dart';
 
-class BillsPaymentMenu extends StatelessWidget {
+class ItemDisbursementMenu extends StatelessWidget {
   final Map<String, dynamic> currentUser;
 
-  const BillsPaymentMenu({super.key, required this.currentUser});
+  const ItemDisbursementMenu({super.key, required this.currentUser});
 
   @override
   Widget build(BuildContext context) {
@@ -28,8 +18,8 @@ class BillsPaymentMenu extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Bills & Payment'),
-        backgroundColor: Colors.indigo,
+        title: const Text('Item Disbursement'),
+        backgroundColor: Colors.deepOrange,
         foregroundColor: Colors.white,
       ),
       body: GridView.extent(
@@ -41,133 +31,33 @@ class BillsPaymentMenu extends StatelessWidget {
         children: [
           _permissionMenuCard(
             context,
-            module: 'fee_items',
-            title: 'Fee Items',
-            subtitle: 'Define & assign fees',
-            icon: Icons.payments_outlined,
-            color: Colors.teal,
-            page: FeeItemListScreen(currentUser: currentUser),
-            pageId: 'bills_payment/fee_items',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'billing',
-            title: 'View Term Bills',
-            subtitle: 'Bill breakdown by class',
-            icon: Icons.receipt_long,
-            color: Colors.purple,
-            page: const ViewTermBillsScreen(),
-            pageId: 'bills_payment/view_term_bills',
+            module: 'fee_items_manage',
+            title: 'Disburse Settings',
+            subtitle: 'Choose items to track per class',
+            icon: Icons.rule_outlined,
+            color: Colors.deepPurple,
+            page: const DisburseSettingsScreen(),
+            pageId: 'bills_payment/item_disbursement/disburse_settings',
           ),
           _permissionMenuCard(
             context,
             module: 'fee_items_manage',
-            title: 'New Intake Bills',
-            subtitle: 'Special fees for new students',
-            icon: Icons.person_add_alt_1_outlined,
-            color: Colors.deepOrange,
-            page: NewIntakeMenu(currentUser: currentUser),
-            pageId: 'bills_payment/new_intake',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'bills_generate',
-            title: 'Class Bills',
-            subtitle: 'Student bill overview',
-            icon: Icons.receipt_long_outlined,
-            color: Colors.indigo,
-            page: const ClassBillsScreen(),
-            pageId: 'bills_payment/class_bills',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'fee_items_manage',
-            title: 'Item Disbursement',
-            subtitle: 'Track uniforms/textbooks received',
+            title: 'Disburse Items',
+            subtitle: 'Mark uniforms/textbooks received',
             icon: Icons.inventory_2_outlined,
             color: Colors.cyan,
-            page: ItemDisbursementMenu(currentUser: currentUser),
-            pageId: 'bills_payment/item_disbursement',
+            page: DisburseItemsScreen(currentUser: currentUser),
+            pageId: 'bills_payment/item_disbursement/disburse_items',
           ),
           _permissionMenuCard(
             context,
-            module: 'billing',
-            title: 'Student Bills',
-            subtitle: 'Generate bills',
-            icon: Icons.receipt_long_outlined,
-            color: Colors.indigo,
-            page: const BillStudentSelectScreen(),
-            pageId: 'bills_payment/student_bills',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'payments',
-            title: 'Payments',
-            subtitle: 'Record payments',
-            icon: Icons.attach_money_outlined,
-            color: Colors.lightGreen,
-            page: const PaymentStudentSelectScreen(),
-            pageId: 'bills_payment/payments',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'overpayment_tracker',
-            title: 'Overpayment Tracker',
-            subtitle: 'Track overpayments',
-            icon: Icons.account_balance_wallet_outlined,
-            color: Colors.amber,
-            page: const OverpaymentTrackerScreen(),
-            pageId: 'bills_payment/overpayment',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'debtors_report',
-            title: 'Debtors',
-            subtitle: 'Outstanding fees',
-            icon: Icons.warning_amber_outlined,
-            color: Colors.red,
-            page: const DebtorsListScreen(),
-            pageId: 'bills_payment/debtors',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'debtors_report',
-            title: 'Last Term Debtors',
-            subtitle: 'Previous balance status',
-            icon: Icons.history_edu_outlined,
-            color: Colors.deepOrange,
-            page: const LastTermDebtorsScreen(),
-            pageId: 'bills_payment/last_term_debtors',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'fee_tracker',
-            title: 'Fee Tracker',
-            subtitle: 'Track payment allocation & progression',
-            icon: Icons.track_changes_outlined,
-            color: Colors.blueGrey,
-            page: FeeTrackerMenu(currentUser: currentUser),
-            pageId: 'bills_payment/fee_tracker',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'debtors_report',
-            title: 'Debt Notification',
-            subtitle: 'Generate letters for debtors',
-            icon: Icons.mail_outline,
-            color: Colors.red,
-            page: const DebtNotificationHubScreen(),
-            pageId: 'bills_payment/debt_notification',
-          ),
-          _permissionMenuCard(
-            context,
-            module: 'debtors_report',
-            title: 'Virtual Ledger',
-            subtitle: 'Student ledger sheet by instalments',
-            icon: Icons.table_chart_outlined,
-            color: Colors.brown,
-            page: const VirtualLedgerScreen(),
-            pageId: 'bills_payment/virtual_ledger',
+            module: 'fee_items_manage',
+            title: 'Disburse Report',
+            subtitle: 'View students given their items',
+            icon: Icons.fact_check_outlined,
+            color: Colors.teal,
+            page: const DisburseReportScreen(),
+            pageId: 'bills_payment/item_disbursement/disburse_report',
           ),
         ],
       ),

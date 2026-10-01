@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/sales_report_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SalesReportScreen extends StatefulWidget {
   const SalesReportScreen({super.key});
@@ -326,7 +327,13 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.reports,
+        currentId: 'sales',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final formatter = NumberFormat('#,##0.00');
 
     return Scaffold(

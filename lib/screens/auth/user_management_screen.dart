@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../models/user.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class UserManagementScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -222,7 +223,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'user_management',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     // Only developer and super admin can access this
     final userType = widget.currentUser['userType'] as String;
     if (userType != 'developer' && userType != 'super_admin') {

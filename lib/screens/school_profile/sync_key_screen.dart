@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../utils/sync_key_client.dart';
 import '../../widgets/add_school_dialog.dart';
 import '../../widgets/auto_sync_settings_card.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SyncKeyScreen extends StatefulWidget {
   const SyncKeyScreen({super.key});
@@ -130,7 +131,13 @@ class _SyncKeyScreenState extends State<SyncKeyScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'sync_key',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Read-Only Access'),

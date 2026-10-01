@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SetBillPriorityScreen extends StatefulWidget {
   const SetBillPriorityScreen({super.key});
@@ -218,7 +219,13 @@ class _SetBillPriorityScreenState extends State<SetBillPriorityScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.feeTracker,
+        currentId: 'set_bill_priority',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Set Bill Priority'),

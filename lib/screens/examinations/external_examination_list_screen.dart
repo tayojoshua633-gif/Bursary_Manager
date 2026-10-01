@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../db/database_helper.dart';
 import '../../models/external_examination.dart';
 import '../../utils/display_settings_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ExternalExaminationListScreen extends StatefulWidget {
   const ExternalExaminationListScreen({super.key});
@@ -192,7 +193,13 @@ class _ExternalExaminationListScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.examinations,
+        currentId: 'types',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
 
     return Scaffold(

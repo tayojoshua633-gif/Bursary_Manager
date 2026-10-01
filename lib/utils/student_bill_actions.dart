@@ -262,7 +262,7 @@ class StudentBillActions {
             ),
             const SizedBox(height: 4),
             Text(
-              '$b.term - $b.session',
+              '${b.term} - ${b.session}',
               style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
             ),
             const SizedBox(height: 12),
@@ -414,7 +414,7 @@ class StudentBillActions {
               pw.SizedBox(height: 5),
               pw.Center(
                 child: pw.Text(
-                  '$b.term - $b.session',
+                  '${b.term} - ${b.session}',
                   style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey600),
                 ),
               ),
@@ -725,7 +725,7 @@ class StudentBillActions {
         bankAccounts: b.bankAccounts,
         studentName: studentName,
         studentClass: classDisplay,
-        term: '$b.term $b.session',
+        term: '${b.term} ${b.session}',
         feeItems: feeItems,
         total: b.grandTotal,
         totalPaid: b.totalPaid,
@@ -815,7 +815,7 @@ class StudentBillActions {
         bankAccounts: b.bankAccounts,
         studentName: studentName,
         studentClass: classDisplay,
-        term: '$b.term $b.session',
+        term: '${b.term} ${b.session}',
         feeItems: feeItems,
         total: b.grandTotal,
         totalPaid: b.totalPaid,

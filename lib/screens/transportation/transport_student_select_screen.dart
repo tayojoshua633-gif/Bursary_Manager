@@ -6,6 +6,7 @@ import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import 'route_allocate_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class TransportStudentSelectScreen extends StatefulWidget {
   const TransportStudentSelectScreen({super.key});
@@ -166,7 +167,13 @@ class _TransportStudentSelectScreenState extends State<TransportStudentSelectScr
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.transportation,
+        currentId: 'allocate',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
     return Scaffold(
       appBar: AppBar(

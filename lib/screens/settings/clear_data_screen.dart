@@ -7,6 +7,7 @@ import '../../utils/permission_helper.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as path;
 import '../auth/welcome_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ClearDataScreen extends StatefulWidget {
   const ClearDataScreen({super.key});
@@ -1129,7 +1130,13 @@ class _ClearDataScreenState extends State<ClearDataScreen> {
   // -------------------------------------------------------------------
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'data_management',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     if (!_hasPermission && !_loading) {
       return Scaffold(
         appBar: AppBar(

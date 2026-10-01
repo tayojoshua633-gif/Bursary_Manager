@@ -9,6 +9,7 @@ import '../../../utils/salary_payment_pdf_generator.dart';
 import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
 import '../../expenses/expense_form_screen.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class SalaryPaymentRecordScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -441,7 +442,13 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.viewStaff,
+        currentId: 'payment_record',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final paidRecords = _paymentRecords.where((r) => r['isPaid'] == true).toList();
     final unpaidRecords = _paymentRecords.where((r) => r['isPaid'] == false).toList();
 

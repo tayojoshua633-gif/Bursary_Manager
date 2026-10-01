@@ -20,6 +20,7 @@ import 'student_details_screen.dart';
 import 'siblings_payment_screen.dart';
 import 'siblings_payment_history_screen.dart';
 import '../../utils/sms_service.dart';
+import '../../widgets/student_quick_access_bar.dart';
 
 class SiblingsInformationScreen extends StatefulWidget {
   final Map<String, dynamic> siblingGroup;
@@ -179,6 +180,8 @@ class _SiblingsInformationScreenState extends State<SiblingsInformationScreen> {
         : 'Family';
 
     final formatter = NumberFormat('#,##0.00');
+    final showQuickAccessBar = MediaQuery.of(context).size.shortestSide >= 700;
+    final anchorStudentId = students.isNotEmpty ? students.first['id'] as int? : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -268,7 +271,11 @@ class _SiblingsInformationScreenState extends State<SiblingsInformationScreen> {
                 ),
               ),
             ),
-      body: _loading
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _loadData,
@@ -601,6 +608,14 @@ class _SiblingsInformationScreenState extends State<SiblingsInformationScreen> {
                 ),
               ),
             ),
+          ),
+          if (showQuickAccessBar && anchorStudentId != null)
+            StudentQuickAccessBar(
+              studentId: anchorStudentId,
+              pageId: 'student_management/siblings',
+            ),
+        ],
+      ),
     );
   }
 

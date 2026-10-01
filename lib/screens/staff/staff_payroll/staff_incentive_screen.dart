@@ -8,6 +8,7 @@ import '../../../models/staff_incentive.dart';
 import '../../../utils/staff_incentive_pdf_generator.dart';
 import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffIncentiveScreen extends StatefulWidget {
   const StaffIncentiveScreen({super.key});
@@ -328,7 +329,13 @@ class _StaffIncentiveScreenState extends State<StaffIncentiveScreen> with Single
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.viewStaff,
+        currentId: 'incentive',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Staff Incentive/Grant'),

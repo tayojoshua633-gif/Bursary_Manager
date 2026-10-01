@@ -10,6 +10,7 @@ import '../../utils/navigation_helper.dart';
 import '../../utils/new_students_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/student_quick_actions_panel.dart';
 import 'student_details_screen.dart';
 
 class NewStudentsScreen extends StatefulWidget {
@@ -150,10 +151,9 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
           WHERE s.isActive = 1
             AND s.id IN ($placeholders)
           ORDER BY
-            CASE WHEN s.dateOfAdmission IS NOT NULL THEN 0 ELSE 1 END,
-            s.dateOfAdmission DESC,
-            s.surname,
-            s.firstName
+            CASE WHEN s.dateOfAdmission IS NOT NULL AND s.dateOfAdmission != '' THEN 0 ELSE 1 END,
+            s.dateOfAdmission ASC,
+            s.id ASC
         ''', newStudentIds);
       }
 
@@ -271,7 +271,16 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
           ),
         ],
       ),
-      body: _loading
+      endDrawer: StudentQuickAccess.buildEndDrawer(
+        context,
+        current: StudentQuickAction.newStudents,
+        onReturn: _loadNewStudents,
+      ),
+      body: StudentQuickAccess.wrapBody(
+        context,
+        current: StudentQuickAction.newStudents,
+        onReturn: _loadNewStudents,
+        body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
@@ -434,6 +443,7 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
                 ),
               ],
             ),
+      ),
     );
   }
 

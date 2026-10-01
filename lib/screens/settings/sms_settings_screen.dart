@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart' show openAppSettings;
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/sms_service.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SmsSettingsScreen extends StatefulWidget {
   const SmsSettingsScreen({super.key});
@@ -130,7 +131,13 @@ class _SmsSettingsScreenState extends State<SmsSettingsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.preferences,
+        currentId: 'sms_settings',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     if (_loading) {
       return Scaffold(
         appBar: AppBar(title: const Text('SMS Settings')),

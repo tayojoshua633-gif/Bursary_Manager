@@ -10,6 +10,7 @@ import '../../utils/pdf_export_helper.dart';
 import '../../utils/student_bill_actions.dart';
 import '../../widgets/sibling_mark.dart';
 import '../students/student_details_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ClassBillsScreen extends StatefulWidget {
   const ClassBillsScreen({super.key});
@@ -318,7 +319,13 @@ class _ClassBillsScreenState extends State<ClassBillsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.billsPayment,
+        currentId: 'class_bills',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Class Bills'),

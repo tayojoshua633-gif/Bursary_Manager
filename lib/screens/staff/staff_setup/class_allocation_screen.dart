@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class ClassAllocationScreen extends StatefulWidget {
   const ClassAllocationScreen({super.key});
@@ -84,7 +85,13 @@ class _ClassAllocationScreenState extends State<ClassAllocationScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.staffSetup,
+        currentId: 'class_allocation',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Class Allocation'),

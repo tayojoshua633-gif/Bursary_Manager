@@ -6,6 +6,7 @@ import '../../utils/backup_reminder_helper.dart';
 import '../../utils/google_drive_backup_helper.dart';
 import '../../utils/storage_permission_helper.dart';
 import 'selective_restore_dialog.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class OnlineBackupScreen extends StatefulWidget {
   const OnlineBackupScreen({super.key});
@@ -419,7 +420,13 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.backup,
+        currentId: 'online',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Online Backup'),

@@ -13,6 +13,7 @@ import '../../utils/navigation_helper.dart';
 import '../../screens/settings/thermal_printer_screen.dart';
 import '../../screens/settings/usb_printer_screen.dart';
 import '../../screens/payments/payment_receipt_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class CustomReportScreen extends StatefulWidget {
   const CustomReportScreen({super.key});
@@ -531,7 +532,13 @@ class CustomReportScreenState extends State<CustomReportScreen>
   // ListView.builder, so viewing a large report no longer holds thousands
   // of widgets in memory simultaneously.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.reports,
+        currentId: 'custom',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
     final filteredPayments = _filteredPayments;
     final paymentCategories = _paymentCategories;

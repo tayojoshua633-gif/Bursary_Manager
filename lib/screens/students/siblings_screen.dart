@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/navigation_helper.dart';
+import '../../widgets/student_quick_actions_panel.dart';
 import 'siblings_information_screen.dart';
 
 class SiblingsScreen extends StatefulWidget {
@@ -202,7 +203,16 @@ class _SiblingsScreenState extends State<SiblingsScreen> {
             ),
         ],
       ),
-      body: Column(
+      endDrawer: StudentQuickAccess.buildEndDrawer(
+        context,
+        current: StudentQuickAction.siblings,
+        onReturn: _loadSiblingGroups,
+      ),
+      body: StudentQuickAccess.wrapBody(
+        context,
+        current: StudentQuickAction.siblings,
+        onReturn: _loadSiblingGroups,
+        body: Column(
         children: [
           // Search bar
           Container(
@@ -336,6 +346,7 @@ class _SiblingsScreenState extends State<SiblingsScreen> {
                       ),
           ),
         ],
+      ),
       ),
     );
   }

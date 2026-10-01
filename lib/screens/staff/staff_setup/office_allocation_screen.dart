@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
 import '../../../models/staff_office.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class OfficeAllocationScreen extends StatefulWidget {
   const OfficeAllocationScreen({super.key});
@@ -66,7 +67,13 @@ class _OfficeAllocationScreenState extends State<OfficeAllocationScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.staffSetup,
+        currentId: 'office_allocation',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Office Allocation'),

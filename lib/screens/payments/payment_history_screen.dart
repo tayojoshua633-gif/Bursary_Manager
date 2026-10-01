@@ -25,6 +25,7 @@ import '../../screens/settings/usb_printer_screen.dart';
 import '../../screens/billing/debt_notification_screen.dart';
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import '../../utils/payment_date_time_formatter.dart';
+import '../../widgets/student_quick_access_bar.dart';
 
 class PaymentHistoryScreen extends StatefulWidget {
   final int studentId;
@@ -1566,6 +1567,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
+    final showQuickAccessBar = shouldShowStudentQuickAccessBar(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Payment History'),
@@ -1586,7 +1588,11 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
             ),
         ],
       ),
-      body: _loading
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: _loading
           ? const Center(child: CircularProgressIndicator())
           : _exporting
               ? const Center(
@@ -1609,6 +1615,10 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
                     ),
                   ),
                 ),
+          ),
+          if (showQuickAccessBar) StudentQuickAccessBar(studentId: widget.studentId),
+        ],
+      ),
     );
   }
 

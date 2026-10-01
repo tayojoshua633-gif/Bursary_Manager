@@ -10,6 +10,7 @@ import '../../utils/all_parents_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
 import 'parent_form_screen.dart';
 import 'parent_details_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class AllParentsScreen extends StatefulWidget {
   const AllParentsScreen({super.key});
@@ -321,7 +322,13 @@ class _AllParentsScreenState extends State<AllParentsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.parents,
+        currentId: 'all_parents',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('All Parents'),

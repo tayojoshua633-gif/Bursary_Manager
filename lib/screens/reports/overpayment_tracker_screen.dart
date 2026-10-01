@@ -7,6 +7,7 @@ import '../students/student_details_screen.dart';
 import '../../utils/navigation_helper.dart';
 import '../../utils/overpayment_tracker_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class OverpaymentTrackerScreen extends StatefulWidget {
   const OverpaymentTrackerScreen({super.key});
@@ -255,7 +256,13 @@ class _OverpaymentTrackerScreenState extends State<OverpaymentTrackerScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.billsPayment,
+        currentId: 'overpayment',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final formatter = NumberFormat('#,##0.00');
 
     return Scaffold(

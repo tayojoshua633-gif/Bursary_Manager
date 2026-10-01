@@ -8,6 +8,7 @@ import '../../../models/staff.dart';
 import '../../../utils/staff_payroll_pdf_generator.dart';
 import '../../../utils/staff_payslip_pdf_generator.dart';
 import '../../../utils/pdf_export_helper.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffPayrollScreen extends StatefulWidget {
   const StaffPayrollScreen({super.key});
@@ -959,7 +960,13 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.viewStaff,
+        currentId: 'payroll',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     // Calculate totals
     double totalBasicSalary = 0;
     double totalIncentives = 0;

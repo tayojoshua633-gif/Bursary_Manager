@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SchoolProfileScreen extends StatefulWidget {
   const SchoolProfileScreen({super.key});
@@ -124,7 +125,13 @@ class _SchoolProfileScreenState extends State<SchoolProfileScreen> {
   // UI
   // -------------------------------------------------------------------
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.schoolManagement,
+        currentId: 'profile',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final hasLogo = _logoPath != null && File(_logoPath!).existsSync();
 
     return Scaffold(

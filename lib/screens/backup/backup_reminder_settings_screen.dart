@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/backup_reminder_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class BackupReminderSettingsScreen extends StatefulWidget {
   const BackupReminderSettingsScreen({super.key});
@@ -81,7 +82,13 @@ class _BackupReminderSettingsScreenState extends State<BackupReminderSettingsScr
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.backup,
+        currentId: 'reminder',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Backup Reminder Settings'),

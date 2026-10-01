@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../navigation/sidebar_scaffold.dart';
 import 'special_fee_assignment_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class SpecialFeeItemsScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -855,7 +856,13 @@ class _SpecialFeeItemsScreenState extends State<SpecialFeeItemsScreen> {
   // UI
   // ----------------------------------------------------------
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.newIntake,
+        currentId: 'special_items',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Special Bills Items"),

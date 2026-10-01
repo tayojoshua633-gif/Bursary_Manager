@@ -11,6 +11,7 @@ import '../../utils/display_settings_helper.dart';
 import '../../utils/navigation_helper.dart';
 import '../../utils/write_guard.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/student_quick_access_bar.dart';
 
 class BillGenerateScreen extends StatefulWidget {
   final int studentId;
@@ -37,6 +38,11 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
   Map<String, dynamic>? _student;
   String _term = '';
   String _session = '';
+  String _activeTerm = '';
+  String _activeSession = '';
+
+  final List<String> _termOptions = const ["1st Term", "2nd Term", "3rd Term"];
+  List<Map<String, dynamic>> _sessionOptions = [];
 
   int? _billId;
   List<_FeeLine> _lines = [];
@@ -74,7 +80,7 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
     }
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool resetToActive = true}) async {
     if (!mounted) return;
     setState(() {
       _loading = true;
@@ -85,7 +91,7 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
       // Load student WITH class and arm names using JOIN
       final db = await _db.database;
       final studentRows = await db.rawQuery('''
-        SELECT 
+        SELECT
           s.*,
           c.name as className,
           a.name as armName
@@ -99,8 +105,20 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
         _student = studentRows.first;
       }
 
-      _term = await _db.getActiveTerm();
-      _session = (await _db.getActiveSession())?['sessionName'] ?? '';
+      _activeTerm = await _db.getActiveTerm();
+      _activeSession = (await _db.getActiveSession())?['sessionName'] ?? '';
+      _sessionOptions = await _db.getAllSessions();
+
+      if (resetToActive) {
+        _term = _activeTerm;
+        _session = _activeSession;
+      }
+
+      // Reset any state left over from a previously viewed term/session
+      _billId = null;
+      _lines = [];
+      _usingClassDefaults = false;
+      _zeroBillMode = false;
 
       _previousBalance = await _db.computeOutstandingBeforeTerm(
         widget.studentId,
@@ -158,6 +176,18 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
         _errorMessage = "Failed to load bill data: $e";
       });
     }
+  }
+
+  Future<void> _onTermChanged(String? value) async {
+    if (value == null || value == _term) return;
+    _term = value;
+    await _load(resetToActive: false);
+  }
+
+  Future<void> _onSessionChanged(String? value) async {
+    if (value == null || value == _session) return;
+    _session = value;
+    await _load(resetToActive: false);
   }
 
   bool _usingClassDefaults = false;
@@ -677,6 +707,7 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
   @override
   Widget build(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
+    final showQuickAccessBar = shouldShowStudentQuickAccessBar(context);
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -690,7 +721,11 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
       ),
-      body: _loading
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: _loading
           ? const Center(child: CircularProgressIndicator())
           : _errorMessage != null
               ? Center(
@@ -770,15 +805,66 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
                       ),
                       SizedBox(height: ds.cardPadding * 0.75),
 
-                      // Term and Session
+                      // Term and Session (editable — lets you view/edit bills
+                      // for a past period without changing the active term/session)
                       Row(
                         children: [
-                          Expanded(child: _infoCard("Term", _term, Icons.event, ds)),
+                          Expanded(
+                            child: _dropdownCard(
+                              title: "Session",
+                              icon: Icons.calendar_today,
+                              value: _sessionOptions.any((s) => s['sessionName'] == _session)
+                                  ? _session
+                                  : null,
+                              items: _sessionOptions
+                                  .map((s) => s['sessionName'].toString())
+                                  .toSet()
+                                  .toList(),
+                              onChanged: _onSessionChanged,
+                              ds: ds,
+                            ),
+                          ),
                           SizedBox(width: ds.cardPadding * 0.75),
-                          Expanded(child: _infoCard("Session", _session, Icons.calendar_today, ds)),
+                          Expanded(
+                            child: _dropdownCard(
+                              title: "Term",
+                              icon: Icons.event,
+                              value: _termOptions.contains(_term) ? _term : null,
+                              items: _termOptions,
+                              onChanged: _onTermChanged,
+                              ds: ds,
+                            ),
+                          ),
                         ],
                       ),
                       SizedBox(height: ds.cardPadding * 0.75),
+
+                      if (_term != _activeTerm || _session != _activeSession)
+                        Card(
+                          color: Colors.amber.shade50,
+                          child: Padding(
+                            padding: EdgeInsets.all(ds.cardPadding * 0.75),
+                            child: Row(
+                              children: [
+                                Icon(Icons.history, color: Colors.amber.shade900, size: ds.iconSize),
+                                SizedBox(width: ds.cardPadding * 0.5),
+                                Expanded(
+                                  child: Text(
+                                    "Viewing $_term, $_session — not the current active period. "
+                                    "The active term/session is unaffected.",
+                                    style: TextStyle(
+                                      fontSize: ds.subtitleFontSize,
+                                      color: Colors.amber.shade900,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                      if (_term != _activeTerm || _session != _activeSession)
+                        SizedBox(height: ds.cardPadding * 0.75),
 
                       // Class Default Fees Indicator
                       if (_usingClassDefaults)
@@ -1001,16 +1087,28 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
                     ],
                   ),
                 ),
+          ),
+          if (showQuickAccessBar) StudentQuickAccessBar(studentId: widget.studentId),
+        ],
+      ),
     );
   }
 
-  Widget _infoCard(String title, String value, IconData icon, DisplaySettings ds) {
+  Widget _dropdownCard({
+    required String title,
+    required IconData icon,
+    required String? value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+    required DisplaySettings ds,
+  }) {
     return Card(
       elevation: 2,
       child: Padding(
-        padding: EdgeInsets.all(ds.cardPadding * 0.75),
+        padding: EdgeInsets.symmetric(horizontal: ds.cardPadding * 0.75, vertical: ds.cardPadding * 0.25),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
@@ -1025,12 +1123,21 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
                 ),
               ],
             ),
-            SizedBox(height: ds.cardPadding * 0.25),
-            Text(
-              value,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: ds.bodyFontSize,
+            DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: value,
+                isExpanded: true,
+                hint: Text("Select", style: TextStyle(fontSize: ds.bodyFontSize)),
+                items: items
+                    .map((v) => DropdownMenuItem(
+                          value: v,
+                          child: Text(
+                            v,
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: ds.bodyFontSize),
+                          ),
+                        ))
+                    .toList(),
+                onChanged: onChanged,
               ),
             ),
           ],

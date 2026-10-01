@@ -9,6 +9,7 @@ import '../../utils/debt_notification_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
 import 'debt_notification_screen.dart';
 import 'debt_notification_setup_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class DebtNotificationHubScreen extends StatefulWidget {
   const DebtNotificationHubScreen({super.key});
@@ -565,7 +566,13 @@ class _DebtNotificationHubScreenState
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.billsPayment,
+        currentId: 'debt_notification',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     if (_loadingMeta) {
       return Scaffold(
         appBar: AppBar(

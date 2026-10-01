@@ -5,6 +5,7 @@ import '../../navigation/sidebar_scaffold.dart';
 import 'special_fee_items_screen.dart';
 import 'view_new_intake_bills_screen.dart';
 import 'all_classes_bills_screen.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class NewIntakeMenu extends StatelessWidget {
   final Map<String, dynamic> currentUser;
@@ -12,7 +13,13 @@ class NewIntakeMenu extends StatelessWidget {
   const NewIntakeMenu({super.key, required this.currentUser});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.billsPayment,
+        currentId: 'new_intake_bills',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final ds = DisplaySettingsProvider.of(context);
 
     return Scaffold(

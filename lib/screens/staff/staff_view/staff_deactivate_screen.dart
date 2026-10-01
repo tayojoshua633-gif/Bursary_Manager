@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
+import '../../../widgets/quick_access_sidebar.dart';
 
 class StaffDeactivateScreen extends StatefulWidget {
   const StaffDeactivateScreen({super.key});
@@ -327,7 +328,13 @@ class _StaffDeactivateScreenState extends State<StaffDeactivateScreen>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.viewStaff,
+        currentId: 'deactivate',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Deactivate / Reactivate Staff'),
