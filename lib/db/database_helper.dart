@@ -110,7 +110,8 @@ class DatabaseHelper {
   //      are trackable for physical disbursement (e.g. uniforms, textbooks
   //      vs. plain registration fees) per class, configured via the
   //      Disburse Settings screen and consumed by Disburse Items.
-  static const int _dbVersion = 63;
+  // v64: Added optional recommendation note column to students table.
+  static const int _dbVersion = 64;
   static const String _defaultDbName = 'bursary_manager.db';
   // Which file the singleton currently points at — mutable (not const) so a
   // Read-Only device can switch between multiple linked schools' cached
@@ -252,7 +253,8 @@ class DatabaseHelper {
         isActive INTEGER NOT NULL DEFAULT 1,
         leftDate TEXT,
         leftReason TEXT,
-        dateOfAdmission TEXT
+        dateOfAdmission TEXT,
+        recommendation TEXT
       )
     ''');
 
@@ -2920,6 +2922,11 @@ class DatabaseHelper {
         )
       ''');
       print('✅ v63: disbursement_settings table added');
+    }
+
+    if (oldVersion < 64) {
+      await _safeExec(db, "ALTER TABLE students ADD COLUMN recommendation TEXT");
+      print('✅ v64: recommendation column added to students table');
     }
 
     // ensure session/term exists

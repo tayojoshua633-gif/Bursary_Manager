@@ -48,6 +48,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   final _admCtrl = TextEditingController(); // Admission number
   final _parentSearchCtrl = TextEditingController();
   final _dateOfAdmissionCtrl = TextEditingController(); // Date of admission
+  final _recommendationCtrl = TextEditingController(); // Optional recommendation note
 
   String? _selectedGender;
   int? _selectedClass;
@@ -511,6 +512,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       'parentAddress': _parentAddressCtrl.text.trim(),
       'photoPath': null,
       'dateOfAdmission': _dateOfAdmissionCtrl.text.trim(),
+      'recommendation': _recommendationCtrl.text.trim().isEmpty ? null : _recommendationCtrl.text.trim(),
     };
 
     int studentId;
@@ -751,6 +753,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     _nationalityCtrl.dispose();
     _stateOfOriginCtrl.dispose();
     _lgaCtrl.dispose();
+    _recommendationCtrl.dispose();
     _parentNameCtrl.dispose();
     _parentPhoneCtrl.dispose();
     _parentPhone2Ctrl.dispose();
@@ -1200,6 +1203,54 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
                       SizedBox(height: ds.cardPadding),
                       _buildBillPreview(ds),
                     ],
+                  ],
+                ),
+              ),
+
+              SizedBox(height: ds.cardPadding * 1.5),
+
+              // ======================================================
+              // RECOMMENDATION SECTION (Optional)
+              // ======================================================
+              Container(
+                padding: EdgeInsets.all(ds.cardPadding * 0.75),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.amber.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.rate_review, color: Colors.amber.shade800, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          "Recommendation (Optional)",
+                          style: TextStyle(
+                            fontSize: ds.titleFontSize,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.amber.shade800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: ds.cardPadding),
+                    TextFormField(
+                      controller: _recommendationCtrl,
+                      minLines: 3,
+                      maxLines: 6,
+                      keyboardType: TextInputType.multiline,
+                      decoration: const InputDecoration(
+                        labelText: "Recommendation Note",
+                        hintText: "e.g. Recommended by..., referral notes, remarks",
+                        alignLabelWithHint: true,
+                        border: OutlineInputBorder(),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                    ),
                   ],
                 ),
               ),

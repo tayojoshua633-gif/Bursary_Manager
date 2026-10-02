@@ -375,6 +375,63 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
     }
   }
 
+  Future<void> _editRecommendation() async {
+    final ctrl = TextEditingController(text: current.recommendation ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Recommendation'),
+        content: SizedBox(
+          width: 480,
+          child: TextField(
+            controller: ctrl,
+            autofocus: true,
+            minLines: 4,
+            maxLines: 8,
+            keyboardType: TextInputType.multiline,
+            decoration: const InputDecoration(
+              hintText: 'Enter recommendation note (leave empty to remove)',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+
+    if (result == null || !mounted) return;
+
+    try {
+      await DatabaseHelperWrapper().updateStudent(
+        current.id!,
+        {'recommendation': result.isEmpty ? null : result},
+      );
+      if (!mounted) return;
+      setState(() => current.recommendation = result.isEmpty ? null : result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Recommendation saved')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save recommendation: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<void> _openGenerateBill() async {
     await NavigationHelper.pushWithSidebar(
       context,
@@ -440,6 +497,59 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
       billContext,
       duration: const Duration(milliseconds: 400),
       curve: Curves.easeInOut,
+    );
+  }
+
+  bool get _hasRecommendation =>
+      (current.recommendation ?? '').trim().isNotEmpty;
+
+  Widget _buildRecommendationCard(DisplaySettings ds) {
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
+        elevation: 2,
+        color: Colors.amber.shade50,
+        child: Padding(
+          padding: EdgeInsets.all(ds.cardPadding),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.rate_review, color: Colors.amber.shade800, size: ds.iconSize),
+                  SizedBox(width: ds.cardPadding * 0.5),
+                  Expanded(
+                    child: Text(
+                      'Recommendation',
+                      style: TextStyle(
+                        fontSize: ds.titleFontSize,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.amber.shade900,
+                      ),
+                    ),
+                  ),
+                  if (_canManageStudents)
+                    IconButton(
+                      icon: Icon(_hasRecommendation ? Icons.edit : Icons.add),
+                      tooltip: _hasRecommendation ? 'Edit Recommendation' : 'Add Recommendation',
+                      color: Colors.amber.shade900,
+                      onPressed: _editRecommendation,
+                    ),
+                ],
+              ),
+              const Divider(),
+              SelectableText(
+                _hasRecommendation ? current.recommendation! : 'No recommendation recorded.',
+                style: TextStyle(
+                  fontSize: ds.bodyFontSize,
+                  fontStyle: _hasRecommendation ? FontStyle.normal : FontStyle.italic,
+                  color: _hasRecommendation ? null : Colors.grey.shade600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -644,6 +754,12 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
             ),
 
             SizedBox(height: ds.cardPadding * 1.25),
+
+            // RECOMMENDATION CARD
+            if (_hasRecommendation || _canManageStudents) ...[
+              _buildRecommendationCard(ds),
+              SizedBox(height: ds.cardPadding * 1.25),
+            ],
 
             // TRANSPORTATION CARD
             if (_transportAllocation != null)

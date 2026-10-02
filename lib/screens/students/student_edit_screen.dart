@@ -43,6 +43,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
   late TextEditingController _lgaCtrl;
   late TextEditingController _admCtrl;
   late TextEditingController _dateOfAdmissionCtrl;
+  late TextEditingController _recommendationCtrl;
   final TextEditingController _parentSearchCtrl = TextEditingController();
 
   String? _gender;
@@ -97,6 +98,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
     _lgaCtrl = TextEditingController(text: widget.student.lga);
     _admCtrl = TextEditingController(text: widget.student.admissionNo);
     _dateOfAdmissionCtrl = TextEditingController(text: widget.student.dateOfAdmission ?? '');
+    _recommendationCtrl = TextEditingController(text: widget.student.recommendation ?? '');
     _nationalityCtrl.addListener(_onNationalityChanged);
 
     // Pre-select the state/LGA dropdowns if the stored values match the list.
@@ -375,6 +377,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
       'parentAddress': _parentAddressCtrl.text.trim(),
       'photoPath': _photoPath,
       'dateOfAdmission': _dateOfAdmissionCtrl.text.trim().isEmpty ? null : _dateOfAdmissionCtrl.text.trim(),
+      'recommendation': _recommendationCtrl.text.trim().isEmpty ? null : _recommendationCtrl.text.trim(),
     };
 
     await _db.updateStudent(widget.student.id!, data);
@@ -516,6 +519,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
     _lgaCtrl.dispose();
     _admCtrl.dispose();
     _dateOfAdmissionCtrl.dispose();
+    _recommendationCtrl.dispose();
     _parentSearchCtrl.dispose();
     super.dispose();
   }
@@ -933,6 +937,21 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
                       ),
                     ),
                   ],
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // RECOMMENDATION (Optional)
+              TextFormField(
+                controller: _recommendationCtrl,
+                minLines: 3,
+                maxLines: 6,
+                keyboardType: TextInputType.multiline,
+                decoration: const InputDecoration(
+                  labelText: "Recommendation (Optional)",
+                  alignLabelWithHint: true,
+                  border: OutlineInputBorder(),
                 ),
               ),
 

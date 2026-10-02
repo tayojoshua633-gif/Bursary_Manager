@@ -18,6 +18,7 @@ class Student {
   String? nationality;
   String? stateOfOrigin;
   String? lga;
+  String? recommendation; // Optional recommendation note
   int isActive;
   String? leftDate;
   String? leftReason;
@@ -46,6 +47,7 @@ class Student {
     this.nationality,
     this.stateOfOrigin,
     this.lga,
+    this.recommendation,
     this.isActive = 1,
     this.leftDate,
     this.leftReason,
@@ -75,6 +77,7 @@ class Student {
       nationality: map['nationality'],
       stateOfOrigin: map['stateOfOrigin'],
       lga: map['lga'],
+      recommendation: map['recommendation'],
       isActive: (map['isActive'] as int?) ?? 1,
       leftDate: map['leftDate'],
       leftReason: map['leftReason'],
@@ -107,6 +110,7 @@ class Student {
       'nationality': nationality,
       'stateOfOrigin': stateOfOrigin,
       'lga': lga,
+      'recommendation': recommendation,
       'isActive': isActive,
       'leftDate': leftDate,
       'leftReason': leftReason,
