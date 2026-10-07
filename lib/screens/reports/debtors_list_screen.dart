@@ -9,6 +9,7 @@ import '../../utils/debtors_excel_generator.dart';
 import '../../utils/sibling_helper.dart';
 import '../../utils/pdf_export_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/financial_summary_note.dart';
 import 'package:share_plus/share_plus.dart';
 
 class DebtorsListScreen extends StatefulWidget {
@@ -774,6 +775,8 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
               _summaryItem('Outstanding', totalOutstanding, Colors.red),
             ],
           ),
+          const SizedBox(height: 12),
+          FinancialSummaryNote.debtorsList,
         ],
       ),
     );

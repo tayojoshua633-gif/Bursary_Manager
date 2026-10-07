@@ -1278,44 +1278,17 @@ class LocalDataSource implements DataRepository {
   Future<double> getTotalBillsForTermSession({
     required String term,
     required String session,
-  }) async {
-    final db = await _db.database;
-
-    final targetKey = DatabaseHelper.termSortKey(term, session);
-    final result = await db.rawQuery('''
-      SELECT COALESCE(SUM(
-        (COALESCE(b.totalAmount, 0) - COALESCE(b.previousBalance, 0))
-        + COALESCE((
-            SELECT SUM(COALESCE(b2.totalAmount, 0) - COALESCE(b2.previousBalance, 0))
-            FROM student_bills b2
-            WHERE b2.studentId = s.id
-              AND (CAST(SUBSTR(b2.session, 1, 4) AS INTEGER) * 3 +
-                   CASE LOWER(TRIM(b2.term))
-                     WHEN '1st term' THEN 0 WHEN '1st' THEN 0 WHEN 'first term' THEN 0 WHEN 'first' THEN 0
-                     WHEN '2nd term' THEN 1 WHEN '2nd' THEN 1 WHEN 'second term' THEN 1 WHEN 'second' THEN 1
-                     WHEN '3rd term' THEN 2 WHEN '3rd' THEN 2 WHEN 'third term' THEN 2 WHEN 'third' THEN 2
-                     ELSE 1
-                   END) < ?
-          ), 0)
-        - COALESCE((
-            SELECT SUM(p2.amount)
-            FROM payments p2
-            WHERE p2.studentId = s.id
-              AND (CAST(SUBSTR(p2.session, 1, 4) AS INTEGER) * 3 +
-                   CASE LOWER(TRIM(p2.term))
-                     WHEN '1st term' THEN 0 WHEN '1st' THEN 0 WHEN 'first term' THEN 0 WHEN 'first' THEN 0
-                     WHEN '2nd term' THEN 1 WHEN '2nd' THEN 1 WHEN 'second term' THEN 1 WHEN 'second' THEN 1
-                     WHEN '3rd term' THEN 2 WHEN '3rd' THEN 2 WHEN 'third term' THEN 2 WHEN 'third' THEN 2
-                     ELSE 1
-                   END) < ?
-          ), 0)
-      ), 0) AS total
-      FROM student_bills b
-      INNER JOIN students s ON b.studentId = s.id
-      WHERE b.term = ? AND b.session = ? AND s.isActive = 1
-    ''', [targetKey, targetKey, term, session]);
-    return (result.first['total'] as num?)?.toDouble() ?? 0.0;
+  }) {
+    return _db.getTotalBillsForTermSession(term: term, session: session);
   }
+
+  @override
+  Future<double> getTotalOutstandingForTermSession(String term, String session) =>
+      _db.getTotalOutstandingForTermSession(term, session);
+
+  @override
+  Future<double> getTotalOverpaidForTermSession(String term, String session) =>
+      _db.getTotalOverpaidForTermSession(term, session);
 
   @override
   Future<double> getTotalPaymentsForTermSession({

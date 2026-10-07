@@ -45,6 +45,7 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
   String _activeTerm = "";
   String _activeSession = "";
   double _previousBalance = 0;
+  bool _hasCurrentTermBill = false;
   double _currentTermBill = 0;
   double _grandTotal = 0;
   double _totalPaid = 0;
@@ -183,6 +184,7 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
       _currentTermBill = 0;
       _grandTotal = _previousBalance;
       _billItems = [];
+      _hasCurrentTermBill = bill != null;
 
       if (bill != null) {
         final storedTotal = (bill['totalAmount'] as num?)?.toDouble() ?? 0.0;
@@ -882,6 +884,41 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
                         ),
                         const Divider(),
 
+                        // No bill yet this term — previous balance still counts
+                        if (!_hasCurrentTermBill && _activeTerm.isNotEmpty) ...[
+                          Container(
+                            padding: EdgeInsets.all(ds.cardPadding * 0.5),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.orange.shade300),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.info_outline, color: Colors.orange.shade800, size: ds.iconSize * 0.9),
+                                SizedBox(width: ds.cardPadding * 0.4),
+                                Expanded(
+                                  child: Text(
+                                    _previousBalance > 0
+                                        ? 'No bill generated yet for $_activeTerm, $_activeSession. '
+                                          'Previous balance is carried forward below.'
+                                        : 'No bill generated yet for $_activeTerm, $_activeSession.',
+                                    style: TextStyle(
+                                      fontSize: ds.bodyFontSize * 0.85,
+                                      color: Colors.orange.shade900,
+                                    ),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: _openGenerateBill,
+                                  child: const Text('Generate Bill'),
+                                ),
+                              ],
+                            ),
+                          ),
+                          SizedBox(height: ds.cardPadding * 0.5),
+                        ],
+
                         // BILL BREAKDOWN SECTION
                         if (_billItems.isNotEmpty) ...[
                           Row(
@@ -924,7 +961,9 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
                         _billRow('Current Term Bill', _currentTermBill, ds),
                         if (_previousBalance != 0)
                           _billRow(
-                            _previousBalance > 0 ? 'Previous Balance' : 'Previous Credit',
+                            _previousBalance > 0
+                                ? (_hasCurrentTermBill ? 'Previous Balance' : 'Previous Balance (no bill yet)')
+                                : 'Previous Credit',
                             _previousBalance.abs(),
                             ds,
                             color: _previousBalance > 0

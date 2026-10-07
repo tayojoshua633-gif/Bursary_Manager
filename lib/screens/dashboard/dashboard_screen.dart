@@ -21,6 +21,7 @@ import '../../utils/navigation_helper.dart';
 import '../../utils/backup_reminder_helper.dart';
 import '../../utils/db_backup_helper.dart';
 import '../../utils/display_settings_helper.dart';
+import '../../widgets/financial_summary_note.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -105,45 +106,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
         session: _currentSession,
       );
 
-      // Calculate outstanding for current term
-      _outstanding = _totalBills - _totalPayments;
+      // Sum of debtors' balances — overpayments are shown separately below
+      // rather than netted off (matches the Debtors List)
+      _outstanding = await _db.getTotalOutstandingForTermSession(
+        _currentTerm,
+        _currentSession,
+      );
 
       // Calculate total overpaid (students who paid more than their grand total)
-      final database = await _db.database;
-      final targetKey = DatabaseHelperWrapper.termSortKey(_currentTerm, _currentSession);
-      final b2Key = DatabaseHelperWrapper.sqlTermKeyExpr('b2');
-      final p2Key = DatabaseHelperWrapper.sqlTermKeyExpr('p2');
-      final overpaidQuery = await database.rawQuery('''
-        WITH student_totals AS (
-          SELECT
-            s.id,
-            (COALESCE(b.totalAmount, 0) - COALESCE(b.previousBalance, 0))
-            + (
-                COALESCE((SELECT SUM(b2.totalAmount - b2.previousBalance) FROM student_bills b2
-                          WHERE b2.studentId = s.id AND $b2Key < ?), 0)
-                -
-                COALESCE((SELECT SUM(p2.amount) FROM payments p2
-                          WHERE p2.studentId = s.id AND $p2Key < ?), 0)
-              ) as grandTotal,
-            COALESCE(
-              (SELECT SUM(amount) FROM payments
-               WHERE studentId = s.id AND term = ? AND session = ?), 0
-            ) as totalPaid
-          FROM students s
-          LEFT JOIN student_bills b ON s.id = b.studentId
-            AND b.term = ? AND b.session = ?
-          WHERE s.isActive = 1
-        )
-        SELECT COALESCE(SUM(CASE
-          WHEN (totalPaid - grandTotal) > 0 THEN (totalPaid - grandTotal)
-          ELSE 0
-        END), 0) as totalOverpaid
-        FROM student_totals
-      ''', [targetKey, targetKey, _currentTerm, _currentSession, _currentTerm, _currentSession]);
-
-      if (overpaidQuery.isNotEmpty) {
-        _totalOverpaid = (overpaidQuery.first['totalOverpaid'] as num?)?.toDouble() ?? 0.0;
-      }
+      _totalOverpaid = await _db.getTotalOverpaidForTermSession(
+        _currentTerm,
+        _currentSession,
+      );
     } catch (e, st) {
       debugPrint("Dashboard load error: $e\n$st");
     } finally {
@@ -640,31 +614,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
             // Explanation note
             SizedBox(height: ds.cardPadding),
-            Container(
-              padding: EdgeInsets.all(ds.cardPadding * 0.5),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.info_outline, size: ds.iconSize * 0.8, color: Colors.grey.shade600),
-                  SizedBox(width: ds.cardPadding * 0.5),
-                  Expanded(
-                    child: Text(
-                      "Fees Expected: Active students only\nPayments Received: All students (for reporting accuracy)",
-                      style: TextStyle(
-                        fontSize: ds.bodyFontSize * 0.8,
-                        color: Colors.grey.shade600,
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            FinancialSummaryNote.dashboard,
           ],
         ),
       ),

@@ -6035,6 +6035,108 @@ class DatabaseHelper {
   // ------------------------------------------------------------------
   // DEBTORS LIST - Get students with outstanding balances
   // ------------------------------------------------------------------
+  /// Total fees expected for a term: each active student's current-term fee
+  /// plus their fresh previous balance. Starts from students (not bills) so a
+  /// student whose bill for this term hasn't been generated yet still counts
+  /// their carried-over balance.
+  Future<double> getTotalBillsForTermSession({
+    required String term,
+    required String session,
+  }) async {
+    final db = await database;
+
+    final targetKey = termSortKey(term, session);
+    final result = await db.rawQuery('''
+      SELECT COALESCE(SUM(
+        (COALESCE(b.totalAmount, 0) - COALESCE(b.previousBalance, 0))
+        + COALESCE((SELECT SUM(b2.totalAmount - b2.previousBalance) FROM student_bills b2
+                    WHERE b2.studentId = s.id AND ${_sqlTermKey('b2')} < ?), 0)
+        - COALESCE((SELECT SUM(p2.amount) FROM payments p2
+                    WHERE p2.studentId = s.id AND ${_sqlTermKey('p2')} < ?), 0)
+      ), 0) AS total
+      FROM students s
+      LEFT JOIN student_bills b ON s.id = b.studentId
+        AND b.term = ? AND b.session = ?
+      WHERE s.isActive = 1
+    ''', [targetKey, targetKey, term, session]);
+
+    return (result.first['total'] as num?)?.toDouble() ?? 0.0;
+  }
+
+  /// Total still owed for a term: sum of each active student's positive
+  /// balance (current-term fee + fresh previous balance - term payments).
+  /// Overpayments are NOT netted off — they are reported separately by
+  /// [getTotalOverpaidForTermSession]. Matches the Debtors List total.
+  Future<double> getTotalOutstandingForTermSession(String term, String session) async {
+    final db = await database;
+
+    final targetKey = termSortKey(term, session);
+    final result = await db.rawQuery('''
+      WITH student_totals AS (
+        SELECT
+          s.id,
+          (COALESCE(b.totalAmount, 0) - COALESCE(b.previousBalance, 0))
+          + (
+              COALESCE((SELECT SUM(b2.totalAmount - b2.previousBalance) FROM student_bills b2
+                        WHERE b2.studentId = s.id AND ${_sqlTermKey('b2')} < ?), 0)
+              -
+              COALESCE((SELECT SUM(p2.amount) FROM payments p2
+                        WHERE p2.studentId = s.id AND ${_sqlTermKey('p2')} < ?), 0)
+            ) as grandTotal,
+          COALESCE(
+            (SELECT SUM(amount) FROM payments
+             WHERE studentId = s.id AND term = ? AND session = ?), 0
+          ) as totalPaid
+        FROM students s
+        LEFT JOIN student_bills b ON s.id = b.studentId
+          AND b.term = ? AND b.session = ?
+        WHERE s.isActive = 1
+      )
+      SELECT COALESCE(SUM(CASE
+        WHEN (grandTotal - totalPaid) > 0 THEN (grandTotal - totalPaid)
+        ELSE 0
+      END), 0) as totalOutstanding
+      FROM student_totals
+    ''', [targetKey, targetKey, term, session, term, session]);
+
+    return (result.first['totalOutstanding'] as num?)?.toDouble() ?? 0.0;
+  }
+
+  Future<double> getTotalOverpaidForTermSession(String term, String session) async {
+    final db = await database;
+
+    final targetKey = termSortKey(term, session);
+    final result = await db.rawQuery('''
+      WITH student_totals AS (
+        SELECT
+          s.id,
+          (COALESCE(b.totalAmount, 0) - COALESCE(b.previousBalance, 0))
+          + (
+              COALESCE((SELECT SUM(b2.totalAmount - b2.previousBalance) FROM student_bills b2
+                        WHERE b2.studentId = s.id AND ${_sqlTermKey('b2')} < ?), 0)
+              -
+              COALESCE((SELECT SUM(p2.amount) FROM payments p2
+                        WHERE p2.studentId = s.id AND ${_sqlTermKey('p2')} < ?), 0)
+            ) as grandTotal,
+          COALESCE(
+            (SELECT SUM(amount) FROM payments
+             WHERE studentId = s.id AND term = ? AND session = ?), 0
+          ) as totalPaid
+        FROM students s
+        LEFT JOIN student_bills b ON s.id = b.studentId
+          AND b.term = ? AND b.session = ?
+        WHERE s.isActive = 1
+      )
+      SELECT COALESCE(SUM(CASE
+        WHEN (totalPaid - grandTotal) > 0 THEN (totalPaid - grandTotal)
+        ELSE 0
+      END), 0) as totalOverpaid
+      FROM student_totals
+    ''', [targetKey, targetKey, term, session, term, session]);
+
+    return (result.first['totalOverpaid'] as num?)?.toDouble() ?? 0.0;
+  }
+
   Future<List<Map<String, dynamic>>> getDebtorsList({
     required int classId,
     required String term,

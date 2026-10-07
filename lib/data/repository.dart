@@ -476,6 +476,12 @@ abstract class DataRepository {
     required String session,
   });
 
+  /// Total still owed (sum of positive balances, overpayments not netted off)
+  Future<double> getTotalOutstandingForTermSession(String term, String session);
+
+  /// Total overpaid by students who paid more than their grand total
+  Future<double> getTotalOverpaidForTermSession(String term, String session);
+
   // ========================================
   // REPORTS
   // ========================================

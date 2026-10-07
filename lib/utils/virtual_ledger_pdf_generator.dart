@@ -41,11 +41,20 @@ class VirtualLedgerPDFGenerator {
 
     double totalBills = 0;
     double totalPaid = 0;
+    double totalOutstanding = 0;
+    double totalOverpaid = 0;
     int balancedCount = 0;
 
     for (var row in ledger) {
-      totalBills += (row['totalBill'] as num).toDouble();
-      totalPaid += (row['totalPaid'] as num).toDouble();
+      final bill = (row['totalBill'] as num).toDouble();
+      final paid = (row['totalPaid'] as num).toDouble();
+      totalBills += bill;
+      totalPaid += paid;
+      if (bill - paid > 0) {
+        totalOutstanding += bill - paid;
+      } else {
+        totalOverpaid += paid - bill;
+      }
       if (row['remark'] == 'Balanced') balancedCount++;
     }
 
@@ -56,7 +65,7 @@ class VirtualLedgerPDFGenerator {
         build: (context) => [
           _buildHeader(schoolProfile, className, term, session),
           pw.SizedBox(height: 16),
-          _buildSummary(totalBills, totalPaid, balancedCount, ledger.length),
+          _buildSummary(totalBills, totalPaid, totalOutstanding, totalOverpaid, balancedCount, ledger.length),
           pw.SizedBox(height: 16),
           _buildLedgerTable(ledger, maxInstalments),
           pw.SizedBox(height: 16),
@@ -130,6 +139,8 @@ class VirtualLedgerPDFGenerator {
   static pw.Widget _buildSummary(
     double totalBills,
     double totalPaid,
+    double totalOutstanding,
+    double totalOverpaid,
     int balancedCount,
     int studentCount,
   ) {
@@ -147,6 +158,9 @@ class VirtualLedgerPDFGenerator {
         children: [
           _buildSummaryItem('Total Bills', 'N${formatter.format(totalBills)}', PdfColors.blue800),
           _buildSummaryItem('Total Paid', 'N${formatter.format(totalPaid)}', PdfColors.green800),
+          _buildSummaryItem('Outstanding', 'N${formatter.format(totalOutstanding)}', PdfColors.red800),
+          if (totalOverpaid > 0.005)
+            _buildSummaryItem('Overpaid', 'N${formatter.format(totalOverpaid)}', PdfColors.purple800),
           _buildSummaryItem('Balanced', '$balancedCount / $studentCount', PdfColors.teal800),
         ],
       ),

@@ -14,11 +14,19 @@ class VirtualLedgerHtmlGenerator {
     final f = NumberFormat('#,##0.00');
     final dateFormat = DateFormat('dd/MM/yy');
 
-    double totalBills = 0, totalPaid = 0;
+    double totalBills = 0, totalPaid = 0, totalOutstanding = 0, totalOverpaid = 0;
     int balancedCount = 0;
     for (final row in ledger) {
-      totalBills += (row['totalBill'] as num).toDouble();
-      totalPaid += (row['totalPaid'] as num).toDouble();
+      final bill = (row['totalBill'] as num).toDouble();
+      final paid = (row['totalPaid'] as num).toDouble();
+      totalBills += bill;
+      totalPaid += paid;
+      // Debts and overpayments kept apart (not netted off)
+      if (bill - paid > 0) {
+        totalOutstanding += bill - paid;
+      } else {
+        totalOverpaid += paid - bill;
+      }
       if (row['remark'] == 'Balanced') balancedCount++;
     }
 
@@ -107,6 +115,8 @@ class VirtualLedgerHtmlGenerator {
   <div class="summary-box">
     <div class="summary-item"><div class="label">Total Bills</div><div class="value" style="color:#1565C0;">N${f.format(totalBills)}</div></div>
     <div class="summary-item"><div class="label">Total Paid</div><div class="value" style="color:#2E7D32;">N${f.format(totalPaid)}</div></div>
+    <div class="summary-item"><div class="label">Outstanding</div><div class="value" style="color:#C62828;">N${f.format(totalOutstanding)}</div></div>
+    ${totalOverpaid > 0.005 ? '<div class="summary-item"><div class="label">Overpaid</div><div class="value" style="color:#6A1B9A;">N${f.format(totalOverpaid)}</div></div>' : ''}
     <div class="summary-item"><div class="label">Balanced</div><div class="value" style="color:#00695C;">$balancedCount / ${ledger.length}</div></div>
   </div>
 

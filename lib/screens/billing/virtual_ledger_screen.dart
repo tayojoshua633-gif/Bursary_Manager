@@ -7,6 +7,7 @@ import '../../utils/display_settings_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../utils/virtual_ledger_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
+import '../../widgets/financial_summary_note.dart';
 import '../../widgets/sibling_mark.dart';
 
 class VirtualLedgerScreen extends StatefulWidget {
@@ -446,11 +447,21 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
   Widget _buildSummaryCard() {
     double totalBills = 0;
     double totalPaid = 0;
+    double totalOutstanding = 0;
+    double totalOverpaid = 0;
     int balancedCount = 0;
 
     for (final row in _ledger) {
       totalBills += (row['totalBill'] as num).toDouble();
       totalPaid += (row['totalPaid'] as num).toDouble();
+      // Debts and overpayments kept apart — one student's credit
+      // doesn't reduce another student's debt
+      final balance = (row['outstanding'] as num).toDouble();
+      if (balance > 0) {
+        totalOutstanding += balance;
+      } else {
+        totalOverpaid += -balance;
+      }
       if (row['remark'] == 'Balanced') balancedCount++;
     }
 
@@ -470,9 +481,14 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
             children: [
               _summaryItem('Total Bills', _amountFormat.format(totalBills), Colors.blue),
               _summaryItem('Total Paid', _amountFormat.format(totalPaid), Colors.green),
+              _summaryItem('Outstanding', _amountFormat.format(totalOutstanding), Colors.red),
+              if (totalOverpaid > 0.005)
+                _summaryItem('Overpaid', _amountFormat.format(totalOverpaid), Colors.purple),
               _summaryItem('Balanced', '$balancedCount / ${_ledger.length}', Colors.teal),
             ],
           ),
+          const SizedBox(height: 12),
+          FinancialSummaryNote.virtualLedger,
         ],
       ),
     );

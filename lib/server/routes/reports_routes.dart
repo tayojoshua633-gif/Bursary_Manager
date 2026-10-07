@@ -37,13 +37,7 @@ class ReportsRoutes {
         final term = request.url.queryParameters['term'] ?? '';
         final session = request.url.queryParameters['session'] ?? '';
 
-        final db = await _db.database;
-        final result = await db.rawQuery(
-          'SELECT COALESCE(SUM(totalAmount), 0) AS total FROM student_bills WHERE term = ? AND session = ?',
-          [term, session],
-        );
-
-        final total = (result.first['total'] as num?)?.toDouble() ?? 0.0;
+        final total = await _db.getTotalBillsForTermSession(term: term, session: session);
         return Response.ok(jsonEncode({'total': total}), headers: {'Content-Type': 'application/json'});
       } catch (e) {
         return Response.internalServerError(body: jsonEncode({'error': '$e'}), headers: {'Content-Type': 'application/json'});
@@ -63,6 +57,30 @@ class ReportsRoutes {
         );
 
         final total = (result.first['total'] as num?)?.toDouble() ?? 0.0;
+        return Response.ok(jsonEncode({'total': total}), headers: {'Content-Type': 'application/json'});
+      } catch (e) {
+        return Response.internalServerError(body: jsonEncode({'error': '$e'}), headers: {'Content-Type': 'application/json'});
+      }
+    });
+
+    // Total still owed by debtors (overpayments not netted off)
+    router.get('/total-outstanding', (Request request) async {
+      try {
+        final term = request.url.queryParameters['term'] ?? '';
+        final session = request.url.queryParameters['session'] ?? '';
+        final total = await _db.getTotalOutstandingForTermSession(term, session);
+        return Response.ok(jsonEncode({'total': total}), headers: {'Content-Type': 'application/json'});
+      } catch (e) {
+        return Response.internalServerError(body: jsonEncode({'error': '$e'}), headers: {'Content-Type': 'application/json'});
+      }
+    });
+
+    // Total overpaid by students who paid more than their grand total
+    router.get('/overpaid', (Request request) async {
+      try {
+        final term = request.url.queryParameters['term'] ?? '';
+        final session = request.url.queryParameters['session'] ?? '';
+        final total = await _db.getTotalOverpaidForTermSession(term, session);
         return Response.ok(jsonEncode({'total': total}), headers: {'Content-Type': 'application/json'});
       } catch (e) {
         return Response.internalServerError(body: jsonEncode({'error': '$e'}), headers: {'Content-Type': 'application/json'});

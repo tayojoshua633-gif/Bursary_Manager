@@ -899,6 +899,16 @@ class DatabaseHelperWrapper {
     return repo.getTotalPaymentsForTermSession(term: term, session: session);
   }
 
+  Future<double> getTotalOutstandingForTermSession(String term, String session) async {
+    final repo = await _repository;
+    return repo.getTotalOutstandingForTermSession(term, session);
+  }
+
+  Future<double> getTotalOverpaidForTermSession(String term, String session) async {
+    final repo = await _repository;
+    return repo.getTotalOverpaidForTermSession(term, session);
+  }
+
   // ========================================
   // REPORTS
   // ========================================

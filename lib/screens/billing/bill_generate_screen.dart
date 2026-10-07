@@ -192,44 +192,54 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
 
   bool _usingClassDefaults = false;
 
+  /// Fee lines assigned to the student's class for the selected term.
+  /// Arm-specific fees take priority; falls back to class-wide fees.
+  Future<List<_FeeLine>> _fetchClassFeeLines() async {
+    int? toInt(dynamic v) => v is int ? v : int.tryParse(v?.toString() ?? '');
+
+    final classId = toInt(_student?['classId']);
+    if (classId == null) return [];
+    final armId = toInt(_student?['armId']);
+
+    var classFees = <Map<String, dynamic>>[];
+    if (armId != null && armId > 0) {
+      classFees = await _db.getClassFees(classId, _term, _session, armId: armId);
+    }
+    if (classFees.isEmpty) {
+      classFees = await _db.getClassFees(classId, _term, _session);
+    }
+    if (classFees.isEmpty) return [];
+
+    // class_fees rows carry only feeItemId - look up the names
+    final feeNames = <int, String>{};
+    for (final it in await _db.getFeeItems()) {
+      final id = toInt(it['id']);
+      if (id != null) feeNames[id] = it['name']?.toString() ?? 'Fee';
+    }
+
+    return classFees
+        .map((cf) {
+          final feeItemId = toInt(cf['feeItemId']) ?? 0;
+          return _FeeLine(
+            feeItemId: feeItemId,
+            label: cf['feeItemName']?.toString() ?? feeNames[feeItemId] ?? "Fee",
+            amount: (cf['amount'] as num?)?.toDouble() ?? 0,
+            isDefault: true,
+          );
+        })
+        .where((line) => (line.amount ?? 0) > 0) // Only show fees with amount > 0
+        .toList();
+  }
+
   Future<void> _loadFreshFeeLines() async {
     _lines.clear();
     _usingClassDefaults = false;
 
-    int? classId;
-    final rawClass = _student?['classId'];
+    final classLines = await _fetchClassFeeLines();
 
-    if (rawClass is int) {
-      classId = rawClass;
-    } else if (rawClass != null) {
-      classId = int.tryParse(rawClass.toString());
-    }
-
-    List<Map<String, dynamic>> classFees = [];
-
-    if (classId != null) {
-      classFees = await _db.getClassFees(
-        classId,
-        _term,
-        _session,
-      );
-    }
-
-    if (classFees.isNotEmpty) {
+    if (classLines.isNotEmpty) {
       _usingClassDefaults = true;
-      _lines = classFees
-          .map(
-            (cf) => _FeeLine(
-              feeItemId: cf['feeItemId'] is int
-                  ? cf['feeItemId']
-                  : int.tryParse(cf['feeItemId'].toString()) ?? 0,
-              label: cf['feeItemName']?.toString() ?? "Fee",
-              amount: (cf['amount'] as num).toDouble(),
-              isDefault: true,
-            ),
-          )
-          .where((line) => (line.amount ?? 0) > 0) // Only show fees with amount > 0
-          .toList();
+      _lines = classLines;
     } else {
       final items = await _db.getFeeItems(term: _term, session: _session);
 
@@ -379,6 +389,93 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
         backgroundColor: Colors.indigo,
       ),
     );
+  }
+
+  /// One-click bill for a student who has no bill this term: class fees
+  /// for the active term plus any balance carried over from earlier terms.
+  Future<void> _generateClassBill() async {
+    final classLines = await _fetchClassFeeLines();
+    if (!mounted) return;
+
+    if (classLines.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "No fees have been assigned to ${_student?['className'] ?? 'this class'} "
+            "for $_term $_session. Assign class fees first.",
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Recompute in case payments were recorded since the screen loaded
+    _previousBalance = await _db.computeOutstandingBeforeTerm(
+      widget.studentId,
+      term: _term,
+      session: _session,
+    );
+    if (!mounted) return;
+
+    final f = NumberFormat("#,##0.00");
+    final subtotal = classLines.fold<double>(0, (sum, l) => sum + (l.amount ?? 0));
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.receipt_long, color: Colors.indigo),
+            SizedBox(width: 8),
+            Expanded(child: Text("Generate Class Bill")),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              "${widget.studentName} — $_term, $_session",
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Text("Class fees (${classLines.length} items): ₦${f.format(subtotal)}"),
+            Text(
+              "Previous balance: ₦${f.format(_previousBalance)}",
+              style: TextStyle(color: _previousBalance > 0 ? Colors.red : null),
+            ),
+            const Divider(),
+            Text(
+              "Grand total: ₦${f.format(subtotal + _previousBalance)}",
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.indigo,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text("Generate"),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    setState(() {
+      _lines = classLines;
+      _usingClassDefaults = true;
+      _zeroBillMode = false;
+    });
+    await _save();
   }
 
   Future<void> _save() async {
@@ -865,6 +962,62 @@ class _BillGenerateScreenState extends State<BillGenerateScreen> {
 
                       if (_term != _activeTerm || _session != _activeSession)
                         SizedBox(height: ds.cardPadding * 0.75),
+
+                      // No bill yet for this term — offer one-click class bill
+                      if (_billId == null) ...[
+                        Card(
+                          color: Colors.orange.shade50,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(color: Colors.orange.shade300),
+                          ),
+                          child: Padding(
+                            padding: EdgeInsets.all(ds.cardPadding * 0.75),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(Icons.warning_amber, color: Colors.orange.shade800, size: ds.iconSize),
+                                    SizedBox(width: ds.cardPadding * 0.5),
+                                    Expanded(
+                                      child: Text(
+                                        _previousBalance > 0
+                                            ? "No bill has been generated for this student for $_term, $_session. "
+                                              "A previous balance of ₦${NumberFormat("#,##0.00").format(_previousBalance)} "
+                                              "will be carried into the new bill."
+                                            : "No bill has been generated for this student for $_term, $_session.",
+                                        style: TextStyle(
+                                          fontSize: ds.subtitleFontSize,
+                                          color: Colors.orange.shade900,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: ds.cardPadding * 0.5),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _generateClassBill,
+                                    icon: Icon(Icons.flash_on, size: ds.iconSize),
+                                    label: Text(
+                                      "Generate Class Bill",
+                                      style: TextStyle(fontSize: ds.bodyFontSize, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.orange.shade800,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: ds.cardPadding * 0.75),
+                      ],
 
                       // Class Default Fees Indicator
                       if (_usingClassDefaults)

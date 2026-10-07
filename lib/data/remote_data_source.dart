@@ -1179,6 +1179,41 @@ class RemoteDataSource implements DataRepository {
     return (response['total'] as num?)?.toDouble() ?? 0.0;
   }
 
+  @override
+  Future<double> getTotalOverpaidForTermSession(String term, String session) async {
+    try {
+      final response = await _request(
+        'GET',
+        '/api/reports/overpaid?term=${Uri.encodeQueryComponent(term)}&session=${Uri.encodeQueryComponent(session)}',
+      );
+      return (response['total'] as num?)?.toDouble() ?? 0.0;
+    } catch (e) {
+      // Server not yet updated (no /overpaid route)
+      print('⚠️ /overpaid unavailable ($e)');
+      return 0.0;
+    }
+  }
+
+  @override
+  Future<double> getTotalOutstandingForTermSession(String term, String session) async {
+    try {
+      final response = await _request(
+        'GET',
+        '/api/reports/total-outstanding?term=${Uri.encodeQueryComponent(term)}&session=${Uri.encodeQueryComponent(session)}',
+      );
+      return (response['total'] as num?)?.toDouble() ?? 0.0;
+    } catch (e) {
+      // Server not yet updated (no /total-outstanding route): derive it from
+      // older routes. Net balance + overpayments = sum of positive balances.
+      print('⚠️ /total-outstanding unavailable ($e) — using fallback calculation');
+      final bills = await getTotalBillsForTermSession(term: term, session: session);
+      final paid = await getTotalPaymentsForTermSession(term: term, session: session);
+      final overpaid = await getTotalOverpaidForTermSession(term, session);
+      final outstanding = bills - paid + overpaid;
+      return outstanding > 0 ? outstanding : 0.0;
+    }
+  }
+
   // ========================================
   // REPORTS
   // ========================================
