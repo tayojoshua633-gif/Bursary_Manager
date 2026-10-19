@@ -7,6 +7,7 @@ import '../../utils/navigation_helper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import '../../widgets/student_quick_actions_panel.dart';
+import '../../widgets/term_session_filter.dart';
 import 'student_details_screen.dart';
 
 class InactiveStudentsScreen extends StatefulWidget {
@@ -25,6 +26,12 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
   bool loading = true;
   Set<String> _siblingPhones = {};
   Map<String, dynamic> _currentUser = {};
+
+  // Term filter — null means "All". Defaults to the active term/session.
+  List<String> _sessions = [];
+  String? _filterSession;
+  String? _filterTerm;
+  bool _termFilterInitialised = false;
 
   @override
   void initState() {
@@ -67,6 +74,12 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
 
   Future<void> _load() async {
     setState(() => loading = true);
+    if (!_termFilterInitialised) {
+      _filterTerm = await db.getActiveTerm();
+      _filterSession = (await db.getActiveSession())?['sessionName'] as String?;
+      _sessions = TermSessionFilter.sessionNames(await db.getAllSessions(), _filterSession);
+      _termFilterInitialised = true;
+    }
     _allStudents = await db.getInactiveStudents();
     _siblingPhones = computeSiblingPhones(await db.getActiveStudents());
     _applyFilter();
@@ -77,12 +90,16 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
     final keyword = _searchCtrl.text.trim().toLowerCase();
 
     setState(() {
+      final inTerm = _allStudents.where((s) =>
+          (_filterSession == null || s['leftSession'] == _filterSession) &&
+          (_filterTerm == null || s['leftTerm'] == _filterTerm));
+
       if (keyword.isEmpty) {
-        students = _allStudents;
+        students = inTerm.toList();
         return;
       }
 
-      students = _allStudents.where((s) {
+      students = inTerm.where((s) {
         final surname = (s['surname']?.toString() ?? '').toLowerCase();
         final firstName = (s['firstName']?.toString() ?? '').toLowerCase();
         final otherName = (s['otherName']?.toString() ?? '').toLowerCase();
@@ -98,6 +115,21 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
                armName.contains(keyword);
       }).toList();
     });
+  }
+
+  String _periodLabel() {
+    if (_filterSession == null && _filterTerm == null) return "all terms";
+    return [_filterTerm ?? "all terms", _filterSession ?? "all sessions"].join(" ");
+  }
+
+  String _leftLabel(Map<String, dynamic> s) {
+    final term = (s['leftTerm'] ?? '').toString();
+    final session = (s['leftSession'] ?? '').toString();
+    final period = term.isEmpty && session.isEmpty ? 'Term not recorded' : '$term $session'.trim();
+    final date = DateTime.tryParse((s['leftDate'] ?? '').toString());
+    if (date == null) return period;
+    final d = "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
+    return '$period ($d)';
   }
 
   Future<void> _restore(int id, String name) async {
@@ -206,7 +238,54 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
           : Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+                  child: TermSessionFilter(
+                    sessions: _sessions,
+                    session: _filterSession,
+                    term: _filterTerm,
+                    allowAll: true,
+                    onSessionChanged: (v) {
+                      _filterSession = v;
+                      _applyFilter();
+                    },
+                    onTermChanged: (v) {
+                      _filterTerm = v;
+                      _applyFilter();
+                    },
+                  ),
+                ),
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.person_off, color: Colors.red.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          "Made inactive in ${_periodLabel()}",
+                          style: TextStyle(color: Colors.red.shade900, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      Text(
+                        "${students.length}",
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
                   child: TextField(
                     controller: _searchCtrl,
                     decoration: InputDecoration(
@@ -231,7 +310,7 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
                       ? Center(
                           child: Text(
                             _searchCtrl.text.isEmpty
-                                ? "No inactive students"
+                                ? "No students made inactive in ${_periodLabel()}"
                                 : "No inactive students match your search.",
                           ),
                         )
@@ -256,8 +335,12 @@ class _InactiveStudentsScreenState extends State<InactiveStudentsScreen> {
                                     ),
                                   ],
                                 ),
-                                subtitle:
-                                    Text("${s['className']} - ${s['armName']}"),
+                                subtitle: Text(
+                                  "${s['className']} - ${s['armName']}\n"
+                                  "Left: ${_leftLabel(s)}"
+                                  "${(s['leftReason'] ?? '').toString().isNotEmpty ? ' • ${s['leftReason']}' : ''}",
+                                ),
+                                isThreeLine: true,
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [

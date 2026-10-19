@@ -394,6 +394,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
     }
 
     int? selectedClassId;
+    int? selectedArmId;
     String exportFormat = 'pdf';
 
     await showDialog(
@@ -401,6 +402,10 @@ class _StudentListScreenState extends State<StudentListScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            final armsForClass = selectedClassId == null
+                ? const <Map<String, dynamic>>[]
+                : _arms.where((a) => a['classId'] == selectedClassId).toList();
+
             return AlertDialog(
               title: const Text('Export Student List'),
               content: SingleChildScrollView(
@@ -426,8 +431,42 @@ class _StudentListScreenState extends State<StudentListScreen> {
                               ))
                           .toList(),
                       onChanged: (v) {
-                        setDialogState(() => selectedClassId = v);
+                        setDialogState(() {
+                          selectedClassId = v;
+                          // Reset arm if it doesn't belong to the newly selected class
+                          final stillValid = v != null &&
+                              _arms.any((a) => a['id'] == selectedArmId && a['classId'] == v);
+                          if (!stillValid) selectedArmId = null;
+                        });
                       },
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Select Arm (optional):',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<int?>(
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: 'Arm',
+                      ),
+                      initialValue: selectedArmId,
+                      items: [
+                        const DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('All Arms'),
+                        ),
+                        ...armsForClass.map((a) => DropdownMenuItem<int?>(
+                              value: a['id'],
+                              child: Text(a['name']),
+                            )),
+                      ],
+                      onChanged: selectedClassId == null
+                          ? null
+                          : (v) {
+                              setDialogState(() => selectedArmId = v);
+                            },
                     ),
                     const SizedBox(height: 16),
                     const Text(
@@ -547,9 +586,9 @@ class _StudentListScreenState extends State<StudentListScreen> {
                     if (selectedClassId != null) {
                       Navigator.pop(context);
                       if (exportFormat == 'pdf') {
-                        _exportToPDF(selectedClassId!);
+                        _exportToPDF(selectedClassId!, armId: selectedArmId);
                       } else {
-                        _exportToExcel(selectedClassId!);
+                        _exportToExcel(selectedClassId!, armId: selectedArmId);
                       }
                     } else {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -568,12 +607,18 @@ class _StudentListScreenState extends State<StudentListScreen> {
   }
 
   // Export to PDF
-  Future<void> _exportToPDF(int classId) async {
+  Future<void> _exportToPDF(int classId, {int? armId}) async {
     final classMap = _classes.firstWhere((c) => c['id'] == classId);
     final className = classMap['name'];
+    final armName = armId == null
+        ? null
+        : _arms.firstWhere((a) => a['id'] == armId)['name'] as String?;
+    final displayName = armName == null ? className : '$className - $armName';
 
-    // Filter students for this class
-    final classStudents = _allStudents.where((s) => s.classId == classId).toList();
+    // Filter students for this class (and arm, if one was selected)
+    final classStudents = _allStudents
+        .where((s) => s.classId == classId && (armId == null || s.armId == armId))
+        .toList();
 
     if (classStudents.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -584,8 +629,8 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
     await PdfExportHelper.exportPdf(
       context,
-      shareSubject: 'Student List - $className',
-      shareText: 'Active student list for $className (${classStudents.length} students)',
+      shareSubject: 'Student List - $displayName',
+      shareText: 'Active student list for $displayName (${classStudents.length} students)',
       successMessage: 'PDF exported successfully!',
       generate: ({required saveToDownloads}) async {
         // Create PDF
@@ -598,7 +643,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
               return [
                 // Title
                 pw.Text(
-                  'Student List - $className',
+                  'Student List - $displayName',
                   style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
                 ),
                 pw.SizedBox(height: 10),
@@ -649,7 +694,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
         // Save
         final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
-        final file = File('${dir.path}/students_${className.replaceAll(' ', '_')}.pdf');
+        final file = File('${dir.path}/students_${displayName.replaceAll(' ', '_')}.pdf');
         await file.writeAsBytes(await pdf.save());
         return file.path;
       },
@@ -657,12 +702,18 @@ class _StudentListScreenState extends State<StudentListScreen> {
   }
 
   // Export to Excel
-  Future<void> _exportToExcel(int classId) async {
+  Future<void> _exportToExcel(int classId, {int? armId}) async {
     final classMap = _classes.firstWhere((c) => c['id'] == classId);
     final className = classMap['name'];
+    final armName = armId == null
+        ? null
+        : _arms.firstWhere((a) => a['id'] == armId)['name'] as String?;
+    final displayName = armName == null ? className : '$className - $armName';
 
-    // Filter students for this class
-    final classStudents = _allStudents.where((s) => s.classId == classId).toList();
+    // Filter students for this class (and arm, if one was selected)
+    final classStudents = _allStudents
+        .where((s) => s.classId == classId && (armId == null || s.armId == armId))
+        .toList();
 
     if (classStudents.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -674,8 +725,8 @@ class _StudentListScreenState extends State<StudentListScreen> {
     await PdfExportHelper.exportPdf(
       context,
       fileLabel: 'Excel file',
-      shareSubject: 'Student List - $className',
-      shareText: 'Active student list for $className (${classStudents.length} students)',
+      shareSubject: 'Student List - $displayName',
+      shareText: 'Active student list for $displayName (${classStudents.length} students)',
       successMessage: 'Excel file exported successfully!',
       generate: ({required saveToDownloads}) async {
         // Create Excel
@@ -718,7 +769,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
         // Save
         final dir = await PdfExportDirectoryHelper.resolve(saveToDownloads: saveToDownloads);
-        final file = File('${dir.path}/students_${className.replaceAll(' ', '_')}.xlsx');
+        final file = File('${dir.path}/students_${displayName.replaceAll(' ', '_')}.xlsx');
         await file.writeAsBytes(bytes);
         return file.path;
       },

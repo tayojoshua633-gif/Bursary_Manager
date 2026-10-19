@@ -409,8 +409,23 @@ class _SplashScreenState extends State<SplashScreen> {
         return;
       }
 
-      final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+      var isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
       debugPrint('🔵 SplashScreen: isLoggedIn = $isLoggedIn');
+
+      // A remembered session whose account was removed (e.g. the old shared
+      // developer account) or must change its default password goes back to
+      // the login screen instead of straight into the app.
+      if (isLoggedIn) {
+        try {
+          final record = await DatabaseHelperWrapper().getUserById(prefs.getInt('userId') ?? 1);
+          if (record == null || (record['mustChangePassword'] as int? ?? 0) == 1) {
+            await prefs.remove('isLoggedIn');
+            isLoggedIn = false;
+          }
+        } catch (e) {
+          debugPrint('⚠️ SplashScreen: could not re-check the saved user: $e');
+        }
+      }
 
       if (isLoggedIn) {
         debugPrint(

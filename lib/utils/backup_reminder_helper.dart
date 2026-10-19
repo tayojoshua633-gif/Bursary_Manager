@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class BackupReminderHelper {
   // SharedPreferences keys
   static const String _lastBackupKey = 'last_backup_timestamp';
+  static const String _lastOnlineBackupKey = 'last_online_backup_timestamp';
   static const String _transactionCountKey = 'transactions_since_backup';
   static const String _lastReminderShownKey = 'last_reminder_shown';
   static const String _dismissedUntilKey = 'reminder_dismissed_until';
@@ -43,6 +44,19 @@ class BackupReminderHelper {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_lastBackupKey, DateTime.now().millisecondsSinceEpoch);
     await prefs.setInt(_transactionCountKey, 0); // Reset transaction count
+  }
+
+  /// Record that a Google Drive (online) backup was just uploaded
+  static Future<void> recordOnlineBackup([DateTime? at]) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_lastOnlineBackupKey, (at ?? DateTime.now()).millisecondsSinceEpoch);
+  }
+
+  /// Get the time of the last Google Drive (online) backup, or null if never
+  static Future<DateTime?> getLastOnlineBackup() async {
+    final prefs = await SharedPreferences.getInstance();
+    final timestamp = prefs.getInt(_lastOnlineBackupKey);
+    return timestamp == null ? null : DateTime.fromMillisecondsSinceEpoch(timestamp);
   }
 
   /// Increment transaction counter (call after payments, bills, students added)

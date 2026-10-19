@@ -111,7 +111,17 @@ class DatabaseHelper {
   //      vs. plain registration fees) per class, configured via the
   //      Disburse Settings screen and consumed by Disburse Items.
   // v64: Added optional recommendation note column to students table.
-  static const int _dbVersion = 64;
+  // v65: No more built-in accounts (ported from DSM). Fresh installs start with
+  //      no users and the first-run "Create Super Admin" screen; a forgotten
+  //      super admin password is recovered with the school's license key.
+  //      Adds users.mustChangePassword; existing installs lose the shared
+  //      'developer' account, and admin accounts still on '12345' must change
+  //      it at next login.
+  // v66: Added leftTerm/leftSession to students — the term a student was
+  //      deactivated in, so Inactive Students and New Students → Lefts can
+  //      filter by term. Existing inactive students are backfilled from the
+  //      term of their most recent bill.
+  static const int _dbVersion = 66;
   static const String _defaultDbName = 'bursary_manager.db';
   // Which file the singleton currently points at — mutable (not const) so a
   // Read-Only device can switch between multiple linked schools' cached
@@ -253,6 +263,8 @@ class DatabaseHelper {
         isActive INTEGER NOT NULL DEFAULT 1,
         leftDate TEXT,
         leftReason TEXT,
+        leftTerm TEXT,
+        leftSession TEXT,
         dateOfAdmission TEXT,
         recommendation TEXT
       )
@@ -579,6 +591,7 @@ class DatabaseHelper {
         password TEXT NOT NULL,
         userType TEXT NOT NULL,
         canChangeCredentials INTEGER NOT NULL DEFAULT 0,
+        mustChangePassword INTEGER NOT NULL DEFAULT 0,
         createdAt TEXT NOT NULL
       )
     ''');
@@ -1033,43 +1046,9 @@ class DatabaseHelper {
     await db.insert('sessions', {'sessionName': '2025/2026', 'isActive': 1});
     await db.insert('settings', {'key': _kActiveTerm, 'value': '1st Term'});
 
-    // Seed default users with hashed passwords
-
-    // Developer - Fixed and uneditable (Superior to all roles)
-    await db.insert('users', {
-      'username': 'developer',
-      'password': PasswordHelper.hashPassword('dev2024bursarymanager@master'),
-      'userType': 'developer',
-      'canChangeCredentials': 0,
-      'createdAt': DateTime.now().toIso8601String(),
-    });
-
-    // Super Admin - Default account (editable)
-    await db.insert('users', {
-      'username': 'superadmin',
-      'password': PasswordHelper.hashPassword('12345'),
-      'userType': 'super_admin',
-      'canChangeCredentials': 1,
-      'createdAt': DateTime.now().toIso8601String(),
-    });
-
-    // Admin - Default account (editable)
-    await db.insert('users', {
-      'username': 'admin',
-      'password': PasswordHelper.hashPassword('12345'),
-      'userType': 'admin',
-      'canChangeCredentials': 1,
-      'createdAt': DateTime.now().toIso8601String(),
-    });
-
-    // Bursar - Default account (editable)
-    await db.insert('users', {
-      'username': 'bursar',
-      'password': PasswordHelper.hashPassword('12345'),
-      'userType': 'bursar',
-      'canChangeCredentials': 1,
-      'createdAt': DateTime.now().toIso8601String(),
-    });
+    // No default users: after license activation the first-run "Create
+    // Super Admin" screen creates the school's own super admin, who then
+    // creates everyone else. (See needsInitialSuperAdmin.)
 
     // Seed default examinations
     await _seedDefaultExaminations(db);
@@ -2929,6 +2908,54 @@ class DatabaseHelper {
       print('✅ v64: recommendation column added to students table');
     }
 
+    if (oldVersion < 65) {
+      await _safeExec(db, 'ALTER TABLE users ADD COLUMN mustChangePassword INTEGER NOT NULL DEFAULT 0');
+
+      // The shared developer account (same password at every school) is
+      // replaced by license-key recovery.
+      await db.delete('users', where: 'userType = ?', whereArgs: ['developer']);
+
+      // Accounts still on the old shared default password must change it at
+      // next login.
+      final staff = await db.query(
+        'users',
+        columns: ['id', 'password'],
+        where: "userType IN ('super_admin', 'admin', 'bursar')",
+      );
+      for (final u in staff) {
+        final stored = u['password'] as String? ?? '';
+        final isDefault = PasswordHelper.isPasswordHashed(stored)
+            ? PasswordHelper.verifyPassword('12345', stored)
+            : stored == '12345';
+        if (isDefault) {
+          await db.update('users', {'mustChangePassword': 1}, where: 'id = ?', whereArgs: [u['id']]);
+        }
+      }
+      print('✅ v65: developer account removed; default-password accounts flagged to change password');
+    }
+
+    if (oldVersion < 66) {
+      await _safeExec(db, 'ALTER TABLE students ADD COLUMN leftTerm TEXT');
+      await _safeExec(db, 'ALTER TABLE students ADD COLUMN leftSession TEXT');
+
+      // Students deactivated before v66 have no recorded term — attribute them
+      // to the term of their most recent bill. Sessions ("2024/2025") and
+      // terms ("1st Term".."3rd Term") both sort correctly as text.
+      await _safeExec(db, '''
+        UPDATE students
+        SET leftSession = (
+              SELECT sb.session FROM student_bills sb
+              WHERE sb.studentId = students.id
+              ORDER BY sb.session DESC, sb.term DESC LIMIT 1),
+            leftTerm = (
+              SELECT sb.term FROM student_bills sb
+              WHERE sb.studentId = students.id
+              ORDER BY sb.session DESC, sb.term DESC LIMIT 1)
+        WHERE isActive = 0 AND leftTerm IS NULL
+      ''');
+      print('✅ v66: leftTerm/leftSession added to students and backfilled');
+    }
+
     // ensure session/term exists
     final sess = await db.query('sessions', limit: 1);
     if (sess.isEmpty) {
@@ -3703,15 +3730,26 @@ class DatabaseHelper {
     return db.delete('students', where: 'id = ?', whereArgs: [id]);
   }
 
-  // deactivateStudent: marks student as inactive
-  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason) async {
+  // deactivateStudent: marks student as inactive. [leftTerm]/[leftSession]
+  // record the term the student left in; they default to the active term.
+  Future<int> deactivateStudent(
+    int studentId,
+    String leftDate,
+    String leftReason, {
+    String? leftTerm,
+    String? leftSession,
+  }) async {
     final db = await database;
+    leftTerm ??= await getActiveTerm();
+    leftSession ??= (await getActiveSession())?['sessionName'] as String?;
     return db.update(
       'students',
       {
         'isActive': 0,
         'leftDate': leftDate,
         'leftReason': leftReason,
+        'leftTerm': leftTerm,
+        'leftSession': leftSession,
       },
       where: 'id = ?',
       whereArgs: [studentId],
@@ -3727,6 +3765,8 @@ class DatabaseHelper {
         'isActive': 1,
         'leftDate': null,
         'leftReason': null,
+        'leftTerm': null,
+        'leftSession': null,
       },
       where: 'id = ?',
       whereArgs: [studentId],
@@ -6835,6 +6875,81 @@ class DatabaseHelper {
   }
 
   // Count super admins (for validation)
+  // ------------------------------------------------------------------
+  // FIRST-RUN SETUP, SUPER ADMIN RECOVERY & PASSWORD CHANGE
+  // ------------------------------------------------------------------
+
+  /// True when there is no super admin yet (fresh install) — the app shows
+  /// the "Create Super Admin" screen instead of the login form.
+  Future<bool> needsInitialSuperAdmin() async => await countSuperAdmins() == 0;
+
+  /// Creates the school's first super admin. Refused (returns null) once any
+  /// super admin exists, so this can't be used to add a second one.
+  Future<int?> createInitialSuperAdmin({required String username, required String password}) async {
+    if (!await needsInitialSuperAdmin()) return null;
+    if (await getUserByUsername(username) != null) return null;
+    final db = await database;
+    return db.insert('users', {
+      'username': username,
+      'password': PasswordHelper.hashPassword(password),
+      'userType': 'super_admin',
+      'canChangeCredentials': 1,
+      'mustChangePassword': 0,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+  }
+
+  /// License keys compare without dashes/spaces/case.
+  static String _normaliseLicenseKey(String key) => key.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+
+  /// True when [licenseKey] is this school's most recently activated license
+  /// — even if it has since expired, so an expired school can still recover.
+  Future<bool> verifyRecoveryLicenseKey(String licenseKey) async {
+    final entered = _normaliseLicenseKey(licenseKey);
+    if (entered.isEmpty) return false;
+    final db = await database;
+    final rows = await db.query('licenses', orderBy: 'activationDate DESC, id DESC', limit: 1);
+    if (rows.isEmpty) return false;
+    return _normaliseLicenseKey(rows.first['licenseKey'] as String? ?? '') == entered;
+  }
+
+  /// Super admin accounts a recovery can reset (id + username).
+  Future<List<Map<String, dynamic>>> getSuperAdminAccounts() async {
+    final db = await database;
+    return db.query('users', columns: ['id', 'username'], where: 'userType = ?', whereArgs: ['super_admin'], orderBy: 'id ASC');
+  }
+
+  /// Sets a new password for a super admin after re-checking the license key.
+  Future<bool> resetSuperAdminPasswordWithLicense({
+    required String licenseKey,
+    required int userId,
+    required String newPassword,
+  }) async {
+    if (!await verifyRecoveryLicenseKey(licenseKey)) return false;
+    final user = await getUserById(userId);
+    if (user == null || user['userType'] != 'super_admin') return false;
+    final db = await database;
+    final count = await db.update(
+      'users',
+      {'password': PasswordHelper.hashPassword(newPassword), 'mustChangePassword': 0},
+      where: 'id = ?',
+      whereArgs: [userId],
+    );
+    return count > 0;
+  }
+
+  /// Set a new password for a user and clear the mustChangePassword flag.
+  Future<bool> changePassword(int userId, String newPassword) async {
+    final db = await database;
+    final count = await db.update(
+      'users',
+      {'password': PasswordHelper.hashPassword(newPassword), 'mustChangePassword': 0},
+      where: 'id = ?',
+      whereArgs: [userId],
+    );
+    return count > 0;
+  }
+
   Future<int> countSuperAdmins() async {
     final db = await database;
     final result = await db.rawQuery(

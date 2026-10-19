@@ -632,10 +632,11 @@ class _LicenseManagementScreenState extends State<LicenseManagementScreen> {
 
   String _formatNaira(int amount) => '₦${NumberFormat("#,##0").format(amount)}';
 
+  /// The license key is also the super admin recovery key, so only its last
+  /// 4 characters are ever shown in the app.
   String _formatLicenseKey(String key) {
-    if (key.length > 20) {
-      return '${key.substring(0, 20)}...';
-    }
-    return key;
+    final clean = key.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+    if (clean.length <= 4) return '••••';
+    return '••••-••••-${clean.substring(clean.length - 4)}';
   }
 }

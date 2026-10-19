@@ -9,6 +9,7 @@ import '../../data/database_helper_wrapper.dart';
 import '../auth/mode_selection_screen.dart';
 import '../home_screen.dart';
 import '../../navigation/sidebar_scaffold.dart';
+import '../auth/force_change_password_screen.dart';
 
 class ClientLoginScreen extends StatefulWidget {
   final String serverUrl;
@@ -48,6 +49,26 @@ class _ClientLoginScreenState extends State<ClientLoginScreen> {
     super.dispose();
   }
 
+  /// Password recovery isn't possible from a connected device — only a
+  /// super admin (any user) or the license key on the main device (super
+  /// admin) can reset passwords.
+  void _showForgotPasswordHelp() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Forgot Password'),
+        content: const Text(
+          "Please ask your school's super admin to reset your password.\n\n"
+          "Super admins: use 'Forgot password?' on the school's main device "
+          "(where the app is activated) and enter the school's license key.",
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+        ],
+      ),
+    );
+  }
+
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) {
       return;
@@ -73,17 +94,35 @@ class _ClientLoginScreenState extends State<ClientLoginScreen> {
         return;
       }
 
-      // Save login state
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('isLoggedIn', true);
-      await prefs.setString('currentUser', user['username']);
-      await prefs.setString('userType', user['userType']);
       await prefs.setString('app_mode', 'client'); // Ensure mode is set
 
       // Reset repository to use RemoteDataSource for client mode
       RepositoryFactory.reset();
       DatabaseHelperWrapper().resetRepository();
       debugPrint('🔄 Repository reset for client mode - will use RemoteDataSource');
+
+      Future<void> saveLogin() async {
+        await prefs.setBool('isLoggedIn', true);
+        await prefs.setString('currentUser', user['username']);
+        await prefs.setString('userType', user['userType']);
+      }
+
+      // Still on the old default password: change it first. The login is
+      // only remembered once the new password is saved.
+      if (user['mustChangePassword'] == true) {
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ForceChangePasswordScreen(currentUser: user, saveLogin: saveLogin),
+          ),
+        );
+        return;
+      }
+
+      // Save login state
+      await saveLogin();
 
       // Navigate to home screen
       if (!mounted) return;
@@ -474,6 +513,13 @@ class _ClientLoginScreenState extends State<ClientLoginScreen> {
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: _showForgotPasswordHelp,
+                                child: const Text('Forgot password?'),
+                              ),
                             ),
                           ],
                         ),

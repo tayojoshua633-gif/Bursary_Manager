@@ -58,6 +58,9 @@ abstract class DataRepository {
   /// Count super admins
   Future<int> countSuperAdmins();
 
+  /// Set a new password for a user and clear the mustChangePassword flag
+  Future<bool> changePassword(int userId, String newPassword);
+
   // ========================================
   // PERMISSIONS
   // ========================================
@@ -128,7 +131,8 @@ abstract class DataRepository {
   Future<int> deleteStudent(int id);
 
   /// Deactivate student
-  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason);
+  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason,
+      {String? leftTerm, String? leftSession});
 
   /// Restore deactivated student
   Future<int> restoreStudent(int studentId);

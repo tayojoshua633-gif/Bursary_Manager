@@ -30,13 +30,13 @@ $newVersion = "$major.$minor.$patch"
 
 # --- Write back to app_version.dart ---
 $newContent = "const String kAppVersion = '$newVersion';`n"
-Set-Content -Path $versionFile -Value $newContent -Encoding UTF8
+[IO.File]::WriteAllText((Resolve-Path $versionFile), $newContent, (New-Object System.Text.UTF8Encoding $false))
 Write-Host "app_version.dart -> $newVersion"
 
 # --- Update pubspec.yaml version line ---
 $pubspec = Get-Content $pubspecFile -Raw
 $pubspec = $pubspec -replace "(?m)^version: \d+\.\d+\.\d+\+\d+", "version: $newVersion+1"
-Set-Content -Path $pubspecFile -Value $pubspec -Encoding UTF8
+[IO.File]::WriteAllText((Resolve-Path $pubspecFile), $pubspec, (New-Object System.Text.UTF8Encoding $false))
 Write-Host "pubspec.yaml     -> $newVersion+1"
 
 # --- Run flutter release ---

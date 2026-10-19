@@ -16,10 +16,11 @@ class NewStudentsPDFGenerator {
     required Map<String, dynamic> schoolProfile,
     required String term,
     required String session,
+    bool lefts = false,
     bool saveToDownloads = false,
   }) async {
     final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final baseName = 'New_Students_${term.replaceAll(' ', '_')}_$timestamp';
+    final baseName = '${lefts ? 'Students_Left' : 'New_Students'}_${term.replaceAll(' ', '_')}_$timestamp';
 
     if (Platform.isAndroid) {
       final html = NewStudentsHtmlGenerator.build(
@@ -27,6 +28,7 @@ class NewStudentsPDFGenerator {
         schoolProfile: schoolProfile,
         term: term,
         session: session,
+        lefts: lefts,
       );
       return NativeHtmlPdfHelper.saveHtmlAsPdf(
         html: html,
@@ -74,7 +76,7 @@ class NewStudentsPDFGenerator {
               pw.SizedBox(height: 8),
               pw.Divider(thickness: 2, color: PdfColors.teal200),
               pw.SizedBox(height: 8),
-              pw.Text('NEW STUDENTS (CURRENT TERM REGISTRATIONS)',
+              pw.Text(lefts ? 'STUDENTS WHO LEFT (DEACTIVATED)' : 'NEW STUDENTS (TERM REGISTRATIONS)',
                   style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold), textAlign: pw.TextAlign.center),
               pw.SizedBox(height: 4),
               pw.Text('${students.length} Students | $term - $session', style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
@@ -101,7 +103,12 @@ class NewStudentsPDFGenerator {
               6: pw.Alignment.centerLeft,
               7: pw.Alignment.centerLeft,
             },
-            headers: ['S/N', 'Adm. No', 'Student Name', 'Class/Arm', 'Gender', 'Date of Admission', 'Parent Name', 'Parent Phone'],
+            headers: [
+              'S/N', 'Adm. No', 'Student Name', 'Class/Arm', 'Gender',
+              lefts ? 'Date Left' : 'Date of Admission',
+              lefts ? 'Reason' : 'Parent Name',
+              'Parent Phone',
+            ],
             data: students.asMap().entries.map((entry) {
               final index = entry.key;
               final s = entry.value;
@@ -113,8 +120,8 @@ class NewStudentsPDFGenerator {
                 fullName,
                 classArm,
                 s['gender'],
-                formatDate(s['dateOfAdmission']?.toString()),
-                s['parentName'],
+                formatDate((lefts ? s['leftDate'] : s['dateOfAdmission'])?.toString()),
+                lefts ? s['leftReason'] : s['parentName'],
                 s['parentPhone'],
               ];
             }).toList(),

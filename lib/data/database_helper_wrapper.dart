@@ -197,6 +197,37 @@ class DatabaseHelperWrapper {
     return repo.countSuperAdmins();
   }
 
+  Future<bool> changePassword(int userId, String newPassword) async {
+    final repo = await _repository;
+    return repo.changePassword(userId, newPassword);
+  }
+
+  // ── First-run setup & super admin recovery ──────────────────────────────
+  // Main device only (standalone/server mode): these go straight to the
+  // local database and are never exposed over the network, so recovery
+  // needs both the license key and the device the app was activated on.
+
+  Future<bool> needsInitialSuperAdmin() => DatabaseHelper().needsInitialSuperAdmin();
+
+  Future<int?> createInitialSuperAdmin({required String username, required String password}) =>
+      DatabaseHelper().createInitialSuperAdmin(username: username, password: password);
+
+  Future<bool> verifyRecoveryLicenseKey(String licenseKey) =>
+      DatabaseHelper().verifyRecoveryLicenseKey(licenseKey);
+
+  Future<List<Map<String, dynamic>>> getSuperAdminAccounts() => DatabaseHelper().getSuperAdminAccounts();
+
+  Future<bool> resetSuperAdminPasswordWithLicense({
+    required String licenseKey,
+    required int userId,
+    required String newPassword,
+  }) =>
+      DatabaseHelper().resetSuperAdminPasswordWithLicense(
+        licenseKey: licenseKey,
+        userId: userId,
+        newPassword: newPassword,
+      );
+
   // ========================================
   // PERMISSIONS
   // ========================================
@@ -299,9 +330,11 @@ class DatabaseHelperWrapper {
     return repo.deleteStudent(id);
   }
 
-  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason) async {
+  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason,
+      {String? leftTerm, String? leftSession}) async {
     final repo = await _repository;
-    return repo.deactivateStudent(studentId, leftDate, leftReason);
+    return repo.deactivateStudent(studentId, leftDate, leftReason,
+        leftTerm: leftTerm, leftSession: leftSession);
   }
 
   Future<int> restoreStudent(int studentId) async {

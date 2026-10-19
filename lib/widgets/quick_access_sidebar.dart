@@ -52,6 +52,10 @@ import '../screens/reports/sales_report_screen.dart';
 import '../screens/reports/daily_print_count_screen.dart';
 import '../screens/reports/activity_log_screen.dart';
 import '../screens/reports/fees_balance_report_screen.dart';
+// Expenditure
+import '../screens/expenses/expense_list_screen.dart';
+import '../screens/expenses/expense_form_screen.dart';
+import '../screens/expenses/expense_category_screen.dart';
 // Examinations
 import '../screens/examinations/external_examination_list_screen.dart';
 import '../screens/examinations/examination_registration_screen.dart';
@@ -105,6 +109,7 @@ enum QuickAccessGroup {
   transportation,
   reports,
   examinations,
+  expenditure,
   staffSetup,
   viewStaff,
   preferences,
@@ -160,6 +165,8 @@ class QuickAccessGroups {
         return 'Reports';
       case QuickAccessGroup.examinations:
         return 'External Examination';
+      case QuickAccessGroup.expenditure:
+        return 'Expenditure';
       case QuickAccessGroup.staffSetup:
         return 'Staff Setup';
       case QuickAccessGroup.viewStaff:
@@ -569,6 +576,36 @@ class QuickAccessGroups {
             color: Colors.indigo,
             pageId: 'external_examinations/students',
             builder: (_) => const RegisteredStudentsScreen(),
+          ),
+        ];
+
+      case QuickAccessGroup.expenditure:
+        return [
+          QuickAccessEntry(
+            id: 'expenses',
+            title: 'Expenses',
+            icon: Icons.money_off_outlined,
+            color: Colors.purple,
+            module: 'expenses',
+            pageId: 'expenditure/expenses',
+            builder: (user) => ExpenseListScreen(currentUser: user),
+          ),
+          QuickAccessEntry(
+            id: 'add_expense',
+            title: 'Add Expense',
+            icon: Icons.add_circle_outline,
+            color: Colors.indigo,
+            module: 'expenses',
+            pageId: 'expenditure/expenses',
+            builder: (user) => ExpenseFormScreen(currentUser: user),
+          ),
+          QuickAccessEntry(
+            id: 'expense_categories',
+            title: 'Expense Categories',
+            icon: Icons.label_outline,
+            color: Colors.deepPurple,
+            pageId: 'expenditure/expense_categories',
+            builder: (_) => const ExpenseCategoryScreen(),
           ),
         ];
 

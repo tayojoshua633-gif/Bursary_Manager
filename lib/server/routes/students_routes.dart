@@ -259,7 +259,13 @@ class StudentsRoutes {
         );
       }
 
-      await _db.deactivateStudent(studentId, leftDate, leftReason);
+      await _db.deactivateStudent(
+        studentId,
+        leftDate,
+        leftReason,
+        leftTerm: data['leftTerm'] as String?,
+        leftSession: data['leftSession'] as String?,
+      );
 
       return Response.ok(
         jsonEncode({'success': true}),

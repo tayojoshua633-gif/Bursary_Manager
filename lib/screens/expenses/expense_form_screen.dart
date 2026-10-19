@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../utils/write_guard.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ExpenseFormScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -267,7 +268,14 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.expenditure,
+        currentId: 'add_expense',
+        enabled: widget.expense == null,
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     final isEdit = widget.expense != null;
     final dropdownItems = [
       ..._categories,

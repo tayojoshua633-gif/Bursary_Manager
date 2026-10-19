@@ -19,6 +19,7 @@ import '../../utils/permission_helper.dart';
 import '../../utils/display_settings_helper.dart';
 import '../../utils/navigation_helper.dart';
 import '../../widgets/sibling_mark.dart';
+import '../../widgets/term_session_filter.dart';
 import '../../utils/payment_date_time_formatter.dart';
 import '../../utils/age_helper.dart';
 import '../../utils/student_bill_actions.dart';
@@ -375,6 +376,97 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
       // Reload student with class/arm names
       _loadStudentWithClassArm();
     }
+  }
+
+  /// Deactivate this student (same flow as the Deactivate Students screen),
+  /// then return to the previous screen since the student is no longer active.
+  Future<void> _deactivateStudent() async {
+    final dbHelper = DatabaseHelperWrapper();
+    final sessionRows = await dbHelper.getAllSessions();
+    if (!mounted) return;
+
+    final name = '${current.surname} ${current.firstName}'.trim();
+    final reasonCtrl = TextEditingController();
+    String? leftTerm = _activeTerm.isEmpty ? null : _activeTerm;
+    String? leftSession = _activeSession.isEmpty ? null : _activeSession;
+    final sessions = TermSessionFilter.sessionNames(sessionRows, leftSession);
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Deactivate Student'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Are you sure you want to deactivate $name?'),
+                const SizedBox(height: 16),
+                TermSessionFilter(
+                  sessions: sessions,
+                  session: leftSession,
+                  term: leftTerm,
+                  onSessionChanged: (v) => setDialogState(() => leftSession = v),
+                  onTermChanged: (v) => setDialogState(() => leftTerm = v),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'This will be recorded as left in ${leftTerm ?? ''} ${leftSession ?? ''}.',
+                  style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: reasonCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason (optional)',
+                    hintText: 'e.g., Transferred, Graduated, Withdrawn',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.pop(ctx, false),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Deactivate'),
+              onPressed: () => Navigator.pop(ctx, true),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final reason = reasonCtrl.text.trim();
+    reasonCtrl.dispose();
+    if (ok != true || !mounted) return;
+
+    await dbHelper.deactivateStudent(
+      current.id!,
+      DateTime.now().toIso8601String(),
+      reason.isEmpty ? 'Not specified' : reason,
+      leftTerm: leftTerm,
+      leftSession: leftSession,
+    );
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$name has been deactivated'),
+        backgroundColor: Colors.orange,
+      ),
+    );
+    Navigator.of(context).pop(true);
   }
 
   Future<void> _editRecommendation() async {
@@ -1333,6 +1425,20 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
                       ),
                       onPressed: _openEditStudent,
                     ),
+                  if (_canManageStudents && current.isActive == 1)
+                    ElevatedButton.icon(
+                      icon: Icon(Icons.person_off, size: ds.iconSize),
+                      label: Text("Deactivate Student", style: TextStyle(fontSize: ds.bodyFontSize)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red.shade700,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: ds.cardPadding,
+                          vertical: ds.cardPadding * 0.75,
+                        ),
+                      ),
+                      onPressed: _deactivateStudent,
+                    ),
                 ],
               ),
 
@@ -1440,6 +1546,14 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
                 color: Colors.orange.shade800,
                 label: "Edit Student's Information",
                 onTap: _openEditStudent,
+              ),
+            if (_canManageStudents && current.isActive == 1)
+              _quickAccessTile(
+                ds,
+                icon: Icons.person_off,
+                color: Colors.red.shade700,
+                label: 'Deactivate Student',
+                onTap: _deactivateStudent,
               ),
           ],
         ),

@@ -14,6 +14,7 @@ import '../../data/database_helper_wrapper.dart';
 import '../../models/parent.dart';
 import '../../models/student.dart';
 import '../../utils/navigation_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 import '../../utils/thermal_printer_manager.dart';
 import '../students/student_details_screen.dart';
 import '../settings/thermal_printer_screen.dart';
@@ -1235,7 +1236,13 @@ class _ParentDetailsScreenState extends State<ParentDetailsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.parents,
+        currentId: 'parent_details',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Parent Details'),

@@ -11,8 +11,11 @@ import '../../utils/new_students_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import '../../widgets/student_quick_actions_panel.dart';
+import '../../widgets/term_session_filter.dart';
 import 'student_details_screen.dart';
 
+/// New Students: per-term New Intakes (students with a registration fee on
+/// that term's bill) and Lefts (students deactivated in that term).
 class NewStudentsScreen extends StatefulWidget {
   const NewStudentsScreen({super.key});
 
@@ -20,22 +23,35 @@ class NewStudentsScreen extends StatefulWidget {
   State<NewStudentsScreen> createState() => _NewStudentsScreenState();
 }
 
-class _NewStudentsScreenState extends State<NewStudentsScreen> {
+class _NewStudentsScreenState extends State<NewStudentsScreen>
+    with SingleTickerProviderStateMixin {
   final DatabaseHelperWrapper _db = DatabaseHelperWrapper();
+  late final TabController _tabController;
 
   List<Map<String, dynamic>> _newStudents = [];
   List<Map<String, dynamic>> _filteredStudents = [];
+  List<Map<String, dynamic>> _lefts = [];
+  List<Map<String, dynamic>> _filteredLefts = [];
   bool _loading = true;
+  // Selected term/session; default to the active term on first load.
   String _activeTerm = '';
   String _activeSession = '';
+  List<String> _sessions = [];
+  bool _filterInitialised = false;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   Set<String> _siblingPhones = {};
   Map<String, dynamic>? _currentUser;
 
+  bool get _onLeftsTab => _tabController.index == 1;
+
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this)
+      ..addListener(() {
+        if (!_tabController.indexIsChanging) setState(() {});
+      });
     _loadCurrentUser();
     _loadNewStudents();
   }
@@ -58,6 +74,7 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
 
   @override
   void dispose() {
+    _tabController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -66,10 +83,13 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
     setState(() => _loading = true);
 
     try {
-      // Get active term and session
-      _activeTerm = await _db.getActiveTerm();
-      final activeSessionData = await _db.getActiveSession();
-      _activeSession = activeSessionData?['sessionName'] ?? '';
+      if (!_filterInitialised) {
+        _activeTerm = await _db.getActiveTerm();
+        final activeSessionData = await _db.getActiveSession();
+        _activeSession = activeSessionData?['sessionName'] ?? '';
+        _sessions = TermSessionFilter.sessionNames(await _db.getAllSessions(), _activeSession);
+        _filterInitialised = true;
+      }
 
       if (_activeTerm.isEmpty || _activeSession.isEmpty) {
         setState(() => _loading = false);
@@ -143,13 +163,14 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
             s.parentAddress,
             s.photoPath,
             s.isActive,
+            s.leftTerm,
+            s.leftSession,
             c.name as className,
             a.name as armName
           FROM students s
           INNER JOIN classes c ON s.classId = c.id
           LEFT JOIN arms a ON s.armId = a.id
-          WHERE s.isActive = 1
-            AND s.id IN ($placeholders)
+          WHERE s.id IN ($placeholders)
           ORDER BY
             CASE WHEN s.dateOfAdmission IS NOT NULL AND s.dateOfAdmission != '' THEN 0 ELSE 1 END,
             s.dateOfAdmission ASC,
@@ -157,39 +178,56 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
         ''', newStudentIds);
       }
 
+      // Lefts: students deactivated in the selected term/session
+      final lefts = (await _db.getInactiveStudents())
+          .where((s) => s['leftTerm'] == _activeTerm && s['leftSession'] == _activeSession)
+          .toList();
+
       final siblingPhones = computeSiblingPhones(await _db.getActiveStudents());
 
       setState(() {
         _newStudents = results;
-        _filteredStudents = results;
+        _lefts = lefts;
         _siblingPhones = siblingPhones;
         _loading = false;
       });
+      _filterStudents(_searchQuery);
     } catch (e) {
       debugPrint('Error loading new students: $e');
       setState(() => _loading = false);
     }
   }
 
+  void _onSessionChanged(String? session) {
+    if (session == null || session == _activeSession) return;
+    _activeSession = session;
+    _loadNewStudents();
+  }
+
+  void _onTermChanged(String? term) {
+    if (term == null || term == _activeTerm) return;
+    _activeTerm = term;
+    _loadNewStudents();
+  }
+
   void _filterStudents(String query) {
+    final searchLower = query.toLowerCase();
+    bool matches(Map<String, dynamic> student) {
+      final fullName =
+          '${student['surname']} ${student['firstName']} ${student['otherName'] ?? ''}'
+              .toLowerCase();
+      final admissionNo = (student['admissionNo'] ?? '').toString().toLowerCase();
+      final className = (student['className'] ?? '').toString().toLowerCase();
+
+      return fullName.contains(searchLower) ||
+          admissionNo.contains(searchLower) ||
+          className.contains(searchLower);
+    }
+
     setState(() {
       _searchQuery = query;
-      if (query.isEmpty) {
-        _filteredStudents = _newStudents;
-      } else {
-        _filteredStudents = _newStudents.where((student) {
-          final fullName =
-              '${student['surname']} ${student['firstName']} ${student['otherName'] ?? ''}'
-                  .toLowerCase();
-          final admissionNo = (student['admissionNo'] ?? '').toString().toLowerCase();
-          final className = (student['className'] ?? '').toString().toLowerCase();
-          final searchLower = query.toLowerCase();
-
-          return fullName.contains(searchLower) ||
-              admissionNo.contains(searchLower) ||
-              className.contains(searchLower);
-        }).toList();
-      }
+      _filteredStudents = query.isEmpty ? _newStudents : _newStudents.where(matches).toList();
+      _filteredLefts = query.isEmpty ? _lefts : _lefts.where(matches).toList();
     });
   }
 
@@ -208,24 +246,29 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
   }
 
   Future<void> _exportToPDF() async {
-    if (_filteredStudents.isEmpty) {
+    final lefts = _onLeftsTab;
+    final students = lefts ? _filteredLefts : _filteredStudents;
+    if (students.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No new students to export')),
+        SnackBar(content: Text(lefts ? 'No students who left to export' : 'No new students to export')),
       );
       return;
     }
 
     await PdfExportHelper.exportPdf(
       context,
-      shareSubject: 'New Students - $_activeTerm $_activeSession',
-      successMessage: 'New students list exported successfully!',
+      shareSubject: '${lefts ? 'Students Who Left' : 'New Students'} - $_activeTerm $_activeSession',
+      successMessage: lefts
+          ? 'Students who left list exported successfully!'
+          : 'New students list exported successfully!',
       generate: ({required saveToDownloads}) async {
         final schoolProfile = await _db.getSchoolProfile();
         return NewStudentsPDFGenerator.generateNewStudentsPDF(
-          students: _filteredStudents,
+          students: students,
           schoolProfile: schoolProfile ?? {},
           term: _activeTerm,
           session: _activeSession,
+          lefts: lefts,
           saveToDownloads: saveToDownloads,
         );
       },
@@ -258,6 +301,22 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
           ),
         ),
         foregroundColor: Colors.white,
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: Colors.white,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
+          tabs: [
+            Tab(
+              icon: const Icon(Icons.person_add),
+              text: 'New Intakes (${_newStudents.length})',
+            ),
+            Tab(
+              icon: const Icon(Icons.person_off),
+              text: 'Lefts (${_lefts.length})',
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.picture_as_pdf),
@@ -280,9 +339,7 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
         context,
         current: StudentQuickAction.newStudents,
         onReturn: _loadNewStudents,
-        body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
+        body: Column(
               children: [
                 // Header Section with Gradient
                 Container(
@@ -322,8 +379,8 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
                                   ),
                                 ],
                               ),
-                              child: const Icon(
-                                Icons.person_add,
+                              child: Icon(
+                                _onLeftsTab ? Icons.person_off : Icons.person_add,
                                 color: Colors.white,
                                 size: 28,
                               ),
@@ -334,7 +391,7 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Current Term Registrations',
+                                    _onLeftsTab ? 'Students Who Left' : 'Term Registrations',
                                     style: TextStyle(
                                       fontSize: 18,
                                       fontWeight: FontWeight.bold,
@@ -371,7 +428,7 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
                                 ],
                               ),
                               child: Text(
-                                '${_filteredStudents.length}',
+                                '${_onLeftsTab ? _filteredLefts.length : _filteredStudents.length}',
                                 style: const TextStyle(
                                   fontSize: 20,
                                   fontWeight: FontWeight.bold,
@@ -382,8 +439,18 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
                           ],
                         ),
 
+                        // Term / Session filter
+                        const SizedBox(height: 16),
+                        TermSessionFilter(
+                          sessions: _sessions,
+                          session: _activeSession.isEmpty ? null : _activeSession,
+                          term: _activeTerm.isEmpty ? null : _activeTerm,
+                          onSessionChanged: _onSessionChanged,
+                          onTermChanged: _onTermChanged,
+                        ),
+
                         // Search Bar
-                        if (_newStudents.isNotEmpty) ...[
+                        if (_newStudents.isNotEmpty || _lefts.isNotEmpty) ...[
                           const SizedBox(height: 16),
                           TextField(
                             controller: _searchController,
@@ -428,18 +495,19 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
 
                 // Students List
                 Expanded(
-                  child: _newStudents.isEmpty
-                      ? _buildEmptyState()
-                      : _filteredStudents.isEmpty
-                          ? _buildNoResultsState()
-                          : ListView.builder(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: _filteredStudents.length,
-                              itemBuilder: (context, index) {
-                                final student = _filteredStudents[index];
-                                return _buildStudentCard(student, index);
-                              },
-                            ),
+                  child: _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : TabBarView(
+                          controller: _tabController,
+                          children: [
+                            _newStudents.isEmpty
+                                ? _buildEmptyState()
+                                : _buildList(_filteredStudents, left: false),
+                            _lefts.isEmpty
+                                ? _buildNoLeftsState()
+                                : _buildList(_filteredLefts, left: true),
+                          ],
+                        ),
                 ),
               ],
             ),
@@ -447,7 +515,45 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
     );
   }
 
-  Widget _buildStudentCard(Map<String, dynamic> student, int index) {
+  Widget _buildList(List<Map<String, dynamic>> students, {required bool left}) {
+    if (students.isEmpty) return _buildNoResultsState();
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: students.length,
+      itemBuilder: (context, index) => _buildStudentCard(students[index], index, left: left),
+    );
+  }
+
+  Widget _buildNoLeftsState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.how_to_reg, size: 64, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'No Students Left',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No student was deactivated in $_activeTerm - $_activeSession',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStudentCard(Map<String, dynamic> student, int index, {bool left = false}) {
     final fullName =
         '${student['surname']} ${student['firstName']} ${student['otherName'] ?? ''}'
             .trim();
@@ -456,6 +562,9 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
     final armName = student['armName'] ?? '';
     final admissionClass = armName.isNotEmpty ? '$className - $armName' : className;
     final dateOfAdmission = _formatDate(student['dateOfAdmission']);
+    final dateLeft = _formatDate(student['leftDate']);
+    final leftReason = (student['leftReason'] ?? '').toString();
+    final hasLeft = student['isActive'] == 0;
     final gender = student['gender'] ?? 'N/A';
     final photoPath = student['photoPath'];
 
@@ -507,7 +616,8 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
 
               // Student Photo/Avatar
               Hero(
-                tag: 'student_${student['id']}',
+                // A student can appear on both tabs; Hero tags must be unique.
+                tag: left ? 'student_left_${student['id']}' : 'student_${student['id']}',
                 child: CircleAvatar(
                   radius: 32,
                   backgroundColor: gender == 'Male'
@@ -551,6 +661,20 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
                         SiblingMark(
                           show: isSiblingPhone(student['parentPhone'] as String?, _siblingPhones),
                         ),
+                        if (!left && hasLeft)
+                          Container(
+                            margin: const EdgeInsets.only(left: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade50,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.red.shade200),
+                            ),
+                            child: Text(
+                              'Left',
+                              style: TextStyle(fontSize: 11, color: Colors.red.shade700, fontWeight: FontWeight.w600),
+                            ),
+                          ),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -591,21 +715,26 @@ class _NewStudentsScreenState extends State<NewStudentsScreen> {
                     ),
                     const SizedBox(height: 4),
 
-                    // Date of Admission
+                    // Date of Admission (or, on the Lefts tab, date left + reason)
                     Row(
                       children: [
                         Icon(
-                          Icons.calendar_today,
+                          left ? Icons.logout : Icons.calendar_today,
                           size: 14,
-                          color: Colors.teal.shade600,
+                          color: left ? Colors.red.shade600 : Colors.teal.shade600,
                         ),
                         const SizedBox(width: 4),
-                        Text(
-                          dateOfAdmission,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.teal.shade700,
-                            fontWeight: FontWeight.w600,
+                        Flexible(
+                          child: Text(
+                            left
+                                ? 'Left: $dateLeft${leftReason.isNotEmpty ? ' • $leftReason' : ''}'
+                                : dateOfAdmission,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: left ? Colors.red.shade700 : Colors.teal.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],

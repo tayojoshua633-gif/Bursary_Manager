@@ -106,8 +106,8 @@ class _ParentFormScreenState extends State<ParentFormScreen> {
   @override
   Widget build(BuildContext context) => QuickAccessScaffold(
         group: QuickAccessGroup.parents,
-        currentId: 'add_parent',
-        enabled: widget.parent == null,
+        // In edit mode no entry is current, so "Add New Parent" stays tappable.
+        currentId: widget.parent == null ? 'add_parent' : 'edit_parent',
         child: _buildScreenContent(context),
       );
 

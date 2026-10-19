@@ -262,6 +262,17 @@ class RemoteDataSource implements DataRepository {
     return response['count'];
   }
 
+  @override
+  Future<bool> changePassword(int userId, String newPassword) async {
+    // userId is ignored server-side; the token identifies the caller.
+    final response = await _request(
+      'POST',
+      '/api/auth/change-password',
+      body: {'newPassword': newPassword},
+    );
+    return response['success'] == true;
+  }
+
   // ========================================
   // PERMISSIONS
   // ========================================
@@ -366,7 +377,7 @@ class RemoteDataSource implements DataRepository {
 
   @override
   Future<List<Map<String, dynamic>>> getInactiveStudents() async {
-    final response = await _request('GET', '/api/students?onlyInactive=true');
+    final response = await _request('GET', '/api/students/inactive');
     return List<Map<String, dynamic>>.from(response);
   }
 
@@ -395,11 +406,17 @@ class RemoteDataSource implements DataRepository {
   }
 
   @override
-  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason) async {
+  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason,
+      {String? leftTerm, String? leftSession}) async {
     await _request(
       'POST',
       '/api/students/$studentId/deactivate',
-      body: {'leftDate': leftDate, 'leftReason': leftReason},
+      body: {
+        'leftDate': leftDate,
+        'leftReason': leftReason,
+        if (leftTerm != null) 'leftTerm': leftTerm,
+        if (leftSession != null) 'leftSession': leftSession,
+      },
     );
     return 1;
   }

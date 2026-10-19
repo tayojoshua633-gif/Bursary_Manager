@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/database_helper_wrapper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 class ExpenseCategoryScreen extends StatefulWidget {
   const ExpenseCategoryScreen({super.key});
@@ -159,7 +160,13 @@ class _ExpenseCategoryScreenState extends State<ExpenseCategoryScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.expenditure,
+        currentId: 'expense_categories',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Expense Categories'),

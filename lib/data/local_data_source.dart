@@ -135,6 +135,11 @@ class LocalDataSource implements DataRepository {
     return _db.countSuperAdmins();
   }
 
+  @override
+  Future<bool> changePassword(int userId, String newPassword) {
+    return _db.changePassword(userId, newPassword);
+  }
+
   // ========================================
   // PERMISSIONS
   // ========================================
@@ -266,8 +271,10 @@ class LocalDataSource implements DataRepository {
   }
 
   @override
-  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason) {
-    return _db.deactivateStudent(studentId, leftDate, leftReason);
+  Future<int> deactivateStudent(int studentId, String leftDate, String leftReason,
+      {String? leftTerm, String? leftSession}) {
+    return _db.deactivateStudent(studentId, leftDate, leftReason,
+        leftTerm: leftTerm, leftSession: leftSession);
   }
 
   @override

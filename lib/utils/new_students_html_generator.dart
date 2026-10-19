@@ -2,12 +2,16 @@ import 'package:intl/intl.dart';
 
 /// HTML report for the New Students screen, rendered via Android's native
 /// WebView print pipeline (see custom_report_pdf_generator.dart).
+///
+/// With [lefts] true it renders the Lefts tab instead: students deactivated
+/// in the term, with date left and reason.
 class NewStudentsHtmlGenerator {
   static String build({
     required List<Map<String, dynamic>> students,
     required Map<String, dynamic> schoolProfile,
     required String term,
     required String session,
+    bool lefts = false,
   }) {
     final schoolName = (schoolProfile['name'] ?? 'School Name').toString();
     final address = (schoolProfile['address'] ?? '').toString();
@@ -36,8 +40,8 @@ class NewStudentsHtmlGenerator {
           '<td>${_esc(fullName)}</td>'
           '<td>${_esc(classArm)}</td>'
           '<td class="center">${_esc(s['gender'])}</td>'
-          '<td class="center">${_esc(formatDate(s['dateOfAdmission']?.toString()))}</td>'
-          '<td>${_esc(s['parentName'])}</td>'
+          '<td class="center">${_esc(formatDate((lefts ? s['leftDate'] : s['dateOfAdmission'])?.toString()))}</td>'
+          '<td>${_esc(lefts ? s['leftReason'] : s['parentName'])}</td>'
           '<td>${_esc(s['parentPhone'])}</td>'
           '</tr>');
     }
@@ -64,19 +68,19 @@ class NewStudentsHtmlGenerator {
   ${address.isNotEmpty ? '<div class="muted">${_esc(address)}</div>' : ''}
   ${(phone.isNotEmpty || email.isNotEmpty) ? '<div class="muted">${[if (phone.isNotEmpty) 'Tel: ${_esc(phone)}', if (email.isNotEmpty) _esc(email)].join(' | ')}</div>' : ''}
   <hr>
-  <div class="title">NEW STUDENTS (CURRENT TERM REGISTRATIONS)</div>
+  <div class="title">${lefts ? 'STUDENTS WHO LEFT (DEACTIVATED)' : 'NEW STUDENTS (TERM REGISTRATIONS)'}</div>
   <div class="center"><span class="count-box">${students.length} Students | ${_esc(term)} - ${_esc(session)}</span></div>
   <div class="muted" style="text-align:right; margin-bottom:8px;">Generated: ${_esc(DateFormat('MMM d, yyyy - h:mm a').format(DateTime.now()))}</div>
 
   <table>
     <thead><tr>
       <th class="center">S/N</th><th>Adm. No</th><th>Student Name</th><th>Class/Arm</th>
-      <th class="center">Gender</th><th class="center">Date of Admission</th><th>Parent Name</th><th>Parent Phone</th>
+      <th class="center">Gender</th><th class="center">${lefts ? 'Date Left' : 'Date of Admission'}</th><th>${lefts ? 'Reason' : 'Parent Name'}</th><th>Parent Phone</th>
     </tr></thead>
     <tbody>$rows</tbody>
   </table>
 
-  <div class="footer-note">This report lists students with a registration fee bill for the current term/session.</div>
+  <div class="footer-note">${lefts ? 'This report lists students deactivated in the selected term/session.' : 'This report lists students with a registration fee bill for the selected term/session.'}</div>
 </body></html>
 ''';
   }

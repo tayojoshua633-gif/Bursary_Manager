@@ -10,6 +10,7 @@ import '../../../utils/pdf_export_helper.dart';
 import '../../../utils/write_guard.dart';
 import '../../expenses/expense_form_screen.dart';
 import '../../../widgets/quick_access_sidebar.dart';
+import '../../../utils/navigation_helper.dart';
 
 class SalaryPaymentRecordScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -309,16 +310,16 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
     }
 
     if (!mounted) return;
-    final result = await Navigator.push<bool>(
+    final result = await NavigationHelper.pushWithSidebar<bool>(
       context,
-      MaterialPageRoute(
-        builder: (_) => ExpenseFormScreen(
-          currentUser: widget.currentUser,
-          initialAmount: amountToPost,
-          initialCategory: 'Paid Salary',
-          initialDescription: 'STAFF SALARY FOR ${_selectedMonth.toUpperCase()}',
-        ),
+      page: ExpenseFormScreen(
+        currentUser: widget.currentUser,
+        initialAmount: amountToPost,
+        initialCategory: 'Paid Salary',
+        initialDescription: 'STAFF SALARY FOR ${_selectedMonth.toUpperCase()}',
       ),
+      currentUser: widget.currentUser,
+      pageId: 'expenditure/expenses',
     );
 
     if (result == true && mounted) {

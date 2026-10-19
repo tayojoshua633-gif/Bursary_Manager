@@ -21,11 +21,42 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
   // Google Drive state
   bool _isSignedInToGoogle = false;
   String? _googleUserEmail;
+  DateTime? _lastOnlineBackup;
 
   @override
   void initState() {
     super.initState();
     _checkGoogleSignIn();
+  }
+
+  /// Load the last online backup time. If this device has no record yet
+  /// (e.g. fresh install), fall back to the newest backup found in Drive.
+  Future<void> _loadLastOnlineBackup() async {
+    var last = await BackupReminderHelper.getLastOnlineBackup();
+    if (last == null && _isSignedInToGoogle) {
+      final backups = await GoogleDriveBackupHelper.listBackupsInDrive();
+      if (backups.isNotEmpty) {
+        last = (backups.first['modifiedTime'] as DateTime?)?.toLocal();
+        if (last != null) await BackupReminderHelper.recordOnlineBackup(last);
+      }
+    }
+    if (mounted) setState(() => _lastOnlineBackup = last);
+  }
+
+  String _formatLastBackup(DateTime time) {
+    final formatted = DateFormat('EEE, MMM d, yyyy h:mm a').format(time);
+    final diff = DateTime.now().difference(time);
+    final String ago;
+    if (diff.inMinutes < 1) {
+      ago = 'just now';
+    } else if (diff.inHours < 1) {
+      ago = '${diff.inMinutes} min ago';
+    } else if (diff.inDays < 1) {
+      ago = '${diff.inHours} hr${diff.inHours == 1 ? '' : 's'} ago';
+    } else {
+      ago = '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
+    }
+    return '$formatted ($ago)';
   }
 
   /// Check Google Sign-In status
@@ -42,6 +73,7 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
         _isLoading = false;
       });
     }
+    await _loadLastOnlineBackup();
   }
 
   /// Sign in to Google account
@@ -161,6 +193,8 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
     if (uploadResult['success']) {
       // Record backup
       await BackupReminderHelper.recordBackup();
+      await BackupReminderHelper.recordOnlineBackup();
+      if (mounted) setState(() => _lastOnlineBackup = DateTime.now());
     }
   }
 
@@ -464,6 +498,53 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
                             ? 'Upload your backups to Google Drive for cloud storage'
                             : 'Sign in to Google to enable cloud backup',
                         style: const TextStyle(color: Colors.grey),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Last online backup
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: _lastOnlineBackup == null
+                              ? Colors.orange.shade50
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: _lastOnlineBackup == null
+                                ? Colors.orange.shade200
+                                : Colors.grey.shade300,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.history,
+                              size: 20,
+                              color: _lastOnlineBackup == null
+                                  ? Colors.orange.shade700
+                                  : Colors.blue.shade700,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Last online backup:',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                  Text(
+                                    _lastOnlineBackup == null
+                                        ? 'Never backed up to Google Drive'
+                                        : _formatLastBackup(_lastOnlineBackup!),
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 16),
 

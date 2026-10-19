@@ -18,6 +18,12 @@ class AuthRoutes {
     router.post('/login', _login);
     router.post('/logout', _logout);
     router.get('/verify', _verifyToken);
+    // Requires a valid bearer token; the target user is taken from the token,
+    // never from the request body, so a caller can only change their own password.
+    router.post(
+      '/change-password',
+      Pipeline().addMiddleware(jwtMiddleware).addHandler(_changePassword),
+    );
 
     return router;
   }
@@ -71,6 +77,7 @@ class AuthRoutes {
             'id': user['id'],
             'username': user['username'],
             'userType': user['userType'],
+            'mustChangePassword': (user['mustChangePassword'] as int? ?? 0) == 1,
           },
         }),
         headers: {'Content-Type': 'application/json'},
@@ -131,6 +138,42 @@ class AuthRoutes {
     } catch (e) {
       return Response.internalServerError(
         body: jsonEncode({'valid': false, 'error': 'Verification failed: $e'}),
+        headers: {'Content-Type': 'application/json'},
+      );
+    }
+  }
+
+  /// POST /api/auth/change-password
+  /// Change the authenticated user's own password and clear mustChangePassword
+  Future<Response> _changePassword(Request request) async {
+    try {
+      final userId = getUserIdFromRequest(request);
+      if (userId == null) {
+        return Response(
+          401,
+          body: jsonEncode({'error': 'Unauthorized: no user context'}),
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+
+      final data = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final newPassword = data['newPassword'] as String?;
+      if (newPassword == null || newPassword.isEmpty) {
+        return Response(
+          400,
+          body: jsonEncode({'error': 'newPassword is required'}),
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+
+      final success = await _db.changePassword(userId, newPassword);
+      return Response.ok(
+        jsonEncode({'success': success}),
+        headers: {'Content-Type': 'application/json'},
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: jsonEncode({'error': 'Password change failed: $e'}),
         headers: {'Content-Type': 'application/json'},
       );
     }

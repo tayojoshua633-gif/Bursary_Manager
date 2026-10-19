@@ -6,6 +6,8 @@ import '../../data/database_helper_wrapper.dart';
 import '../../utils/expenses_pdf_generator.dart';
 import '../../utils/pdf_export_helper.dart';
 import 'expense_form_screen.dart';
+import '../../utils/navigation_helper.dart';
+import '../../widgets/quick_access_sidebar.dart';
 
 enum DateFilter { all, today, thisWeek, thisMonth, custom }
 
@@ -312,15 +314,15 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
   }
 
   Future<void> _navigateToAddExpense() async {
-    final result = await Navigator.push<bool>(
+    final result = await NavigationHelper.pushWithSidebar<bool>(
       context,
-      MaterialPageRoute(
-        builder: (_) => ExpenseFormScreen(
-          currentUser: widget.currentUser,
-          initialTerm: _selectedTerm,
-          initialSession: _selectedSession,
-        ),
+      page: ExpenseFormScreen(
+        currentUser: widget.currentUser,
+        initialTerm: _selectedTerm,
+        initialSession: _selectedSession,
       ),
+      currentUser: widget.currentUser,
+      pageId: 'expenditure/expenses',
     );
 
     if (result == true) {
@@ -329,14 +331,14 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
   }
 
   Future<void> _editExpense(Map<String, dynamic> expense) async {
-    final result = await Navigator.push<bool>(
+    final result = await NavigationHelper.pushWithSidebar<bool>(
       context,
-      MaterialPageRoute(
-        builder: (_) => ExpenseFormScreen(
-          currentUser: widget.currentUser,
-          expense: expense,
-        ),
+      page: ExpenseFormScreen(
+        currentUser: widget.currentUser,
+        expense: expense,
       ),
+      currentUser: widget.currentUser,
+      pageId: 'expenditure/expenses',
     );
 
     if (result == true) {
@@ -480,7 +482,13 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> with SingleTicker
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => QuickAccessScaffold(
+        group: QuickAccessGroup.expenditure,
+        currentId: 'expenses',
+        child: _buildScreenContent(context),
+      );
+
+  Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Expenses'),

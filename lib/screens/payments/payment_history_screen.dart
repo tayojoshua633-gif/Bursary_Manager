@@ -25,7 +25,9 @@ import '../../screens/settings/usb_printer_screen.dart';
 import '../../screens/billing/debt_notification_screen.dart';
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import '../../utils/payment_date_time_formatter.dart';
+import '../../utils/navigation_helper.dart';
 import '../../widgets/student_quick_access_bar.dart';
+import 'payment_receipt_screen.dart';
 
 class PaymentHistoryScreen extends StatefulWidget {
   final int studentId;
@@ -59,6 +61,7 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
   bool _loading = true;
   bool _exporting = false;
   bool _canEditPayments = false;
+  Map<String, dynamic>? _currentUser;
 
   String _activeTerm = "";
   String _activeSession = "";
@@ -87,8 +90,27 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
     if (mounted) {
       setState(() {
         _canEditPayments = canEdit;
+        _currentUser = currentUser;
       });
     }
+  }
+
+  // -----------------------------------------------------------
+  // RE-PRINT A SINGLE PAYMENT RECEIPT (PDF / JPEG / Thermal / USB)
+  // -----------------------------------------------------------
+  Future<void> _reprintReceipt(Map<String, dynamic> payment) async {
+    final paymentId = payment['id'] as int?;
+    if (paymentId == null) return;
+    await NavigationHelper.pushWithSidebar(
+      context,
+      page: PaymentReceiptScreen(
+        paymentId: paymentId,
+        studentId: widget.studentId,
+        showExportDialog: true,
+      ),
+      currentUser: _currentUser ?? {},
+      pageId: 'bills_payment/payments',
+    );
   }
 
   Future<void> _load() async {
@@ -1733,9 +1755,8 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
                   textAlign: _canEditPayments ? TextAlign.left : TextAlign.right,
                 ),
               ),
-              // Space for edit and delete button columns
-              if (_canEditPayments)
-                const SizedBox(width: 96), // Space for 2 IconButtons
+              // Space for print (and edit/delete) button columns
+              SizedBox(width: _canEditPayments ? 124 : 28),
             ],
           ),
         ),
@@ -1819,8 +1840,17 @@ class _PaymentHistoryScreenState extends State<PaymentHistoryScreen> {
                           textAlign: _canEditPayments ? TextAlign.left : TextAlign.right,
                         ),
                       ),
+                      // Re-print receipt (available to all users)
+                      IconButton(
+                        icon: const Icon(Icons.print, size: 20, color: Colors.indigo),
+                        onPressed: () => _reprintReceipt(payment),
+                        tooltip: 'Re-print Receipt',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
                       // Edit and Delete buttons (only for users with payments_edit permission)
                       if (_canEditPayments) ...[
+                        const SizedBox(width: 4),
                         IconButton(
                           icon: const Icon(Icons.edit, size: 20, color: Colors.orange),
                           onPressed: () => _showEditPaymentDialog(payment),

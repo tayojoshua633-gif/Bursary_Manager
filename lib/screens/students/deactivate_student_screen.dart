@@ -3,6 +3,7 @@ import 'package:bursary_manager/data/database_helper_wrapper.dart';
 import '../../utils/sibling_helper.dart';
 import '../../widgets/sibling_mark.dart';
 import '../../widgets/student_quick_actions_panel.dart';
+import '../../widgets/term_session_filter.dart';
 
 class DeactivateStudentScreen extends StatefulWidget {
   const DeactivateStudentScreen({super.key});
@@ -26,10 +27,29 @@ class _DeactivateStudentScreenState extends State<DeactivateStudentScreen> {
   int? _selectedArmFilter;
   Set<String> _siblingPhones = {};
 
+  // Term/session the deactivation is recorded under (defaults to the active
+  // term; can be set to an earlier term when recording a departure late).
+  List<String> _sessions = [];
+  String? _leftSession;
+  String? _leftTerm;
+
   @override
   void initState() {
     super.initState();
+    _loadTermSession();
     _loadAll();
+  }
+
+  Future<void> _loadTermSession() async {
+    final term = await db.getActiveTerm();
+    final session = (await db.getActiveSession())?['sessionName'] as String?;
+    final sessions = await db.getAllSessions();
+    if (!mounted) return;
+    setState(() {
+      _leftTerm = term;
+      _leftSession = session;
+      _sessions = TermSessionFilter.sessionNames(sessions, session);
+    });
   }
 
   @override
@@ -115,6 +135,11 @@ class _DeactivateStudentScreenState extends State<DeactivateStudentScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("Are you sure you want to deactivate $name?"),
+            const SizedBox(height: 8),
+            Text(
+              "This will be recorded as left in ${_leftTerm ?? ''} ${_leftSession ?? ''}.",
+              style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 16),
             TextField(
               controller: _reasonCtrl,
@@ -149,11 +174,12 @@ class _DeactivateStudentScreenState extends State<DeactivateStudentScreen> {
       final leftDate = DateTime.now().toIso8601String();
       final leftReason = reason.isEmpty ? "Not specified" : reason;
       
-      // FIXED: Use positional parameters instead of named
       await db.deactivateStudent(
         id,
         leftDate,
         leftReason,
+        leftTerm: _leftTerm,
+        leftSession: _leftSession,
       );
       
       if (mounted) {
@@ -188,6 +214,28 @@ class _DeactivateStudentScreenState extends State<DeactivateStudentScreen> {
         onReturn: _loadAll,
         body: Column(
         children: [
+          // TERM/SESSION THE DEACTIVATION IS RECORDED UNDER
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+            child: TermSessionFilter(
+              sessions: _sessions,
+              session: _leftSession,
+              term: _leftTerm,
+              onSessionChanged: (v) => setState(() => _leftSession = v),
+              onTermChanged: (v) => setState(() => _leftTerm = v),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                "Students you deactivate here are recorded as left in the term selected above.",
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+              ),
+            ),
+          ),
+
           // CLASS AND ARM FILTER DROPDOWNS
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),

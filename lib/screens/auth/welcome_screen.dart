@@ -1,10 +1,14 @@
 // lib/screens/auth/welcome_screen.dart
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../navigation/sidebar_scaffold.dart';
 import '../../utils/sound_service.dart';
 import '../home_screen.dart';
+import 'create_super_admin_screen.dart';
+import 'force_change_password_screen.dart';
+import 'forgot_password_screen.dart';
 
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
@@ -22,10 +26,30 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
 
+  /// Standalone/server device (not a connected client): only here can a
+  /// super admin recover a forgotten password.
+  bool _isMainDevice = false;
+
   @override
   void initState() {
     super.initState();
     debugPrint('🔵 WelcomeScreen initialized');
+    _checkFirstRun();
+  }
+
+  /// Fresh install (no super admin yet): go straight to "Create Super Admin".
+  Future<void> _checkFirstRun() async {
+    if (kIsWeb) return;
+    final prefs = await SharedPreferences.getInstance();
+    if ((prefs.getString('app_mode') ?? 'standalone') == 'client') return;
+    if (!mounted) return;
+    setState(() => _isMainDevice = true);
+    if (await _db.needsInitialSuperAdmin() && mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const CreateSuperAdminScreen()),
+      );
+    }
   }
 
   @override
@@ -120,7 +144,20 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
       if (!mounted) return;
 
-      if (user != null) {
+      if (user != null && (user['mustChangePassword'] as int? ?? 0) == 1) {
+        // Still on the old default password: change it first. The login is
+        // only remembered once the new password is saved.
+        SoundService.instance.playSuccess();
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ForceChangePasswordScreen(
+              currentUser: user,
+              saveLogin: () => _saveUserDataAfterLogin(user),
+            ),
+          ),
+        );
+      } else if (user != null) {
         // ✅ FIXED: Save user data to SharedPreferences
         await _saveUserDataAfterLogin(user);
 
@@ -344,6 +381,18 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                                       ),
                                     ),
                             ),
+
+                            if (_isMainDevice)
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
+                                  ),
+                                  child: const Text('Forgot password?'),
+                                ),
+                              ),
                           ],
                         ),
                       ),
