@@ -36,7 +36,8 @@ import 'reports/unified_report_screen.dart';
 import '../utils/active_session_term_notifier.dart';
 import 'guide/app_guide_screen.dart';
 import 'examinations/examination_menu_screen.dart';
-import 'web/web_view_screen.dart';
+import 'updates/updates_screen.dart';
+import '../utils/update_checker.dart';
 import '../widgets/whats_new_dialog.dart';
 
 // Quick access imports
@@ -85,6 +86,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _loadLinkedSchools();
     _loadActiveSessionTerm();
     _loadLicenseStatus();
+    _checkForUpdates();
     ActiveSessionTermNotifier.listenable.addListener(_loadActiveSessionTerm);
     _uptimeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
@@ -102,6 +104,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _uptimeTimer?.cancel();
     _schoolTabController?.dispose();
     super.dispose();
+  }
+
+  /// Checks the website for a newer release and, unless the user already
+  /// chose "Later" for that version, shows a one-time prompt with a download
+  /// link.
+  Future<void> _checkForUpdates() async {
+    final info = await UpdateChecker.check();
+    if (info == null || !mounted) return;
+    if (!await UpdateChecker.shouldPrompt(info) || !mounted) return;
+
+    ScaffoldMessenger.of(context).showMaterialBanner(
+      MaterialBanner(
+        leading: const Icon(Icons.system_update, color: Colors.orange),
+        content: Text(
+          'A new version of School Bursary Manager (v${info.latestVersion}) '
+          'is available. You\'re on v$kAppVersion.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              UpdateChecker.dismiss(info.latestVersion);
+            },
+            child: const Text('LATER'),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.download),
+            label: const Text('DOWNLOAD'),
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              _navigateWithSidebar(context, const UpdatesScreen(), 'updates');
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadAppMode() async {
@@ -1056,17 +1094,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
 
                     // Updates
-                    _menuCard(
-                      context,
-                      title: 'Updates',
-                      subtitle: 'Latest app updates',
-                      icon: Icons.system_update_outlined,
-                      color: Colors.cyan,
-                      page: const WebViewScreen(
-                        url: 'https://tysolutions.com.ng/apps/bursary-manager.html',
-                        title: 'Updates',
-                      ),
-                      pageId: 'updates',
+                    ValueListenableBuilder<UpdateInfo?>(
+                      valueListenable: UpdateChecker.latest,
+                      builder: (context, info, _) {
+                        final hasUpdate = info?.isUpdateAvailable ?? false;
+                        return _menuCard(
+                          context,
+                          title: 'Updates',
+                          subtitle: hasUpdate
+                              ? 'v${info!.latestVersion} available'
+                              : 'Latest app updates',
+                          icon: Icons.system_update_outlined,
+                          color: Colors.cyan,
+                          page: const UpdatesScreen(),
+                          pageId: 'updates',
+                          badge: hasUpdate ? 'NEW' : null,
+                        );
+                      },
                     ),
                   ],
                 ), // GridView.extent
@@ -1242,6 +1286,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     required Color color,
     required Widget page,
     String? pageId,
+    String? badge,
   }) {
     final ds = DisplaySettingsProvider.of(context);
 
@@ -1285,13 +1330,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                padding: EdgeInsets.all(ds.cardPadding),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.2),
-                  shape: BoxShape.circle,
+              Badge(
+                isLabelVisible: badge != null,
+                label: Text(badge ?? ''),
+                child: Container(
+                  padding: EdgeInsets.all(ds.cardPadding),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon, size: ds.iconSize * 1.6, color: color),
                 ),
-                child: Icon(icon, size: ds.iconSize * 1.6, color: color),
               ),
               SizedBox(height: ds.cardPadding * 0.75),
               Text(

@@ -6,10 +6,14 @@ class WebViewScreen extends StatefulWidget {
   final String url;
   final String title;
 
+  /// Optional widget shown above the page (e.g. an update-status banner).
+  final Widget? header;
+
   const WebViewScreen({
     super.key,
     required this.url,
     required this.title,
+    this.header,
   });
 
   @override
@@ -86,7 +90,19 @@ class _WebViewScreenState extends State<WebViewScreen> {
           ),
         ],
       ),
-      body: Stack(
+      body: widget.header == null
+          ? _buildBody()
+          : Column(
+              children: [
+                widget.header!,
+                Expanded(child: _buildBody()),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildBody() {
+    return Stack(
         children: [
           if (_hasError)
             Center(
@@ -114,7 +130,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
           if (_isLoading)
             const LinearProgressIndicator(),
         ],
-      ),
-    );
+      );
   }
 }

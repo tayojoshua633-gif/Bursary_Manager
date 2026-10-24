@@ -382,6 +382,12 @@ class RemoteDataSource implements DataRepository {
   }
 
   @override
+  Future<List<Map<String, dynamic>>> getAdmissionRegister() async {
+    final response = await _request('GET', '/api/students/admission-register');
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  @override
   Future<Map<String, dynamic>?> getStudentById(int id) async {
     final response = await _request('GET', '/api/students/$id');
     return response != null ? Map<String, dynamic>.from(response) : null;

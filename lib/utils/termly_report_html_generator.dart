@@ -23,6 +23,8 @@ class TermlyReportHtmlGenerator {
     required double totalOutstanding,
     required Map<String, int> newIntakeByClass,
     required int totalNewIntake,
+    required Map<String, int> leftByClass,
+    required int totalLeft,
     required int billsPrinted,
     required int receiptsPrinted,
     required int paymentHistoryPrinted,
@@ -67,6 +69,10 @@ class TermlyReportHtmlGenerator {
         .join();
 
     final newIntakeRows = newIntakeByClass.entries
+        .map((e) => '<div class="row"><span>${_esc(e.key)}</span><span>${e.value} students</span></div>')
+        .join();
+
+    final leftRows = leftByClass.entries
         .map((e) => '<div class="row"><span>${_esc(e.key)}</span><span>${e.value} students</span></div>')
         .join();
 
@@ -185,9 +191,11 @@ class TermlyReportHtmlGenerator {
     <div class="row total-row red-total"><span>Total Outstanding Debt:</span><span>N ${f.format(totalOutstanding)}</span></div>
   </div>
 
-  <div class="section-title" style="color:#6A1B9A;">NEW INTAKE REPORT</div>
+  <div class="section-title" style="color:#6A1B9A;">NEW INTAKE &amp; LEFT REPORT</div>
   <div class="summary-box purple-box">
     ${newIntakeByClass.isEmpty ? '<div class="center muted">No new students registered this term</div>' : '$newIntakeRows<div class="row total-row purple-total"><span>TOTAL NEW INTAKE:</span><span>$totalNewIntake</span></div>'}
+    <div class="row" style="margin-top:12px;"><strong style="color:#C62828;">STUDENTS WHO LEFT</strong></div>
+    ${leftByClass.isEmpty ? '<div class="center muted">No students left this term</div>' : '$leftRows<div class="row total-row purple-total"><span>TOTAL LEFT:</span><span>$totalLeft</span></div>'}
   </div>
 
   <div class="section-title" style="color:#00838F;">THERMAL PRINTING REPORT</div>

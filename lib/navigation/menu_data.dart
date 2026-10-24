@@ -8,6 +8,7 @@ import '../screens/classes/class_list_screen.dart';
 import '../screens/sessions/session_term_management_screen.dart';
 import '../screens/students/student_list_screen.dart';
 import '../screens/students/new_students_screen.dart';
+import '../screens/students/admission_register_screen.dart';
 import '../screens/students/student_promotion_screen.dart';
 import '../screens/students/deactivate_student_screen.dart';
 import '../screens/students/inactive_students_screen.dart';
@@ -72,7 +73,7 @@ import '../screens/menus/stock_sales_menu.dart';
 import '../screens/menus/expenditure_menu.dart';
 import '../screens/menus/staff_management_menu.dart';
 import '../screens/menus/preferences_menu.dart';
-import '../screens/web/web_view_screen.dart';
+import '../screens/updates/updates_screen.dart';
 
 /// Represents a single menu item in the sidebar
 class SidebarMenuItem {
@@ -118,10 +119,7 @@ class MenuData {
           title: 'Updates',
           icon: Icons.system_update_outlined,
           color: Colors.cyan,
-          pageBuilder: (_) => const WebViewScreen(
-            url: 'https://tysolutions.com.ng/apps/bursary-manager.html',
-            title: 'Updates',
-          ),
+          pageBuilder: (_) => const UpdatesScreen(),
         ),
 
         // School Management
@@ -222,6 +220,14 @@ class MenuData {
               color: Colors.red,
               permissionModule: 'debtors_report',
               pageBuilder: (_) => const DebtorsListScreen(),
+            ),
+            SidebarMenuItem(
+              id: 'student_management/admission_register',
+              title: 'Admission Register',
+              icon: Icons.menu_book_outlined,
+              color: Colors.indigo,
+              permissionModule: 'students_view',
+              pageBuilder: (_) => const AdmissionRegisterScreen(),
             ),
           ],
         ),

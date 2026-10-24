@@ -17,6 +17,7 @@ class StudentsRoutes {
     router.get('/active', _getActiveStudents);
     router.get('/with-details', _getActiveStudentsWithDetails);
     router.get('/inactive', _getInactiveStudents);
+    router.get('/admission-register', _getAdmissionRegister);
     router.get('/<id>', _getStudent);
     router.post('/', _createStudent);
     router.put('/<id>', _updateStudent);
@@ -109,6 +110,24 @@ class StudentsRoutes {
     } catch (e) {
       return Response.internalServerError(
         body: jsonEncode({'error': 'Failed to get inactive students: $e'}),
+        headers: {'Content-Type': 'application/json'},
+      );
+    }
+  }
+
+  /// GET /api/students/admission-register
+  /// All students (active + inactive) with admission term/session and class
+  Future<Response> _getAdmissionRegister(Request request) async {
+    try {
+      final students = await _db.getAdmissionRegister();
+
+      return Response.ok(
+        jsonEncode(students),
+        headers: {'Content-Type': 'application/json'},
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: jsonEncode({'error': 'Failed to get admission register: $e'}),
         headers: {'Content-Type': 'application/json'},
       );
     }

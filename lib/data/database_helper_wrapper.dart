@@ -315,6 +315,11 @@ class DatabaseHelperWrapper {
     return repo.getInactiveStudents();
   }
 
+  Future<List<Map<String, dynamic>>> getAdmissionRegister() async {
+    final repo = await _repository;
+    return repo.getAdmissionRegister();
+  }
+
   Future<Map<String, dynamic>?> getStudentById(int id) async {
     final repo = await _repository;
     return repo.getStudentById(id);

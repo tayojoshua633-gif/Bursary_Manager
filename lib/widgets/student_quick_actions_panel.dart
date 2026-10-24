@@ -10,6 +10,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../screens/students/student_list_screen.dart';
 import '../screens/students/student_form_screen.dart';
 import '../screens/students/batch_student_upload_screen.dart';
 import '../screens/students/new_students_screen.dart';
@@ -32,6 +33,7 @@ enum StudentQuickAction {
   deactivate,
   inactive,
   siblings,
+  admissionRegister,
 }
 
 /// Static helpers for wiring [StudentQuickActionsPanel] into a screen's
@@ -180,6 +182,18 @@ class _StudentQuickActionsPanelState extends State<StudentQuickActionsPanel> {
     }
 
     final buttons = <Widget>[];
+
+    // The student list builds its own copy of this panel (with a reset
+    // action for this button), so this is only hidden if it hosts this one.
+    if (current != StudentQuickAction.studentList) {
+      buttons.add(_button(
+        label: 'Student List',
+        icon: Icons.people,
+        color: Colors.indigo,
+        ds: ds,
+        onTap: () => _open(const StudentListScreen(), 'student_management/students'),
+      ));
+    }
 
     if (_canManageStudents && current != StudentQuickAction.register) {
       buttons.add(_button(

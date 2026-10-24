@@ -485,6 +485,7 @@ class _UnifiedReportScreenState extends State<UnifiedReportScreen>
             ),
             const SizedBox(height: 4),
             Text('New Intake: ${d.totalNewIntake} student(s)', style: const TextStyle(fontSize: 12.5)),
+            Text('Left: ${d.totalLeft} student(s)', style: const TextStyle(fontSize: 12.5)),
             const SizedBox(height: 4),
             Text(
               'Printing (all-time, not term-scoped): ${d.totalPrints} total prints',

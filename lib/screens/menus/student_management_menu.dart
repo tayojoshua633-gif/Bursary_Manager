@@ -5,6 +5,7 @@ import '../../utils/permission_helper.dart';
 import '../../navigation/sidebar_scaffold.dart';
 import '../students/student_list_screen.dart';
 import '../students/new_students_screen.dart';
+import '../students/admission_register_screen.dart';
 import '../students/student_promotion_screen.dart';
 import '../students/deactivate_student_screen.dart';
 import '../students/inactive_students_screen.dart';
@@ -102,6 +103,16 @@ class StudentManagementMenu extends StatelessWidget {
             color: Colors.red,
             page: const DebtorsListScreen(),
             pageId: 'student_management/debtors',
+          ),
+          _permissionMenuCard(
+            context,
+            module: 'students_view',
+            title: 'Admission Register',
+            subtitle: 'Generate by session/term',
+            icon: Icons.menu_book_outlined,
+            color: Colors.indigo,
+            page: const AdmissionRegisterScreen(),
+            pageId: 'student_management/admission_register',
           ),
         ],
       ),

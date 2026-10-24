@@ -38,6 +38,10 @@ class TermlyReportData {
   final Map<String, int> newIntakeByClass;
   final int totalNewIntake;
 
+  // Students who left (deactivated in the active term/session)
+  final Map<String, int> leftByClass;
+  final int totalLeft;
+
   // Printing (all-time, not term-scoped — see class doc on loadTermlyReportData)
   final int billsPrinted;
   final int receiptsPrinted;
@@ -74,6 +78,8 @@ class TermlyReportData {
     required this.totalOutstanding,
     required this.newIntakeByClass,
     required this.totalNewIntake,
+    required this.leftByClass,
+    required this.totalLeft,
     required this.billsPrinted,
     required this.receiptsPrinted,
     required this.paymentHistoryPrinted,
@@ -278,6 +284,27 @@ Future<TermlyReportData> loadTermlyReportData({
         totalNewIntake++;
       }
     }
+  }
+
+  // Step 6b: Students who left — deactivated in the active term/session
+  // (same rule as New Students → Lefts tab: isActive = 0 + leftTerm/leftSession)
+  final leftByClass = <String, int>{};
+  int totalLeft = 0;
+
+  final leftRaw = await database.rawQuery('''
+    SELECT c.name as className, COUNT(*) as count
+    FROM students s
+    LEFT JOIN classes c ON s.classId = c.id
+    WHERE s.isActive = 0 AND s.leftTerm = ? AND s.leftSession = ?
+    GROUP BY s.classId
+    ORDER BY c.name
+  ''', [activeTerm, activeSession]);
+
+  for (var row in leftRaw) {
+    final className = row['className']?.toString() ?? 'Unknown';
+    final count = (row['count'] as int?) ?? 0;
+    leftByClass[className] = (leftByClass[className] ?? 0) + count;
+    totalLeft += count;
   }
 
   // Step 7: Thermal Printing Report (all-time, not term-scoped)
@@ -498,6 +525,8 @@ Future<TermlyReportData> loadTermlyReportData({
     totalOutstanding: totalOutstanding,
     newIntakeByClass: newIntakeByClass,
     totalNewIntake: totalNewIntake,
+    leftByClass: leftByClass,
+    totalLeft: totalLeft,
     billsPrinted: billsPrinted,
     receiptsPrinted: receiptsPrinted,
     paymentHistoryPrinted: paymentHistoryPrinted,

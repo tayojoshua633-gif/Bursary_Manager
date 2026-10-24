@@ -3712,6 +3712,51 @@ class DatabaseHelper {
     ''');
   }
 
+  /// Every student ever admitted (active and inactive) for the Admission
+  /// Register. admissionTerm/admissionSession come from the student's earliest
+  /// bill carrying a registration fee (same label rule as New Students);
+  /// admittedClassName/admittedArmName from the first promotion's "from"
+  /// class, else the current class when the student was never promoted.
+  Future<List<Map<String, dynamic>>> getAdmissionRegister() async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT
+        s.*,
+        c.name AS className,
+        a.name AS armName,
+        COALESCE(pc.name, c.name) AS admittedClassName,
+        CASE WHEN fp.fromClassId IS NULL THEN a.name ELSE pa.name END AS admittedArmName,
+        rb.term AS admissionTerm,
+        rb.session AS admissionSession
+      FROM students s
+      LEFT JOIN classes c ON s.classId = c.id
+      LEFT JOIN arms a ON s.armId = a.id
+      LEFT JOIN promotion_history fp ON fp.id = (
+        SELECT ph.id FROM promotion_history ph
+        WHERE ph.studentId = s.id
+        ORDER BY ph.promotionDate ASC, ph.id ASC
+        LIMIT 1
+      )
+      LEFT JOIN classes pc ON fp.fromClassId = pc.id
+      LEFT JOIN arms pa ON fp.fromArmId = pa.id
+      LEFT JOIN student_bills rb ON rb.id = (
+        SELECT b.id FROM student_bills b
+        WHERE b.studentId = s.id
+          AND EXISTS (
+            SELECT 1 FROM student_fee_breakdown f
+            WHERE f.billId = b.id
+              AND (LOWER(COALESCE(f.label, '')) LIKE '%registration%'
+                OR LOWER(COALESCE(f.label, '')) LIKE '%reg. fee%'
+                OR LOWER(COALESCE(f.label, '')) LIKE '%reg fee%'
+                OR LOWER(COALESCE(f.label, '')) IN ('reg.', 'reg'))
+          )
+        ORDER BY b.session ASC, b.term ASC, b.id ASC
+        LIMIT 1
+      )
+      ORDER BY s.id ASC
+    ''');
+  }
+
   Future<Map<String, dynamic>?> getStudentById(int id) async {
     final db = await database;
     final rows = await db.query('students',

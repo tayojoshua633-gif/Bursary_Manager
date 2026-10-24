@@ -239,6 +239,11 @@ class LocalDataSource implements DataRepository {
   }
 
   @override
+  Future<List<Map<String, dynamic>>> getAdmissionRegister() {
+    return _db.getAdmissionRegister();
+  }
+
+  @override
   Future<Map<String, dynamic>?> getStudentById(int id) {
     return _db.getStudentById(id);
   }

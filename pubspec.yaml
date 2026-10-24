@@ -2,7 +2,7 @@ name: bursary_manager
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 15.9.8+1
+version: 16.0.0+1
 
 environment:
   sdk: ^3.10.0
@@ -37,7 +37,7 @@ dependencies:
   pdf: ^3.10.4
   printing: ^5.12.0
   flutter_native_html_to_pdf: ^3.1.0  # Android-native (WebView print) HTML->PDF, used for Custom Report export on Android to avoid the pure-Dart pdf package's memory usage
-  excel: ^4.0.6  # ÃƒÂ¢Ã¢â‚¬Â Ã‚Â UPDATED from 2.0.3 to 4.0.6 for new API
+  excel: ^4.0.6  # ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â UPDATED from 2.0.3 to 4.0.6 for new API
   csv: ^6.0.0  # CSV file parsing support
 
   file_picker: ^8.0.0

@@ -288,8 +288,30 @@ class _StudentListScreenState extends State<StudentListScreen> {
     );
   }
 
+  // "Student List" quick action on the list itself: clear the search and
+  // filters, close the phone drawer if it's open, and reload.
+  void _showFullList() {
+    if (MediaQuery.of(context).size.shortestSide < 700) {
+      Navigator.of(context).pop();
+    }
+    _searchCtrl.clear();
+    setState(() {
+      _selectedClassFilter = null;
+      _selectedArmFilter = null;
+    });
+    _loadStudents();
+  }
+
   Widget _buildQuickActionsPanel(DisplaySettings ds) {
     final buttons = <Widget>[];
+
+    buttons.add(_quickActionButton(
+      label: 'Student List',
+      icon: Icons.people,
+      color: Colors.indigo,
+      ds: ds,
+      onTap: _showFullList,
+    ));
 
     if (_canManageStudents) {
       buttons.add(_quickActionButton(

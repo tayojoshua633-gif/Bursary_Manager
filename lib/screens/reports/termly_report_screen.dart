@@ -45,6 +45,8 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
   // New Intake Report
   Map<String, int> newIntakeByClass = {};
   int totalNewIntake = 0;
+  Map<String, int> leftByClass = {};
+  int totalLeft = 0;
 
   // Printing Report
   int billsPrinted = 0;
@@ -105,6 +107,8 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
 
       newIntakeByClass = r.newIntakeByClass;
       totalNewIntake = r.totalNewIntake;
+      leftByClass = r.leftByClass;
+      totalLeft = r.totalLeft;
 
       billsPrinted = r.billsPrinted;
       receiptsPrinted = r.receiptsPrinted;
@@ -162,6 +166,8 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
         totalOutstanding: totalOutstanding,
         newIntakeByClass: newIntakeByClass,
         totalNewIntake: totalNewIntake,
+        leftByClass: leftByClass,
+        totalLeft: totalLeft,
         billsPrinted: billsPrinted,
         receiptsPrinted: receiptsPrinted,
         paymentHistoryPrinted: paymentHistoryPrinted,
@@ -446,7 +452,7 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
                                 Icon(Icons.person_add, color: Colors.purple.shade700, size: 28),
                                 const SizedBox(width: 8),
                                 const Text(
-                                  'NEW INTAKE REPORT',
+                                  'NEW INTAKE & LEFT REPORT',
                                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                                 ),
                               ],
@@ -481,6 +487,45 @@ class _TermlyReportScreenState extends State<TermlyReportScreen> {
                                 "$totalNewIntake",
                                 bold: true,
                                 color: Colors.purple.shade800,
+                              ),
+                            ],
+
+                            const SizedBox(height: 20),
+                            Row(
+                              children: [
+                                Icon(Icons.person_off, color: Colors.red.shade600, size: 22),
+                                const SizedBox(width: 8),
+                                const Text(
+                                  'STUDENTS WHO LEFT',
+                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                            const Divider(height: 20),
+
+                            if (leftByClass.isEmpty)
+                              Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Text(
+                                    "No students left this term",
+                                    style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                                  ),
+                                ),
+                              )
+                            else ...[
+                              ...leftByClass.entries.map((entry) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: _row(entry.key, "${entry.value} students"),
+                                );
+                              }),
+                              const Divider(height: 25),
+                              _row(
+                                "TOTAL LEFT",
+                                "$totalLeft",
+                                bold: true,
+                                color: Colors.red.shade800,
                               ),
                             ],
                           ],

@@ -118,6 +118,10 @@ abstract class DataRepository {
   /// Get only inactive students
   Future<List<Map<String, dynamic>>> getInactiveStudents();
 
+  /// All students (active + inactive) with admission term/session and the
+  /// class they were admitted into, for the Admission Register
+  Future<List<Map<String, dynamic>>> getAdmissionRegister();
+
   /// Get student by ID
   Future<Map<String, dynamic>?> getStudentById(int id);
 

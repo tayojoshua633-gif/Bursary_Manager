@@ -31,6 +31,9 @@ class TermlyReportPDFGenerator {
     // New intake data
     required Map<String, int> newIntakeByClass,
     required int totalNewIntake,
+    // Students who left
+    required Map<String, int> leftByClass,
+    required int totalLeft,
     // Printing data
     required int billsPrinted,
     required int receiptsPrinted,
@@ -71,6 +74,8 @@ class TermlyReportPDFGenerator {
         totalOutstanding: totalOutstanding,
         newIntakeByClass: newIntakeByClass,
         totalNewIntake: totalNewIntake,
+        leftByClass: leftByClass,
+        totalLeft: totalLeft,
         billsPrinted: billsPrinted,
         receiptsPrinted: receiptsPrinted,
         paymentHistoryPrinted: paymentHistoryPrinted,
@@ -143,7 +148,7 @@ class TermlyReportPDFGenerator {
           pw.SizedBox(height: 20),
 
           // New Intake Section
-          _buildNewIntakeSection(newIntakeByClass, totalNewIntake),
+          _buildNewIntakeSection(newIntakeByClass, totalNewIntake, leftByClass, totalLeft),
           pw.SizedBox(height: 20),
 
           // Printing Section
@@ -478,12 +483,14 @@ class TermlyReportPDFGenerator {
   static pw.Widget _buildNewIntakeSection(
     Map<String, int> newIntakeByClass,
     int totalNewIntake,
+    Map<String, int> leftByClass,
+    int totalLeft,
   ) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
         pw.Text(
-          'NEW INTAKE REPORT',
+          'NEW INTAKE & LEFT REPORT',
           style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.purple700),
         ),
         pw.SizedBox(height: 6),
@@ -520,6 +527,37 @@ class TermlyReportPDFGenerator {
                 _buildRow(
                   'TOTAL NEW INTAKE:',
                   '$totalNewIntake',
+                  bold: true,
+                  fontSize: 13,
+                ),
+              ],
+              pw.SizedBox(height: 14),
+              pw.Align(
+                alignment: pw.Alignment.centerLeft,
+                child: pw.Text(
+                  'STUDENTS WHO LEFT',
+                  style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.red700),
+                ),
+              ),
+              pw.SizedBox(height: 6),
+              if (leftByClass.isEmpty)
+                pw.Center(
+                  child: pw.Text(
+                    'No students left this term',
+                    style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700),
+                  ),
+                )
+              else ...[
+                ...leftByClass.entries.map((entry) {
+                  return pw.Padding(
+                    padding: const pw.EdgeInsets.only(bottom: 6),
+                    child: _buildRow(entry.key, '${entry.value} students'),
+                  );
+                }),
+                pw.Divider(height: 16, thickness: 1.5, color: PdfColors.purple400),
+                _buildRow(
+                  'TOTAL LEFT:',
+                  '$totalLeft',
                   bold: true,
                   fontSize: 13,
                 ),
