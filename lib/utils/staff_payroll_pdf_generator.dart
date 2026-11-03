@@ -40,14 +40,24 @@ class StaffPayrollPDFGenerator {
     double totalIncentives = 0;
     double totalLoanDeductions = 0;
     double totalPenalties = 0;
-    double totalNetSalary = 0;
+    double totalOwingBroughtForward = 0;
+    double totalNetSalary = 0; // what is actually paid out (staff who owe get ₦0)
+    double totalStaffOwing = 0;
 
     for (var staff in payrollData) {
       totalBasicSalary += (staff['basicSalary'] as num).toDouble();
       totalIncentives += (staff['totalIncentives'] as num).toDouble();
-      totalLoanDeductions += (staff['loanDeduction'] as num).toDouble();
+      totalLoanDeductions += _loanTotal(staff);
       totalPenalties += (staff['totalDeductions'] as num).toDouble();
-      totalNetSalary += (staff['netSalary'] as num).toDouble();
+      totalOwingBroughtForward += (staff['owingBroughtForward'] as num? ?? 0).toDouble();
+      final payable = _payable(staff);
+      if (staff['paidWithMonth'] != null) {
+        // already counted in the later salary that paid it
+      } else if (payable > 0) {
+        totalNetSalary += payable;
+      } else {
+        totalStaffOwing -= payable;
+      }
     }
 
     // Create PDF pages
@@ -68,6 +78,8 @@ class StaffPayrollPDFGenerator {
             totalPenalties,
             totalNetSalary,
             payrollData.length,
+            totalOwingBroughtForward: totalOwingBroughtForward,
+            totalStaffOwing: totalStaffOwing,
           ),
           pw.SizedBox(height: 16),
 
@@ -151,8 +163,10 @@ class StaffPayrollPDFGenerator {
     double totalLoanDeductions,
     double totalPenalties,
     double totalNetSalary,
-    int staffCount,
-  ) {
+    int staffCount, {
+    double totalOwingBroughtForward = 0,
+    double totalStaffOwing = 0,
+  }) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
       decoration: pw.BoxDecoration(
@@ -167,7 +181,11 @@ class StaffPayrollPDFGenerator {
           _summaryItem('Total Incentives', _currencyFormat.format(totalIncentives)),
           _summaryItem('Loan Deductions', _currencyFormat.format(totalLoanDeductions)),
           _summaryItem('Penalties', _currencyFormat.format(totalPenalties)),
+          if (totalOwingBroughtForward > 0)
+            _summaryItem('Owing B/F', _currencyFormat.format(totalOwingBroughtForward)),
           _summaryItem('Net Payroll', _currencyFormat.format(totalNetSalary), isHighlighted: true),
+          if (totalStaffOwing > 0)
+            _summaryItem('Owed by Staff', _currencyFormat.format(totalStaffOwing)),
         ],
       ),
     );
@@ -196,20 +214,39 @@ class StaffPayrollPDFGenerator {
     );
   }
 
+  /// Loan taken from this salary: this month's repayment plus missed months.
+  static double _loanTotal(Map<String, dynamic> staff) =>
+      (staff['loanDeduction'] as num).toDouble() + (staff['loanArrears'] as num? ?? 0).toDouble();
+
+  /// Final amount for the month after arrears and any amount owed from a
+  /// settled month — matches the Total Payable shown on the payroll card.
+  static double _payable(Map<String, dynamic> staff) =>
+      (staff['totalPayable'] as num? ?? staff['netSalary'] as num).toDouble();
+
+  static String _statusLabel(Map<String, dynamic> staff) {
+    if (staff['paidWithMonth'] != null) return 'Paid with ${staff['paidWithMonth']}';
+    if (staff['isSettled'] == true) return 'Settled – owing';
+    if (staff['isPaid'] == true) return 'Paid';
+    return _payable(staff) < -0.005 ? 'Owing' : 'Not paid';
+  }
+
   static pw.Widget _buildPayrollTable(List<Map<String, dynamic>> payrollData) {
     return pw.Table(
       border: pw.TableBorder.all(color: PdfColors.grey300),
       columnWidths: {
-        0: const pw.FixedColumnWidth(25),  // S/N
+        0: const pw.FixedColumnWidth(22),  // S/N
         1: const pw.FlexColumnWidth(2),    // Name
-        2: const pw.FixedColumnWidth(50),  // Staff ID
+        2: const pw.FixedColumnWidth(46),  // Staff ID
         3: const pw.FlexColumnWidth(1.2),  // Basic Salary
-        4: const pw.FlexColumnWidth(1.2),  // Incentives
-        5: const pw.FlexColumnWidth(1.2),  // Loan Ded.
-        6: const pw.FlexColumnWidth(1.2),  // Penalties
-        7: const pw.FlexColumnWidth(1.2),  // Net Salary
-        8: const pw.FlexColumnWidth(1.5),  // Bank
-        9: const pw.FlexColumnWidth(1.8),  // Account
+        4: const pw.FlexColumnWidth(1.1),  // Incentives
+        5: const pw.FlexColumnWidth(1.1),  // Arrears
+        6: const pw.FlexColumnWidth(1.1),  // Loan Ded.
+        7: const pw.FlexColumnWidth(1.1),  // Penalties
+        8: const pw.FlexColumnWidth(1.1),  // Owing B/F
+        9: const pw.FlexColumnWidth(1.2),  // Net Payable
+        10: const pw.FlexColumnWidth(1.1), // Status
+        11: const pw.FlexColumnWidth(1.3), // Bank
+        12: const pw.FlexColumnWidth(1.5), // Account
       },
       children: [
         // Header row
@@ -221,9 +258,12 @@ class StaffPayrollPDFGenerator {
             _tableHeader('Staff ID'),
             _tableHeader('Basic Salary'),
             _tableHeader('Incentives'),
+            _tableHeader('Arrears'),
             _tableHeader('Loan Ded.'),
             _tableHeader('Penalties'),
-            _tableHeader('Net Salary'),
+            _tableHeader('Owing B/F'),
+            _tableHeader('Net Payable'),
+            _tableHeader('Status'),
             _tableHeader('Bank'),
             _tableHeader('Account No.'),
           ],
@@ -245,12 +285,20 @@ class StaffPayrollPDFGenerator {
               _tableCell(_currencyFormat.format(staff['basicSalary'])),
               _tableCell(_currencyFormat.format(staff['totalIncentives']),
                   color: PdfColors.green700),
-              _tableCell(_currencyFormat.format(staff['loanDeduction']),
+              _tableCell(_currencyFormat.format(staff['arrears'] ?? 0),
+                  color: PdfColors.green700),
+              _tableCell(_currencyFormat.format(_loanTotal(staff)),
                   color: PdfColors.orange700),
               _tableCell(_currencyFormat.format(staff['totalDeductions']),
                   color: PdfColors.red700),
-              _tableCell(_currencyFormat.format(staff['netSalary']),
-                  isBold: true, color: PdfColors.blue700),
+              _tableCell(_currencyFormat.format(staff['owingBroughtForward'] ?? 0),
+                  color: PdfColors.deepOrange700),
+              _tableCell(_currencyFormat.format(_payable(staff)),
+                  isBold: true, color: _payable(staff) < 0 ? PdfColors.red700 : PdfColors.blue700),
+              _tableCell(_statusLabel(staff),
+                  color: staff['isSettled'] == true || _payable(staff) < -0.005
+                      ? PdfColors.deepOrange700
+                      : null),
               _tableCell(staff['bankName'] ?? '-', align: pw.TextAlign.left),
               _tableCell(staff['accountNumber'] ?? '-'),
             ],

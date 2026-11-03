@@ -24,6 +24,8 @@ class _FeesBalanceReportScreenState extends State<FeesBalanceReportScreen> {
 
   List<Map<String, dynamic>> _classes = [];
   int _selectedClassId = 0; // 0 = All Classes
+  List<Map<String, dynamic>> _arms = [];
+  int _selectedArmId = 0; // 0 = All Arms
 
   Map<String, dynamic>? _summary;
   List<Map<String, dynamic>> _balancedStudents = [];
@@ -69,11 +71,13 @@ class _FeesBalanceReportScreenState extends State<FeesBalanceReportScreen> {
         term: _term!,
         session: _session!,
         classId: _selectedClassId,
+        armId: _selectedArmId,
       );
       _balancedStudents = await _db.getBalancedStudentsList(
         classId: _selectedClassId,
         term: _term!,
         session: _session!,
+        armId: _selectedArmId,
       );
 
       // Term-over-term comparison (e.g. 2nd Term vs 1st Term of the same session,
@@ -87,6 +91,7 @@ class _FeesBalanceReportScreenState extends State<FeesBalanceReportScreen> {
           term: prevTerm['term']!,
           session: prevTerm['session']!,
           classId: _selectedClassId,
+          armId: _selectedArmId,
         );
         _prevTermLabel = '${prevTerm['term']} · ${prevTerm['session']}';
       } else {
@@ -104,6 +109,7 @@ class _FeesBalanceReportScreenState extends State<FeesBalanceReportScreen> {
             term: _term!,
             session: prevSession,
             classId: _selectedClassId,
+            armId: _selectedArmId,
           );
           _prevSessionLabel = '$_term · $prevSession';
         } else {
@@ -122,13 +128,31 @@ class _FeesBalanceReportScreenState extends State<FeesBalanceReportScreen> {
     }
   }
 
+  Future<void> _onClassChanged(int? classId) async {
+    setState(() {
+      _selectedClassId = classId ?? 0;
+      _selectedArmId = 0;
+      _arms = [];
+    });
+    if (_selectedClassId > 0) {
+      final arms = await _db.getArmsByClass(_selectedClassId);
+      if (mounted) setState(() => _arms = arms);
+    }
+  }
+
   String _getSelectedClassName() {
     if (_selectedClassId == 0) return 'All Classes';
     final classData = _classes.firstWhere(
       (c) => c['id'] == _selectedClassId,
       orElse: () => {'name': ''},
     );
-    return classData['name'] ?? '';
+    final className = classData['name'] ?? '';
+    if (_selectedArmId == 0) return className;
+    final armData = _arms.firstWhere(
+      (a) => a['id'] == _selectedArmId,
+      orElse: () => {'name': ''},
+    );
+    return '$className - ${armData['name'] ?? ''}';
   }
 
   @override
@@ -259,9 +283,28 @@ class _FeesBalanceReportScreenState extends State<FeesBalanceReportScreen> {
                       child: Text(c['name']),
                     )),
               ],
-              onChanged: (v) {
-                setState(() => _selectedClassId = v ?? 0);
-              },
+              onChanged: _onClassChanged,
+            ),
+            SizedBox(height: ds.cardPadding),
+            DropdownButtonFormField<int>(
+              // Re-keyed per class so the selection resets to "All Arms"
+              key: ValueKey('arm-$_selectedClassId-${_arms.length}'),
+              decoration: const InputDecoration(
+                labelText: 'Select Arm',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.groups),
+              ),
+              initialValue: _selectedArmId,
+              items: [
+                const DropdownMenuItem<int>(value: 0, child: Text('All Arms')),
+                ..._arms.map((a) => DropdownMenuItem<int>(
+                      value: a['id'],
+                      child: Text(a['name']),
+                    )),
+              ],
+              onChanged: _selectedClassId == 0
+                  ? null
+                  : (v) => setState(() => _selectedArmId = v ?? 0),
             ),
             SizedBox(height: ds.cardPadding),
             SizedBox(

@@ -46,8 +46,12 @@ class SalaryPaymentPDFGenerator {
     final pdf = pw.Document();
 
     // Separate paid and unpaid
-    final paidRecords = paymentRecords.where((r) => r['isPaid'] == true).toList();
+    // Settled months (net went negative, nothing paid) get their own section
+    final paidRecords =
+        paymentRecords.where((r) => r['isPaid'] == true && r['isSettled'] != true).toList();
+    final settledRecords = paymentRecords.where((r) => r['isSettled'] == true).toList();
     final unpaidRecords = paymentRecords.where((r) => r['isPaid'] == false).toList();
+    final staffOwing = _staffOwing(paymentRecords);
 
     pdf.addPage(
       pw.MultiPage(
@@ -56,7 +60,15 @@ class SalaryPaymentPDFGenerator {
         build: (context) => [
           _buildHeader(schoolProfile, month),
           pw.SizedBox(height: 16),
-          _buildSummary(totalStaff, paidCount, unpaidCount, totalPaidAmount, totalUnpaidAmount),
+          _buildSummary(
+            totalStaff,
+            paidCount - settledRecords.length,
+            unpaidCount,
+            totalPaidAmount,
+            totalUnpaidAmount,
+            settledCount: settledRecords.length,
+            staffOwing: staffOwing,
+          ),
           pw.SizedBox(height: 20),
 
           // Paid Staff Section
@@ -64,6 +76,14 @@ class SalaryPaymentPDFGenerator {
             _buildSectionHeader('PAID STAFF', PdfColors.green700),
             pw.SizedBox(height: 8),
             _buildPaymentTable(paidRecords, true),
+            pw.SizedBox(height: 20),
+          ],
+
+          // Settled Section (staff owe; carried to next salary)
+          if (settledRecords.isNotEmpty) ...[
+            _buildSectionHeader('SETTLED – OWING (carried to next salary)', PdfColors.deepOrange700),
+            pw.SizedBox(height: 8),
+            _buildPaymentTable(settledRecords, true),
             pw.SizedBox(height: 20),
           ],
 
@@ -129,8 +149,10 @@ class SalaryPaymentPDFGenerator {
     int paidCount,
     int unpaidCount,
     double totalPaidAmount,
-    double totalUnpaidAmount,
-  ) {
+    double totalUnpaidAmount, {
+    int settledCount = 0,
+    double staffOwing = 0,
+  }) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
       decoration: pw.BoxDecoration(
@@ -142,9 +164,13 @@ class SalaryPaymentPDFGenerator {
         children: [
           _summaryItem('Total Staff', totalStaff.toString()),
           _summaryItem('Paid', paidCount.toString(), color: PdfColors.green700),
+          if (settledCount > 0)
+            _summaryItem('Settled', settledCount.toString(), color: PdfColors.deepOrange700),
           _summaryItem('Unpaid', unpaidCount.toString(), color: PdfColors.red700),
           _summaryItem('Total Paid', _currencyFormat.format(totalPaidAmount), color: PdfColors.green700),
           _summaryItem('Outstanding', _currencyFormat.format(totalUnpaidAmount), color: PdfColors.red700),
+          if (staffOwing > 0)
+            _summaryItem('Owed by Staff', _currencyFormat.format(staffOwing), color: PdfColors.deepOrange700),
         ],
       ),
     );
@@ -177,20 +203,43 @@ class SalaryPaymentPDFGenerator {
     );
   }
 
+  /// Loan taken from this salary: this month's repayment plus missed months.
+  static double _loanTotal(Map<String, dynamic> r) =>
+      (r['loanDeduction'] as num).toDouble() + (r['loanArrears'] as num? ?? 0).toDouble();
+
+  /// Final amount for the month after arrears and any amount owed from a
+  /// settled month — matches Total Payable on the Salary Payment Record card.
+  static double _payable(Map<String, dynamic> r) =>
+      (r['totalPayable'] as num? ?? r['netSalary'] as num).toDouble();
+
+  static String _statusLabel(Map<String, dynamic> r) {
+    if (r['paidWithMonth'] != null) return 'Paid with ${r['paidWithMonth']}';
+    if (r['isSettled'] == true) return 'Settled – owing';
+    if (r['isPaid'] == true) return 'Paid';
+    return _payable(r) < -0.005 ? 'Owing' : 'Not paid';
+  }
+
+  /// Total of every negative balance — what staff owe the school.
+  static double _staffOwing(List<Map<String, dynamic>> records) => records.fold<double>(
+      0, (sum, r) => _payable(r) < 0 ? sum - _payable(r) : sum);
+
   static pw.Widget _buildPaymentTable(List<Map<String, dynamic>> records, bool isPaid) {
     return pw.Table(
       border: pw.TableBorder.all(color: PdfColors.grey300),
       columnWidths: {
-        0: const pw.FixedColumnWidth(25),  // S/N
+        0: const pw.FixedColumnWidth(22),  // S/N
         1: const pw.FlexColumnWidth(2),    // Name
-        2: const pw.FixedColumnWidth(50),  // Staff ID
+        2: const pw.FixedColumnWidth(46),  // Staff ID
         3: const pw.FlexColumnWidth(1.2),  // Basic
         4: const pw.FlexColumnWidth(1),    // Incentive
-        5: const pw.FlexColumnWidth(1),    // Loan
-        6: const pw.FlexColumnWidth(1),    // Penalty
-        7: const pw.FlexColumnWidth(1.2),  // Net Salary
-        8: const pw.FlexColumnWidth(1.5),  // Bank
-        9: const pw.FlexColumnWidth(1.2),  // Account
+        5: const pw.FlexColumnWidth(1),    // Arrears
+        6: const pw.FlexColumnWidth(1),    // Loan
+        7: const pw.FlexColumnWidth(1),    // Penalty
+        8: const pw.FlexColumnWidth(1),    // Owing B/F
+        9: const pw.FlexColumnWidth(1.2),  // Net Payable
+        10: const pw.FlexColumnWidth(1.1), // Status
+        11: const pw.FlexColumnWidth(1.3), // Bank
+        12: const pw.FlexColumnWidth(1.2), // Account
       },
       children: [
         pw.TableRow(
@@ -201,9 +250,12 @@ class SalaryPaymentPDFGenerator {
             _tableHeader('Staff ID'),
             _tableHeader('Basic'),
             _tableHeader('Incentive'),
+            _tableHeader('Arrears'),
             _tableHeader('Loan Ded.'),
             _tableHeader('Penalty'),
-            _tableHeader('Net Salary'),
+            _tableHeader('Owing B/F'),
+            _tableHeader('Net Payable'),
+            _tableHeader('Status'),
             _tableHeader('Bank'),
             _tableHeader('Account No.'),
           ],
@@ -221,9 +273,17 @@ class SalaryPaymentPDFGenerator {
               _tableCell(record['staffId'] ?? ''),
               _tableCell(_currencyFormat.format(record['basicSalary'])),
               _tableCell(_currencyFormat.format(record['incentives']), color: PdfColors.green700),
-              _tableCell(_currencyFormat.format(record['loanDeduction']), color: PdfColors.orange700),
+              _tableCell(_currencyFormat.format(record['arrears'] ?? 0), color: PdfColors.green700),
+              _tableCell(_currencyFormat.format(_loanTotal(record)), color: PdfColors.orange700),
               _tableCell(_currencyFormat.format(record['penalties']), color: PdfColors.red700),
-              _tableCell(_currencyFormat.format(record['netSalary']), isBold: true, color: PdfColors.blue700),
+              _tableCell(_currencyFormat.format(record['owingBroughtForward'] ?? 0),
+                  color: PdfColors.deepOrange700),
+              _tableCell(_currencyFormat.format(_payable(record)),
+                  isBold: true, color: _payable(record) < 0 ? PdfColors.red700 : PdfColors.blue700),
+              _tableCell(_statusLabel(record),
+                  color: record['isSettled'] == true || _payable(record) < -0.005
+                      ? PdfColors.deepOrange700
+                      : null),
               _tableCell(record['bankName'] ?? '-', align: pw.TextAlign.left),
               _tableCell(record['accountNumber'] ?? '-'),
             ],

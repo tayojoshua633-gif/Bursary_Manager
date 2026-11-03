@@ -1,5 +1,4 @@
 // lib/screens/staff/staff_payroll/salary_payment_record_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../../data/database_helper_wrapper.dart';
@@ -81,12 +80,9 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
               _dbHelper.isStaffActiveByMonth(s.deactivationDate, _selectedMonth))
           .toList();
 
-      // Get incentives, loans, deductions for calculations. Loans are
-      // fetched regardless of status so a loan that gets fully paid off this
-      // month (status flips to 'Completed') can still be shown as deducted
-      // for the month it completed in, instead of vanishing from the record.
+      // Get incentives and deductions for the month (loan deductions come
+      // from getLoanDeductionPlan per staff below)
       final incentives = await _repoDb.getStaffIncentivesByMonth(_selectedMonth);
-      final allLoans = await _repoDb.getAllStaffLoans();
       final deductions = await _repoDb.getStaffDeductionsByMonth(_selectedMonth);
 
       // Build payment records
@@ -106,34 +102,15 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
             .where((i) => i['staffId'] == staff.id)
             .fold<double>(0, (sum, i) => sum + (i['amount'] as num).toDouble());
 
-        final staffLoans = allLoans
-            .where((l) => l['staffId'] == staff.id && l['status'] == 'Active')
-            .toList();
-
-        // If this staff was already marked paid for this month and had loan
-        // deductions applied, keep showing that loan for this month even if
-        // it's since flipped to 'Completed' — otherwise the deduction (and
-        // the amount actually paid) silently disappears from the record.
-        final appliedJson = paymentInfo?['loanDeductionsApplied'] as String?;
-        if (appliedJson != null && appliedJson.isNotEmpty) {
-          try {
-            final Map<String, dynamic> applied = jsonDecode(appliedJson);
-            for (final loanIdStr in applied.keys) {
-              final loanId = int.tryParse(loanIdStr);
-              if (loanId == null) continue;
-              if (staffLoans.any((l) => l['id'] == loanId)) continue;
-              final completedLoan = allLoans.where((l) => l['id'] == loanId);
-              if (completedLoan.isNotEmpty) {
-                staffLoans.add(completedLoan.first);
-              }
-            }
-          } catch (_) {}
-        }
-
-        double loanDeduction = 0;
-        for (var loan in staffLoans) {
-          loanDeduction += (loan['deductionPerMonth'] as num).toDouble();
-        }
+        // Loan deductions: what was actually deducted if paid, otherwise
+        // what falls due this month + missed months since each loan started.
+        final loanPlan = await _dbHelper.getLoanDeductionPlan(
+          staff.id!,
+          _selectedMonth,
+          employmentDate: staff.dateOfEmployment,
+        );
+        final loanDeduction = loanPlan['currentDeduction'] as double;
+        final loanArrears = loanPlan['arrearsDeduction'] as double;
 
         final staffDeductions = deductions
             .where((d) => d['staffId'] == staff.id)
@@ -158,23 +135,32 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
           employmentDate: staff.dateOfEmployment,
         );
 
-        // Loan arrears from missed months
-        final loanArrears = await _dbHelper.getLoanArrearsForStaff(
+        // Amount still owed from the last settled salary, deducted in full here
+        final owing = await _dbHelper.getOwingBroughtForward(
           staff.id!,
           _selectedMonth,
           employmentDate: staff.dateOfEmployment,
         );
+        final owingBroughtForward = (owing?['amount'] as num?)?.toDouble() ?? 0;
+        final isSettled = isPaid &&
+            ((paymentInfo['owingCarriedForward'] as num?)?.toDouble() ?? 0) > 0;
 
-        // Total = net (current) + salary arrears − loan arrears.
+        // Total = net (current) + salary arrears − loan arrears − owing.
         // Loan arrears shown accumulated in loan column; subtract to avoid double-count.
-        final totalPayable = netSalary + arrears - loanArrears;
+        final totalPayable = netSalary + arrears - loanArrears - owingBroughtForward;
 
+        // Closed because a later salary already paid this month as arrears
+        final paidWithMonth = paymentInfo?['paidWithMonth'] as String?;
+
+        // Staff who owe (negative total) are paid nothing, settled or not; a
+        // month paid with a later salary is already in that salary's total.
+        final payout = totalPayable > 0 && paidWithMonth == null ? totalPayable : 0.0;
         if (isPaid) {
           _paidCount++;
-          _totalPaidAmount += totalPayable;
+          _totalPaidAmount += payout;
         } else {
           _unpaidCount++;
-          _totalUnpaidAmount += totalPayable;
+          _totalUnpaidAmount += payout;
         }
 
         records.add({
@@ -190,7 +176,10 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
           'netSalary': netSalary,
           'arrears': arrears,
           'totalPayable': totalPayable,
+          'owingBroughtForward': owingBroughtForward,
           'isPaid': isPaid,
+          'isSettled': isSettled,
+          'paidWithMonth': paidWithMonth,
           'paymentDate': paymentInfo?['paymentDate'],
           'paymentMethod': paymentInfo?['paymentMethod'],
           'bankName': staff.bankName ?? '',
@@ -450,7 +439,10 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
       );
 
   Widget _buildScreenContent(BuildContext context) {
-    final paidRecords = _paymentRecords.where((r) => r['isPaid'] == true).toList();
+    // Settled months (net went negative, nothing paid) get their own tab
+    final paidRecords =
+        _paymentRecords.where((r) => r['isPaid'] == true && r['isSettled'] != true).toList();
+    final settledRecords = _paymentRecords.where((r) => r['isSettled'] == true).toList();
     final unpaidRecords = _paymentRecords.where((r) => r['isPaid'] == false).toList();
 
     return Scaffold(
@@ -495,7 +487,9 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceAround,
                         children: [
                           _summaryBox('Total Staff', '$_totalStaff', Colors.blue, Icons.people),
-                          _summaryBox('Paid', '$_paidCount', Colors.green, Icons.check_circle),
+                          _summaryBox('Paid', '${paidRecords.length}', Colors.green, Icons.check_circle),
+                          if (settledRecords.isNotEmpty)
+                            _summaryBox('Settled', '${settledRecords.length}', Colors.deepOrange, Icons.redo),
                           _summaryBox('Unpaid', '$_unpaidCount', Colors.red, Icons.cancel),
                         ],
                       ),
@@ -586,7 +580,7 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
                 // Payment records list
                 Expanded(
                   child: DefaultTabController(
-                    length: 2,
+                    length: 3,
                     child: Column(
                       children: [
                         TabBar(
@@ -594,6 +588,7 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
                           unselectedLabelColor: Colors.grey,
                           tabs: [
                             Tab(text: 'Paid (${paidRecords.length})'),
+                            Tab(text: 'Settled (${settledRecords.length})'),
                             Tab(text: 'Unpaid (${unpaidRecords.length})'),
                           ],
                         ),
@@ -601,6 +596,7 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
                           child: TabBarView(
                             children: [
                               _buildRecordsList(paidRecords, true),
+                              _buildRecordsList(settledRecords, true, isSettledTab: true),
                               _buildRecordsList(unpaidRecords, false),
                             ],
                           ),
@@ -628,20 +624,28 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
     );
   }
 
-  Widget _buildRecordsList(List<Map<String, dynamic>> records, bool isPaidTab) {
+  Widget _buildRecordsList(List<Map<String, dynamic>> records, bool isPaidTab, {bool isSettledTab = false}) {
     if (records.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              isPaidTab ? Icons.check_circle_outline : Icons.hourglass_empty,
+              isSettledTab
+                  ? Icons.redo
+                  : isPaidTab
+                      ? Icons.check_circle_outline
+                      : Icons.hourglass_empty,
               size: 64,
               color: Colors.grey[300],
             ),
             const SizedBox(height: 16),
             Text(
-              isPaidTab ? 'No paid staff for this month' : 'All staff have been paid!',
+              isSettledTab
+                  ? 'No staff owing this month'
+                  : isPaidTab
+                      ? 'No paid staff for this month'
+                      : 'All staff have been paid!',
               style: TextStyle(color: Colors.grey[600]),
             ),
           ],
@@ -682,15 +686,27 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: isPaidTab ? Colors.green.shade100 : Colors.red.shade100,
+                        color: record['isSettled'] == true
+                            ? Colors.deepOrange.shade100
+                            : isPaidTab
+                                ? Colors.green.shade100
+                                : Colors.red.shade100,
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        isPaidTab ? 'PAID' : 'UNPAID',
+                        record['isSettled'] == true
+                            ? 'SETTLED – OWING'
+                            : isPaidTab
+                                ? 'PAID'
+                                : 'UNPAID',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
-                          color: isPaidTab ? Colors.green.shade700 : Colors.red.shade700,
+                          color: record['isSettled'] == true
+                              ? Colors.deepOrange.shade700
+                              : isPaidTab
+                                  ? Colors.green.shade700
+                                  : Colors.red.shade700,
                         ),
                       ),
                     ),
@@ -772,7 +788,9 @@ class _SalaryPaymentRecordScreenState extends State<SalaryPaymentRecordScreen> {
                       const Icon(Icons.calendar_today, size: 14, color: Colors.grey),
                       const SizedBox(width: 4),
                       Text(
-                        'Paid on: ${_formatDate(record['paymentDate'])}',
+                        record['paidWithMonth'] != null
+                            ? 'Paid with ${record['paidWithMonth']} salary'
+                            : '${record['isSettled'] == true ? 'Settled on' : 'Paid on'}: ${_formatDate(record['paymentDate'])}',
                         style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
                     ],

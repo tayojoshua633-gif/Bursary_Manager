@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../data/database_helper_wrapper.dart';
 import '../../../db/database_helper.dart';
 import '../../../models/staff.dart';
@@ -50,11 +51,11 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
       // Get payment status for all staff
       final salaryPayments = await _repoDb.getSalaryPaymentsByMonth(_selectedMonth);
       _paymentStatus = {};
-      final paymentRecordByStaffId = <int, Map<String, dynamic>>{};
+      final paymentByStaffId = <int, Map<String, dynamic>>{};
       for (var payment in salaryPayments) {
         final sid = payment['staffId'] as int;
         _paymentStatus[sid] = (payment['isPaid'] as int) == 1;
-        paymentRecordByStaffId[sid] = payment;
+        paymentByStaffId[sid] = payment;
       }
 
       // Month-wide default payroll basis (Full/Percentage/Days/Weeks)
@@ -77,12 +78,9 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
               _dbHelper.isStaffActiveByMonth(s.deactivationDate, _selectedMonth))
           .toList();
 
-      // Get incentives, loans, and deductions for the month. Loans are
-      // fetched regardless of status so a loan that gets fully paid off this
-      // month (status flips to 'Completed') can still be shown as deducted
-      // for the month it completed in, instead of vanishing from the card.
+      // Get incentives and deductions for the month (loan deductions come
+      // from getLoanDeductionPlan per staff below)
       final incentives = await _repoDb.getStaffIncentivesByMonth(_selectedMonth);
-      final allLoans = await _repoDb.getAllStaffLoans();
       final deductions = await _repoDb.getStaffDeductionsByMonth(_selectedMonth);
 
       // Build payroll data for each staff
@@ -96,36 +94,21 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
         final totalIncentives = staffIncentivesList
             .fold<double>(0, (sum, i) => sum + (i['amount'] as num).toDouble());
 
-        // Get active loan deductions for this staff (for details display)
-        final staffLoansList = allLoans
-            .where((l) => l['staffId'] == staff.id && l['status'] == 'Active')
-            .toList();
-
-        // If this staff was already marked paid for this month and had loan
-        // deductions applied, keep showing those loans for this month even
-        // if they've since flipped to 'Completed' — otherwise the deduction
-        // (and the amount actually paid) silently disappears from the card.
-        final appliedJson =
-            paymentRecordByStaffId[staff.id]?['loanDeductionsApplied'] as String?;
-        if (appliedJson != null && appliedJson.isNotEmpty) {
-          try {
-            final Map<String, dynamic> applied = jsonDecode(appliedJson);
-            for (final loanIdStr in applied.keys) {
-              final loanId = int.tryParse(loanIdStr);
-              if (loanId == null) continue;
-              if (staffLoansList.any((l) => l['id'] == loanId)) continue;
-              final completedLoan = allLoans.where((l) => l['id'] == loanId);
-              if (completedLoan.isNotEmpty) {
-                staffLoansList.add(completedLoan.first);
-              }
-            }
-          } catch (_) {}
-        }
-
-        double loanDeduction = 0;
-        for (var loan in staffLoansList) {
-          loanDeduction += (loan['deductionPerMonth'] as num).toDouble();
-        }
+        // Loan deductions for this month: what was actually deducted if
+        // already paid, otherwise what falls due (this month + missed months
+        // since each loan started, capped at the months left on the loan).
+        final loanPlan = await _dbHelper.getLoanDeductionPlan(
+          staff.id!,
+          _selectedMonth,
+          employmentDate: staff.dateOfEmployment,
+        );
+        final loanPlanEntries = loanPlan['loans'] as List<Map<String, dynamic>>;
+        final loanSkipEntries = loanPlan['skipped'] as List<Map<String, dynamic>>;
+        final staffLoansList = [
+          for (final e in loanPlanEntries) e['loan'] as Map<String, dynamic>,
+        ];
+        final loanDeduction = loanPlan['currentDeduction'] as double;
+        final loanArrears = loanPlan['arrearsDeduction'] as double;
 
         // Get individual deductions/penalties for this staff (for details display)
         final staffDeductionsList = deductions
@@ -178,18 +161,25 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
         // Calculate current-month net salary
         final netSalary = basicSalary + totalIncentives - loanDeduction - totalDeductions;
 
-        // Calculate loan arrears (unpaid months loan accumulation)
-        final loanArrears = await _dbHelper.getLoanArrearsForStaff(
-          staff.id!,
-          _selectedMonth,
-          employmentDate: staff.dateOfEmployment,
-        );
-
         // Total = current net + salary arrears (basic+incentives−deductions for
         // unpaid months) − loan arrears (loan is shown accumulated in the loan
         // column, so subtract here to avoid double-counting).
         // Mathematically equals: sum of NET salary for current + all unpaid months.
-        final totalPayable = netSalary + arrears - loanArrears;
+        // Amount still owed from the last settled salary (net went negative
+        // after all deductions) — deducted in full from this salary.
+        final owing = await _dbHelper.getOwingBroughtForward(
+          staff.id!,
+          _selectedMonth,
+          employmentDate: staff.dateOfEmployment,
+        );
+        final owingBroughtForward = (owing?['amount'] as num?)?.toDouble() ?? 0;
+        final owingCarried =
+            (paymentByStaffId[staff.id]?['owingCarriedForward'] as num?)?.toDouble() ?? 0;
+        final isSettled = (_paymentStatus[staff.id] ?? false) && owingCarried > 0;
+        // Closed because a later salary already paid this month as arrears
+        final paidWithMonth = paymentByStaffId[staff.id]?['paidWithMonth'] as String?;
+
+        final totalPayable = netSalary + arrears - loanArrears - owingBroughtForward;
 
         payrollData.add({
           'id': staff.id, // Include database ID for payment tracking
@@ -209,12 +199,20 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
           'netSalary': netSalary,
           'arrears': arrears,
           'totalPayable': totalPayable,
+          'owingBroughtForward': owingBroughtForward,
+          'owingFromMonth': owing?['fromMonth'],
+          'owingCarried': owingCarried,
+          'isSettled': isSettled,
+          'paidWithMonth': paidWithMonth,
+          'isPaid': _paymentStatus[staff.id] ?? false,
           'bankName': staff.bankName ?? '',
           'accountName': staff.accountName ?? '',
           'accountNumber': staff.accountNumber ?? '',
           // Include detailed lists for display
           'incentivesList': staffIncentivesList,
           'loansList': staffLoansList,
+          'loanPlanEntries': loanPlanEntries,
+          'loanSkipEntries': loanSkipEntries,
           'deductionsList': staffDeductionsList,
         });
       }
@@ -239,36 +237,331 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
     }).toList();
   }
 
+  String _skipModeLabel(String mode) =>
+      mode == 'carry' ? 'carried to next salary' : 'loan extended';
+
+  String? _encodeLoanSkips(Map<int, Map<String, dynamic>> skips) => skips.isEmpty
+      ? null
+      : jsonEncode({for (final e in skips.entries) e.key.toString(): e.value});
+
+  /// Lets a staff member skip one loan's repayment on this month's salary,
+  /// choosing per skip whether the loan runs a month longer or the amount
+  /// is collected with the next salary.
+  Future<void> _showSkipLoanDialog(Map<String, dynamic> staff, Map<String, dynamic> entry) async {
+    final loan = entry['loan'] as Map<String, dynamic>;
+    final months = entry['months'] as List<String>;
+    final perMonth = (loan['deductionPerMonth'] as num).toDouble();
+    final amount = perMonth * months.length;
+    final noteController = TextEditingController();
+    String mode = 'extend';
+
+    Widget option(StateSetter setDialogState, String value, String title, String subtitle) {
+      final selected = mode == value;
+      return ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(
+          selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+          color: selected ? Colors.blue : Colors.grey,
+        ),
+        title: Text(title, style: const TextStyle(fontSize: 14)),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
+        onTap: () => setDialogState(() => mode = value),
+      );
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Skip Loan Repayment'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${staff['staffName']} — ${loan['reason'] ?? 'Loan'}\n'
+                  '${_currencyFormat.format(amount)} will not be deducted from the '
+                  '$_selectedMonth salary (${months.join(', ')}).',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                const Text('How should it be repaid?', style: TextStyle(fontWeight: FontWeight.bold)),
+                option(
+                  setDialogState,
+                  'extend',
+                  'Extend the loan',
+                  'Same ${_currencyFormat.format(perMonth)}/month; the loan finishes '
+                      '${months.length} month${months.length > 1 ? 's' : ''} later.',
+                ),
+                option(
+                  setDialogState,
+                  'carry',
+                  'Add to next salary',
+                  'Next salary deducts ${_currencyFormat.format(amount)} extra on top '
+                      'of its own repayment.',
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: noteController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason (optional)',
+                    hintText: 'e.g. Staff request — family emergency',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Skip This Month'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+
+    final staffId = staff['id'] as int;
+    final prefs = await SharedPreferences.getInstance();
+    final payment = await _repoDb.getStaffSalaryPayment(staffId, _selectedMonth);
+    final skips = _dbHelper.parseLoanSkips(payment?['loanSkips'] as String?);
+    skips[loan['id'] as int] = {
+      'mode': mode,
+      'note': noteController.text.trim().isEmpty ? null : noteController.text.trim(),
+      'by': prefs.getString('username'),
+      'at': DateTime.now().toIso8601String(),
+    };
+    await _repoDb.setLoanSkipsForPayment(staffId, _selectedMonth, _encodeLoanSkips(skips));
+    await _loadPayrollData(showSpinner: false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Loan repayment skipped for $_selectedMonth (${_skipModeLabel(mode)}).')),
+      );
+    }
+  }
+
+  Future<void> _undoLoanSkip(Map<String, dynamic> staff, Map<String, dynamic> entry) async {
+    final staffId = staff['id'] as int;
+    final loanId = (entry['loan'] as Map<String, dynamic>)['id'] as int;
+    final payment = await _repoDb.getStaffSalaryPayment(staffId, _selectedMonth);
+    final skips = _dbHelper.parseLoanSkips(payment?['loanSkips'] as String?)..remove(loanId);
+    await _repoDb.setLoanSkipsForPayment(staffId, _selectedMonth, _encodeLoanSkips(skips));
+    await _loadPayrollData(showSpinner: false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Loan skip removed — repayment will be deducted.')),
+      );
+    }
+  }
+
+  String _shortMonth(String month) =>
+      DateFormat('MMM yyyy').format(DateFormat('MMMM yyyy').parse(month)).toUpperCase();
+
+  String _shiftMonth(String month, int by) {
+    final d = DateFormat('MMMM yyyy').parse(month);
+    return DateFormat('MMMM yyyy').format(DateTime(d.year, d.month + by, 1));
+  }
+
+  /// The later salary (if any) that has already deducted the amount this
+  /// month's settlement carried forward: the first paid/settled month after
+  /// [_selectedMonth], since every month in between is unpaid.
+  Future<String?> _salaryUsingOwing(int staffId) async {
+    final payments = await _repoDb.getSalaryPaymentsForStaff(staffId);
+    final paidMonths = {
+      for (final p in payments)
+        if ((p['isPaid'] as int? ?? 0) == 1) p['month'] as String: p['paidWithMonth'] as String?,
+    };
+    for (int i = 1; i <= 24; i++) {
+      final m = _shiftMonth(_selectedMonth, i);
+      if (paidMonths.containsKey(m)) return paidMonths[m] ?? m;
+    }
+    return null;
+  }
+
+  Widget _buildPaymentStatusChip(Map<String, dynamic> staff, int staffDbId, bool isPaid) {
+    final payable = (staff['totalPayable'] as num? ?? 0).toDouble();
+    final isSettled = staff['isSettled'] == true;
+    final paidWithMonth = staff['paidWithMonth'] as String?;
+    final canSettle = !isPaid && payable < -0.005;
+    final MaterialColor color = isSettled || canSettle
+        ? Colors.deepOrange
+        : isPaid
+            ? Colors.green
+            : Colors.red;
+    final label = paidWithMonth != null
+        ? 'PAID WITH ${_shortMonth(paidWithMonth)}'
+        : isSettled
+        ? 'SETTLED – OWING'
+        : canSettle
+            ? 'SETTLE & CARRY FORWARD'
+            : isPaid
+                ? 'PAID'
+                : 'NOT PAID';
+    final icon = isSettled || canSettle
+        ? Icons.redo
+        : isPaid
+            ? Icons.check_circle
+            : Icons.cancel;
+    return InkWell(
+      onTap: () => _togglePaymentStatus(staffDbId, isPaid),
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: color.shade100,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color, width: 1.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18, color: color.shade700),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: color.shade700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _togglePaymentStatus(int staffId, bool currentStatus) async {
     final newStatus = !currentStatus;
 
     // Find staff data to get loan info. Only genuinely 'Active' loans are
-    // eligible for a new deduction here — staffData['loansList'] may also
-    // include a loan that already completed this month (kept there purely
-    // so the card still shows its deduction), which must never be
-    // re-processed as if it still had months remaining.
+    // eligible for a new deduction here — a paid month's plan may include
+    // a loan that has since completed (kept purely so the card still shows
+    // its deduction), which must never be re-processed.
     final staffData = _payrollData.firstWhere(
       (s) => s['id'] == staffId,
       orElse: () => {},
     );
-    final allStaffLoans = staffData['loansList'] as List<Map<String, dynamic>>? ?? [];
-    final loansList = allStaffLoans.where((l) => l['status'] == 'Active').toList();
-    final hasActiveLoans = loansList.isNotEmpty;
+    final planEntries =
+        staffData['loanPlanEntries'] as List<Map<String, dynamic>>? ?? [];
+    final duePlan = planEntries
+        .where((e) => (e['loan'] as Map<String, dynamic>)['status'] == 'Active')
+        .toList();
+    final hasActiveLoans = duePlan.isNotEmpty;
+    final skippedPlan = (staffData['loanSkipEntries'] as List<Map<String, dynamic>>? ?? [])
+        .where((e) => (e['loan'] as Map<String, dynamic>)['status'] == 'Active')
+        .toList();
+
+    // A negative total after every deduction means the staff owes the
+    // school: the month is settled (closed, nothing paid) instead of paid,
+    // and the amount owed is deducted in full from the next salary.
+    final totalPayable = (staffData['totalPayable'] as num?)?.toDouble() ?? 0;
+    final isSettle = newStatus && totalPayable < -0.005;
+    final owingAmount = isSettle ? double.parse((-totalPayable).toStringAsFixed(2)) : 0.0;
+    final nextMonth = _shiftMonth(_selectedMonth, 1);
+    final wasSettled = !newStatus && staffData['isSettled'] == true;
+    final owingCarried = (staffData['owingCarried'] as num?)?.toDouble() ?? 0;
+
+    // A month paid as arrears with a later salary is undone from that salary
+    final paidWithMonth = staffData['paidWithMonth'] as String?;
+    if (!newStatus && paidWithMonth != null) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Paid With a Later Salary'),
+          content: Text(
+            'The $_selectedMonth salary was paid as arrears with the $paidWithMonth salary. '
+            'Mark $paidWithMonth as Not Paid instead — that reopens this month too.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // Earlier unpaid months this salary pays as arrears — closed with it so
+    // they can't be paid a second time later. (Per-Period pay has no salary
+    // arrears.)
+    final arrearsMonths = newStatus && staffData['isPerPeriodPay'] != true
+        ? await _dbHelper.getSalaryArrearsMonths(
+            staffId,
+            _selectedMonth,
+            employmentDate: staffData['dateOfEmployment'] as String?,
+          )
+        : <String>[];
+    if (!mounted) return;
+
+    // Undoing a settlement is only safe while the next salary hasn't
+    // already deducted the amount it carried forward.
+    if (wasSettled) {
+      final usedBy = await _salaryUsingOwing(staffId);
+      if (usedBy != null) {
+        if (!mounted) return;
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Cannot Undo Settlement'),
+            content: Text(
+              'The ${_currencyFormat.format(owingCarried)} owed from $_selectedMonth has already '
+              'been deducted from the $usedBy salary. Mark $usedBy as Not Paid first, '
+              'then undo this month.',
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+            ],
+          ),
+        );
+        return;
+      }
+      if (!mounted) return;
+    }
 
     // Show confirmation dialog
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(newStatus ? 'Mark as Paid?' : 'Mark as Not Paid?'),
+        title: Text(isSettle
+            ? 'Settle & Carry Forward?'
+            : newStatus
+                ? 'Mark as Paid?'
+                : 'Mark as Not Paid?'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              newStatus
-                  ? 'This will mark the staff as paid for $_selectedMonth.'
-                  : 'This will mark the staff as NOT paid for $_selectedMonth.',
+              isSettle
+                  ? 'After all deductions, the net salary for $_selectedMonth is '
+                      '${_currencyFormat.format(totalPayable)}, so nothing will be paid. '
+                      'The deductions below will be applied and the '
+                      '${_currencyFormat.format(owingAmount)} owing will be deducted from '
+                      'the $nextMonth salary.'
+                  : newStatus
+                      ? 'This will mark the staff as paid for $_selectedMonth.'
+                      : wasSettled
+                          ? 'This will undo the settlement for $_selectedMonth. Loan '
+                              'deductions are reversed and the '
+                              '${_currencyFormat.format(owingCarried)} owing is no longer '
+                              'carried to the next salary.'
+                          : 'This will mark the staff as NOT paid for $_selectedMonth.',
             ),
+            if (arrearsMonths.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Also closes ${arrearsMonths.join(', ')} — paid as arrears with this salary.',
+                style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              ),
+            ],
             if (newStatus && hasActiveLoans) ...[
               const SizedBox(height: 12),
               Container(
@@ -297,15 +590,45 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                       style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                     ),
                     const SizedBox(height: 4),
-                    ...loansList.map((loan) {
-                      final loanArrears = (staffData['loanArrears'] as double? ?? 0);
-                      final arrearsMonths = loanArrears > 0
-                          ? ' +${(loanArrears / (loan['deductionPerMonth'] as num).toDouble()).round()} arrears month(s)'
-                          : '';
+                    ...duePlan.map((e) {
+                      final loan = e['loan'] as Map<String, dynamic>;
+                      final months = e['months'] as List<String>;
+                      final perMonth = (loan['deductionPerMonth'] as num).toDouble();
                       return Padding(
                         padding: const EdgeInsets.only(top: 4),
                         child: Text(
-                          '• ${loan['reason']}: ${_currencyFormat.format(loan['deductionPerMonth'])}/month (${loan['monthsRemaining']} months left$arrearsMonths)',
+                          '• ${loan['reason']}: ${_currencyFormat.format(perMonth * months.length)} '
+                          'for ${months.join(', ')} (${loan['monthsRemaining']} months left)',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            ],
+            if (newStatus && skippedPlan.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Skipped this month (not deducted):',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    ),
+                    ...skippedPlan.map((e) {
+                      final loan = e['loan'] as Map<String, dynamic>;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '• ${loan['reason']}: ${_skipModeLabel(e['mode'] as String)}',
                           style: const TextStyle(fontSize: 12),
                         ),
                       );
@@ -324,10 +647,18 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: newStatus ? Colors.green : Colors.orange,
+              backgroundColor: isSettle
+                  ? Colors.deepOrange
+                  : newStatus
+                      ? Colors.green
+                      : Colors.orange,
               foregroundColor: Colors.white,
             ),
-            child: Text(newStatus ? 'Mark Paid' : 'Mark Not Paid'),
+            child: Text(isSettle
+                ? 'Settle'
+                : newStatus
+                    ? 'Mark Paid'
+                    : 'Mark Not Paid'),
           ),
         ],
       ),
@@ -338,34 +669,27 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
 
       var loanReversed = false;
 
-      // If marking as paid, auto-deduct from active loans for this month +
-      // any unpaid previous months (loan arrears)
+      // If marking as paid, deduct each due loan for exactly the months
+      // its plan covers (this month + missed months since the loan started).
       if (newStatus && hasActiveLoans) {
-        final unpaidMonths = await _dbHelper.getUnpaidMonthsCount(
-          staffId,
-          _selectedMonth,
-          employmentDate: staffData['dateOfEmployment'] as String?,
-        );
-        final monthsToDeduct = unpaidMonths + 1; // current month + arrears months
+        // Record which months were taken off each loan so marking this
+        // payment NOT PAID later can restore precisely those months, and so
+        // a later payment for one of those months doesn't deduct them again.
+        final Map<String, List<String>> deductionsApplied = {};
 
-        // Track exactly how much was taken off each loan so marking this
-        // payment NOT PAID later can restore precisely that amount instead
-        // of the loan record permanently losing those months.
-        final Map<String, int> deductionsApplied = {};
-
-        for (var loan in loansList) {
+        for (final e in duePlan) {
+          final loan = e['loan'] as Map<String, dynamic>;
           final current = (loan['monthsRemaining'] as int);
-          final newMonthsRemaining = (current - monthsToDeduct).clamp(0, current);
-          final actuallyDeducted = current - newMonthsRemaining;
-          final newLoanStatus = newMonthsRemaining <= 0 ? 'Completed' : 'Active';
+          final months = (e['months'] as List<String>).take(current).toList();
+          final newMonthsRemaining = current - months.length;
 
           await _repoDb.updateStaffLoan(loan['id'], {
             'monthsRemaining': newMonthsRemaining,
-            'status': newLoanStatus,
+            'status': newMonthsRemaining <= 0 ? 'Completed' : 'Active',
           });
 
-          if (actuallyDeducted > 0) {
-            deductionsApplied[loan['id'].toString()] = actuallyDeducted;
+          if (months.isNotEmpty) {
+            deductionsApplied[loan['id'].toString()] = months;
           }
         }
 
@@ -376,7 +700,33 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
             jsonEncode(deductionsApplied),
           );
         }
+      }
+
+      // Freeze which loan months each skip postponed, so later salaries
+      // know to leave them (extended loan) or collect them (carried over).
+      if (newStatus && skippedPlan.isNotEmpty) {
+        final payment = await _repoDb.getStaffSalaryPayment(staffId, _selectedMonth);
+        final skips = _dbHelper.parseLoanSkips(payment?['loanSkips'] as String?);
+        for (final e in skippedPlan) {
+          final loanId = (e['loan'] as Map<String, dynamic>)['id'] as int;
+          skips[loanId]?['months'] = e['months'];
+        }
+        await _repoDb.setLoanSkipsForPayment(staffId, _selectedMonth, _encodeLoanSkips(skips));
+      }
+
+      if (arrearsMonths.isNotEmpty) {
+        await _repoDb.markSalaryMonthsPaidWith(staffId, arrearsMonths, _selectedMonth);
       } else if (!newStatus) {
+        await _repoDb.reopenSalaryMonthsPaidWith(staffId, _selectedMonth);
+      }
+
+      if (isSettle) {
+        await _repoDb.setOwingCarriedForwardForPayment(staffId, _selectedMonth, owingAmount);
+      } else if (wasSettled) {
+        await _repoDb.setOwingCarriedForwardForPayment(staffId, _selectedMonth, null);
+      }
+
+      if (!newStatus) {
         // Undo: restore whatever was deducted from loans when this staff
         // was marked paid for this month, so a mistaken mark-paid doesn't
         // permanently consume loan months. The loan stays pending until
@@ -385,11 +735,10 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
         final appliedJson = existingPayment?['loanDeductionsApplied'] as String?;
 
         if (appliedJson != null && appliedJson.isNotEmpty) {
-          final Map<String, dynamic> applied = jsonDecode(appliedJson);
+          final applied = _dbHelper.parseLoanDeductionsApplied(appliedJson, _selectedMonth);
           for (final entry in applied.entries) {
-            final loanId = int.tryParse(entry.key);
-            final monthsToRestore = (entry.value as num).toInt();
-            if (loanId == null) continue;
+            final loanId = entry.key;
+            final monthsToRestore = entry.value.length;
 
             final loan = await _repoDb.getStaffLoanById(loanId);
             if (loan == null) continue;
@@ -413,7 +762,10 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              newStatus
+              isSettle
+                  ? 'Settled. ${_currencyFormat.format(owingAmount)} owing carried to the '
+                      '$nextMonth salary.'
+                  : newStatus
                   ? hasActiveLoans
                       ? 'Staff marked as paid. Loan deduction applied.'
                       : 'Staff marked as paid'
@@ -421,7 +773,11 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                       ? 'Staff marked as not paid. Loan deduction reversed.'
                       : 'Staff marked as not paid',
             ),
-            backgroundColor: newStatus ? Colors.green : Colors.orange,
+            backgroundColor: isSettle
+                ? Colors.deepOrange
+                : newStatus
+                    ? Colors.green
+                    : Colors.orange,
           ),
         );
       }
@@ -867,6 +1223,11 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                     ),
                   ],
                   _detailRow('Penalties', _currencyFormat.format(staff['totalDeductions'])),
+                  if ((staff['owingBroughtForward'] as num? ?? 0) > 0)
+                    _detailRow(
+                      'Owing from ${staff['owingFromMonth']}',
+                      _currencyFormat.format(staff['owingBroughtForward']),
+                    ),
                 ],
               ),
               const SizedBox(height: 12),
@@ -982,7 +1343,10 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
           + (staff['loanArrears'] as num? ?? 0).toDouble();
       totalPenalties += (staff['totalDeductions'] as num).toDouble();
       totalArrears += (staff['arrears'] as num? ?? 0).toDouble();
-      totalPayable += (staff['totalPayable'] as num? ?? staff['netSalary'] as num).toDouble();
+      final payable = (staff['totalPayable'] as num? ?? staff['netSalary'] as num).toDouble();
+      // Staff who owe are paid nothing; a month paid with a later salary is
+      // already counted in that salary.
+      if (staff['paidWithMonth'] == null) totalPayable += payable > 0 ? payable : 0;
     }
 
     return Scaffold(
@@ -1136,12 +1500,14 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                             final totalPayableForStaff = (staff['totalPayable'] as num? ?? staff['netSalary'] as num).toDouble();
                             final arrears = (staff['arrears'] as num? ?? 0).toDouble();
                             final loanArrears = (staff['loanArrears'] as num? ?? 0).toDouble();
+                            final owingBroughtForward = (staff['owingBroughtForward'] as num? ?? 0).toDouble();
                             final isPositive = totalPayableForStaff >= 0;
                             final isPaid = _paymentStatus[staffDbId] ?? false;
 
                             // Get detail lists
                             final incentivesList = staff['incentivesList'] as List<Map<String, dynamic>>? ?? [];
-                            final loansList = staff['loansList'] as List<Map<String, dynamic>>? ?? [];
+                            final loanPlanEntries = staff['loanPlanEntries'] as List<Map<String, dynamic>>? ?? [];
+                            final loanSkipEntries = staff['loanSkipEntries'] as List<Map<String, dynamic>>? ?? [];
                             final deductionsList = staff['deductionsList'] as List<Map<String, dynamic>>? ?? [];
 
                             return Card(
@@ -1199,6 +1565,26 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                                               if (arrears > 0)
                                                 Text(
                                                   'incl. ${_currencyFormat.format(arrears)} arrears',
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    color: Colors.deepOrange.shade600,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                              if (staff['paidWithMonth'] != null)
+                                                Text(
+                                                  'paid with ${staff['paidWithMonth']} salary',
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    color: Colors.green.shade700,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                )
+                                              else if (staff['isSettled'] == true || (!isPaid && !isPositive))
+                                                Text(
+                                                  staff['isSettled'] == true
+                                                      ? 'owing carried to next month'
+                                                      : 'staff owes — settle to carry forward',
                                                   style: TextStyle(
                                                     fontSize: 10,
                                                     color: Colors.deepOrange.shade600,
@@ -1285,7 +1671,11 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                                         ),
 
                                       // Show details for the month (Incentives, Loans, Penalties)
-                                      if (incentivesList.isNotEmpty || loansList.isNotEmpty || deductionsList.isNotEmpty) ...[
+                                      if (incentivesList.isNotEmpty ||
+                                          loanPlanEntries.isNotEmpty ||
+                                          loanSkipEntries.isNotEmpty ||
+                                          owingBroughtForward > 0 ||
+                                          deductionsList.isNotEmpty) ...[
                                         const SizedBox(height: 8),
                                         Container(
                                           padding: const EdgeInsets.all(8),
@@ -1327,9 +1717,10 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                                                     ],
                                                   ),
                                                 )),
-                                              // Loans
-                                              if (loansList.isNotEmpty)
-                                                ...loansList.map((loan) => Padding(
+                                              // Loans (Skip only while this month is unpaid)
+                                              ...loanPlanEntries.map((e) {
+                                                final loan = e['loan'] as Map<String, dynamic>;
+                                                return Padding(
                                                   padding: const EdgeInsets.symmetric(vertical: 2),
                                                   child: Row(
                                                     children: [
@@ -1342,13 +1733,72 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                                                           overflow: TextOverflow.ellipsis,
                                                         ),
                                                       ),
+                                                      if (!isPaid && loan['status'] == 'Active')
+                                                        InkWell(
+                                                          onTap: () => _showSkipLoanDialog(staff, e),
+                                                          child: Padding(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                                                            child: Text(
+                                                              'Skip',
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                                color: Colors.blue.shade700,
+                                                                fontWeight: FontWeight.w600,
+                                                                decoration: TextDecoration.underline,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
                                                       Text(
                                                         '-${_currencyFormat.format(loan['deductionPerMonth'])}',
                                                         style: TextStyle(fontSize: 11, color: Colors.orange.shade700, fontWeight: FontWeight.w500),
                                                       ),
                                                     ],
                                                   ),
-                                                )),
+                                                );
+                                              }),
+                                              ...loanSkipEntries.map((e) {
+                                                final loan = e['loan'] as Map<String, dynamic>;
+                                                final note = e['note'] as String?;
+                                                return Padding(
+                                                  padding: const EdgeInsets.symmetric(vertical: 2),
+                                                  child: Row(
+                                                    children: [
+                                                      Icon(Icons.pause_circle, size: 12, color: Colors.blue.shade600),
+                                                      const SizedBox(width: 4),
+                                                      Expanded(
+                                                        child: Text(
+                                                          'Loan skipped: ${loan['reason'] ?? 'Loan'} — '
+                                                          '${_skipModeLabel(e['mode'] as String)}'
+                                                          '${note != null && note.isNotEmpty ? ' ($note)' : ''}',
+                                                          style: TextStyle(fontSize: 11, color: Colors.blue.shade700),
+                                                          overflow: TextOverflow.ellipsis,
+                                                        ),
+                                                      ),
+                                                      if (!isPaid)
+                                                        InkWell(
+                                                          onTap: () => _undoLoanSkip(staff, e),
+                                                          child: Padding(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                                                            child: Text(
+                                                              'Undo',
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                                color: Colors.blue.shade700,
+                                                                fontWeight: FontWeight.w600,
+                                                                decoration: TextDecoration.underline,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      Text(
+                                                        _currencyFormat.format(0),
+                                                        style: TextStyle(fontSize: 11, color: Colors.blue.shade700, fontWeight: FontWeight.w500),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                              }),
                                               if (loanArrears > 0)
                                                 Padding(
                                                   padding: const EdgeInsets.symmetric(vertical: 2),
@@ -1365,6 +1815,27 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                                                       ),
                                                       Text(
                                                         '-${_currencyFormat.format(loanArrears)}',
+                                                        style: TextStyle(fontSize: 11, color: Colors.deepOrange.shade700, fontWeight: FontWeight.w500),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              if (owingBroughtForward > 0)
+                                                Padding(
+                                                  padding: const EdgeInsets.symmetric(vertical: 2),
+                                                  child: Row(
+                                                    children: [
+                                                      Icon(Icons.redo, size: 12, color: Colors.deepOrange.shade600),
+                                                      const SizedBox(width: 4),
+                                                      Expanded(
+                                                        child: Text(
+                                                          'Owing from ${staff['owingFromMonth']}',
+                                                          style: TextStyle(fontSize: 11, color: Colors.deepOrange.shade700),
+                                                          overflow: TextOverflow.ellipsis,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        '-${_currencyFormat.format(owingBroughtForward)}',
                                                         style: TextStyle(fontSize: 11, color: Colors.deepOrange.shade700, fontWeight: FontWeight.w500),
                                                       ),
                                                     ],
@@ -1429,40 +1900,7 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
                                             ),
                                           ),
                                           const SizedBox(width: 8),
-                                          InkWell(
-                                            onTap: () => _togglePaymentStatus(staffDbId, isPaid),
-                                            borderRadius: BorderRadius.circular(20),
-                                            child: Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                              decoration: BoxDecoration(
-                                                color: isPaid ? Colors.green.shade100 : Colors.red.shade100,
-                                                borderRadius: BorderRadius.circular(20),
-                                                border: Border.all(
-                                                  color: isPaid ? Colors.green : Colors.red,
-                                                  width: 1.5,
-                                                ),
-                                              ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Icon(
-                                                    isPaid ? Icons.check_circle : Icons.cancel,
-                                                    size: 18,
-                                                    color: isPaid ? Colors.green.shade700 : Colors.red.shade700,
-                                                  ),
-                                                  const SizedBox(width: 6),
-                                                  Text(
-                                                    isPaid ? 'PAID' : 'NOT PAID',
-                                                    style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight: FontWeight.bold,
-                                                      color: isPaid ? Colors.green.shade700 : Colors.red.shade700,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
+                                          _buildPaymentStatusChip(staff, staffDbId, isPaid),
                                         ],
                                       ),
                                     ],
@@ -1494,12 +1932,14 @@ class _StaffPayrollScreenState extends State<StaffPayrollScreen> {
       final staffPayable = (staff['totalPayable'] as num? ?? staff['netSalary'] as num).toDouble();
       final isPaid = _paymentStatus[staffId] ?? false;
 
+      // Staff who owe (negative total) are paid nothing, settled or not.
+      final payout = staffPayable > 0 && staff['paidWithMonth'] == null ? staffPayable : 0.0;
       if (isPaid) {
         paidCount++;
-        totalPaidAmount += staffPayable;
+        totalPaidAmount += payout;
       } else {
         unpaidCount++;
-        totalUnpaidAmount += staffPayable;
+        totalUnpaidAmount += payout;
       }
     }
 

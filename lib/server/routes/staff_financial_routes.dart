@@ -34,9 +34,14 @@ class StaffFinancialRoutes {
     router.delete('/incentives/<id>', _deleteIncentive);
 
     router.get('/salary-payments/single', _getStaffSalaryPayment);
+    router.get('/salary-payments/staff/<staffId>', _getSalaryPaymentsForStaff);
     router.get('/salary-payments', _getSalaryPaymentsByMonth);
     router.post('/salary-payments/toggle', _toggleSalaryPayment);
     router.post('/salary-payments/loan-deductions', _setLoanDeductionsApplied);
+    router.post('/salary-payments/loan-skips', _setLoanSkips);
+    router.post('/salary-payments/owing-carried', _setOwingCarriedForward);
+    router.post('/salary-payments/paid-with', _markSalaryMonthsPaidWith);
+    router.post('/salary-payments/paid-with/reopen', _reopenSalaryMonthsPaidWith);
 
     router.get('/salary-history/staff/<staffId>', _getSalaryHistoryForStaff);
     router.get('/salary-history', _getAllSalaryHistory);
@@ -422,6 +427,16 @@ class StaffFinancialRoutes {
     }
   }
 
+  Future<Response> _getSalaryPaymentsForStaff(Request request, String staffId) async {
+    try {
+      final id = int.tryParse(staffId);
+      if (id == null) return _badRequest('Invalid staff ID');
+      return _ok(await _db.getSalaryPaymentsForStaff(id));
+    } catch (e) {
+      return _serverError('Failed to get salary payments for staff', e);
+    }
+  }
+
   Future<Response> _toggleSalaryPayment(Request request) async {
     try {
       final data = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
@@ -474,6 +489,73 @@ class StaffFinancialRoutes {
       return _ok({'success': true});
     } catch (e) {
       return _serverError('Failed to toggle staff salary payment', e);
+    }
+  }
+
+  Future<Response> _markSalaryMonthsPaidWith(Request request) async {
+    try {
+      final data = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      await _db.markSalaryMonthsPaidWith(
+        data['staffId'] as int,
+        [for (final m in (data['months'] as List? ?? const [])) m.toString()],
+        data['paidWithMonth'] as String,
+      );
+      return _ok({'success': true});
+    } catch (e) {
+      return _serverError('Failed to close months paid with salary', e);
+    }
+  }
+
+  Future<Response> _reopenSalaryMonthsPaidWith(Request request) async {
+    try {
+      final data = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      return _ok(await _db.reopenSalaryMonthsPaidWith(
+        data['staffId'] as int,
+        data['paidWithMonth'] as String,
+      ));
+    } catch (e) {
+      return _serverError('Failed to reopen months paid with salary', e);
+    }
+  }
+
+  Future<Response> _setOwingCarriedForward(Request request) async {
+    try {
+      final data = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      await _db.setOwingCarriedForwardForPayment(
+        data['staffId'] as int,
+        data['month'] as String,
+        (data['amount'] as num?)?.toDouble(),
+      );
+      return _ok({'success': true});
+    } catch (e) {
+      return _serverError('Failed to set owing carried forward', e);
+    }
+  }
+
+  Future<Response> _setLoanSkips(Request request) async {
+    try {
+      final data = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final staffId = data['staffId'] as int;
+      final month = data['month'] as String;
+      final json = data['json'] as String?;
+
+      final oldRow = await _db.getStaffSalaryPayment(staffId, month);
+      await _db.setLoanSkipsForPayment(staffId, month, json);
+      final newRow = await _db.getStaffSalaryPayment(staffId, month);
+      await _writeAuditLog(
+        request,
+        entityType: 'staff_salary_payment',
+        entityId: (newRow?['id'] as int?) ?? staffId,
+        action: 'update',
+        staffId: staffId,
+        changes: {
+          'month': month,
+          'loanSkips': {'old': oldRow?['loanSkips'], 'new': json},
+        },
+      );
+      return _ok({'success': true});
+    } catch (e) {
+      return _serverError('Failed to set loan skips', e);
     }
   }
 

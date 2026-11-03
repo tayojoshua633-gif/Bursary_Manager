@@ -43,6 +43,8 @@ class StaffPayslipPDFGenerator {
     final totalPayable = (staff['totalPayable'] as num? ?? staff['netSalary'] as num? ?? 0).toDouble();
     final arrears = (staff['arrears'] as num? ?? 0).toDouble();
     final loanArrears = (staff['loanArrears'] as num? ?? 0).toDouble();
+    final owingBroughtForward = (staff['owingBroughtForward'] as num? ?? 0).toDouble();
+    final isSettled = staff['isSettled'] == true;
 
     pdf.addPage(
       pw.Page(
@@ -83,6 +85,8 @@ class StaffPayslipPDFGenerator {
                 ),
                 if (loanArrears > 0) _row('Loan Arrears (missed months)', _currencyFormat.format(loanArrears)),
                 _row('Penalties', _currencyFormat.format(staff['totalDeductions'])),
+                if (owingBroughtForward > 0)
+                  _row('Owing from ${staff['owingFromMonth']}', _currencyFormat.format(owingBroughtForward)),
               ],
             ),
             pw.SizedBox(height: 16),
@@ -98,7 +102,9 @@ class StaffPayslipPDFGenerator {
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
                   pw.Text(
-                    arrears > 0 ? 'Total Payable' : 'Net Pay',
+                    isSettled
+                        ? 'Owing (carried to next month)'
+                        : arrears > 0 ? 'Total Payable' : 'Net Pay',
                     style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
                   ),
                   pw.Text(

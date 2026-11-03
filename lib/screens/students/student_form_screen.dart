@@ -16,6 +16,7 @@ import '../../utils/write_guard.dart';
 import '../../utils/age_helper.dart';
 import '../../utils/nigeria_states_lgas.dart';
 import '../../widgets/student_quick_actions_panel.dart';
+import '../../widgets/health_info_section.dart';
 
 class StudentFormScreen extends StatefulWidget {
   const StudentFormScreen({super.key});
@@ -49,6 +50,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
   final _parentSearchCtrl = TextEditingController();
   final _dateOfAdmissionCtrl = TextEditingController(); // Date of admission
   final _recommendationCtrl = TextEditingController(); // Optional recommendation note
+  final _health = HealthInfoController(); // Optional health information
 
   String? _selectedGender;
   int? _selectedClass;
@@ -513,6 +515,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
       'photoPath': null,
       'dateOfAdmission': _dateOfAdmissionCtrl.text.trim(),
       'recommendation': _recommendationCtrl.text.trim().isEmpty ? null : _recommendationCtrl.text.trim(),
+      ..._health.toMap(),
     };
 
     int studentId;
@@ -754,6 +757,7 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
     _stateOfOriginCtrl.dispose();
     _lgaCtrl.dispose();
     _recommendationCtrl.dispose();
+    _health.dispose();
     _parentNameCtrl.dispose();
     _parentPhoneCtrl.dispose();
     _parentPhone2Ctrl.dispose();
@@ -939,6 +943,14 @@ class _StudentFormScreenState extends State<StudentFormScreen> {
                   ],
                 ),
               ),
+
+              SizedBox(height: ds.cardPadding * 1.5),
+
+              // ======================================================
+              // HEALTH INFORMATION SECTION (Optional) — expanded so it's
+              // visible while registering
+              // ======================================================
+              HealthInfoSection(controller: _health, ds: ds, initiallyExpanded: true),
 
               SizedBox(height: ds.cardPadding * 1.5),
 

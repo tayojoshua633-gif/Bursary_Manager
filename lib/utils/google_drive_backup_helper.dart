@@ -1,9 +1,12 @@
 // lib/utils/google_drive_backup_helper.dart
+import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart';
+import 'windows_google_auth.dart';
 
 /// Google Drive backup helper for uploading database backups
 ///
@@ -29,8 +32,11 @@ import 'package:path/path.dart';
 /// 4. Configure OAuth for iOS (ios/Runner/Info.plist):
 ///    Add your reversed client ID as URL scheme
 ///
+/// 5. Windows/Linux/macOS use the loopback OAuth flow in
+///    [WindowsGoogleAuth] instead, since google_sign_in has no desktop support.
+///
 class GoogleDriveBackupHelper {
-  // Google Sign-In configuration
+  // Google Sign-In configuration (Android / iOS)
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
       drive.DriveApi.driveFileScope, // create / upload own backups
@@ -38,25 +44,43 @@ class GoogleDriveBackupHelper {
     ],
   );
 
+  // True when the current platform needs the loopback OAuth flow.
+  static bool get _isDesktop =>
+      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+
   /// Check if user is currently signed in.
   /// Attempts a silent sign-in first to restore sessions after app restart.
   static Future<bool> isSignedIn() async {
+    if (_isDesktop) return WindowsGoogleAuth.isSignedIn();
     if (_googleSignIn.currentUser != null) return true;
     try {
-      final account = await _googleSignIn.signInSilently();
+      // Reaches accounts.google.com — on a network with no internet uplink
+      // this never resolves on its own, which would stall the home screen.
+      final account = await _googleSignIn
+          .signInSilently()
+          .timeout(const Duration(seconds: 5));
       return account != null;
     } catch (_) {
       return false;
     }
   }
 
-  /// Get current signed-in user email
+  /// Get current signed-in user email (mobile only — always null on
+  /// desktop; use [getEmailAsync] there).
   static String? getCurrentUserEmail() {
+    if (_isDesktop) return null;
+    return _googleSignIn.currentUser?.email;
+  }
+
+  /// Async email fetch — works on all platforms.
+  static Future<String?> getEmailAsync() async {
+    if (_isDesktop) return WindowsGoogleAuth.getEmail();
     return _googleSignIn.currentUser?.email;
   }
 
   /// Sign in to Google account
   static Future<Map<String, dynamic>> signIn() async {
+    if (_isDesktop) return WindowsGoogleAuth.signIn();
     try {
       final account = await _googleSignIn.signIn();
 
@@ -82,11 +106,16 @@ class GoogleDriveBackupHelper {
 
   /// Sign out from Google account
   static Future<void> signOut() async {
+    if (_isDesktop) {
+      await WindowsGoogleAuth.signOut();
+      return;
+    }
     await _googleSignIn.signOut();
   }
 
   /// Get authenticated HTTP client for Drive API
   static Future<http.Client?> _getAuthenticatedClient() async {
+    if (_isDesktop) return WindowsGoogleAuth.getAuthenticatedClient();
     final account = _googleSignIn.currentUser;
     if (account == null) return null;
 
@@ -133,7 +162,9 @@ class GoogleDriveBackupHelper {
       final driveFile = drive.File()
         ..name = fileName
         ..description = 'Bursary Manager database backup'
-        ..mimeType = 'application/x-sqlite3';
+        ..mimeType = fileName.toLowerCase().endsWith('.zip')
+            ? 'application/zip'
+            : 'application/x-sqlite3';
 
       // Check if folder exists, create if not
       final folderId = await _getOrCreateBackupFolder(driveApi);
@@ -152,6 +183,7 @@ class GoogleDriveBackupHelper {
         uploadMedia: media,
       );
 
+      if (folderId != null) await _pruneBackupFolder(driveApi, folderId);
       client.close();
 
       return {
@@ -167,6 +199,29 @@ class GoogleDriveBackupHelper {
         'message': 'Upload failed: $e',
       };
     }
+  }
+
+  /// How many backups the "Bursary Backups" folder keeps. It holds both the
+  /// Online Backup screen's uploads and the automatic ones, so without a
+  /// limit it would grow until the Google account's storage is full — at
+  /// which point every backup to Drive starts failing.
+  static const int maxDriveBackups = 5;
+
+  /// Deletes all but the newest [maxDriveBackups] backups in the folder.
+  /// Best-effort: a failed delete just leaves an extra file behind.
+  static Future<void> _pruneBackupFolder(drive.DriveApi driveApi, String folderId) async {
+    try {
+      final listed = await driveApi.files.list(
+        q: "(name contains '.db' or name contains '.zip') and '$folderId' in parents and trashed=false",
+        spaces: 'drive',
+        orderBy: 'createdTime desc',
+        $fields: 'files(id)',
+      );
+      final files = listed.files ?? [];
+      for (final f in files.skip(maxDriveBackups)) {
+        try { await driveApi.files.delete(f.id!); } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   /// Get or create "Bursary Backups" folder in Drive
@@ -213,9 +268,9 @@ class GoogleDriveBackupHelper {
 
       final driveApi = drive.DriveApi(client);
 
-      // Search for .db files in Bursary Backups folder
+      // Search for .db / .zip backups in Bursary Backups folder
       final folderId = await _getOrCreateBackupFolder(driveApi);
-      String query = "name contains '.db' and trashed=false";
+      String query = "(name contains '.db' or name contains '.zip') and trashed=false";
       if (folderId != null) {
         query += " and '$folderId' in parents";
       }
@@ -339,31 +394,37 @@ class GoogleDriveBackupHelper {
   // DSM sync folder (read-only — does NOT create, only reads what DSM made)
   // ─────────────────────────────────────────────────────────────────────────
 
-  static const String _dsmFolderName = 'DSM CloudSync';
+  /// The desktop DSM app's backup folder: its Online Backup screen, home
+  /// Sync button and auto-backup all upload a zip (database + photos) here.
+  static const String dsmFolderName = 'DSM Backup';
 
-  /// Finds (but does NOT create) the desktop DSM app's "DSM CloudSync"
-  /// Google Drive folder. Returns null if it doesn't exist yet (i.e. DSM
-  /// has never performed a CloudSync on this account).
-  static Future<String?> _getDsmFolder(drive.DriveApi driveApi) async {
+  /// Folder used by older DSM versions' CloudSync (raw .db files). Still
+  /// read so backups made before DSM switched folders stay available.
+  static const String _legacyDsmFolderName = 'DSM CloudSync';
+
+  /// Finds (but does NOT create) every DSM backup folder on this account.
+  static Future<List<String>> _getDsmFolders(drive.DriveApi driveApi) async {
     try {
-      final query = "name='$_dsmFolderName' and mimeType='application/vnd.google-apps.folder' and trashed=false";
+      final query = "(name='$dsmFolderName' or name='$_legacyDsmFolderName') "
+          "and mimeType='application/vnd.google-apps.folder' and trashed=false";
       final fileList = await driveApi.files.list(
         q: query,
         spaces: 'drive',
         $fields: 'files(id, name)',
       );
-      if (fileList.files != null && fileList.files!.isNotEmpty) {
-        return fileList.files!.first.id;
-      }
-      return null;
+      return [
+        for (final f in fileList.files ?? <drive.File>[])
+          if (f.id != null) f.id!,
+      ];
     } catch (_) {
-      return null;
+      return [];
     }
   }
 
-  /// Lists all backup files from the desktop DSM app's "DSM CloudSync"
-  /// folder, newest first. Returns an empty list when not signed in or the
-  /// folder doesn't exist (DSM CloudSync has never run on this account).
+  /// Lists all .db / .zip backups from the desktop DSM app's Drive folders
+  /// ("DSM Backup", plus the older "DSM CloudSync"), newest first. Returns
+  /// an empty list when not signed in or DSM has never backed up to Drive
+  /// on this account.
   static Future<List<Map<String, dynamic>>> listDsmBackups() async {
     try {
       if (!await isSignedIn()) return [];
@@ -371,11 +432,12 @@ class GoogleDriveBackupHelper {
       if (client == null) return [];
 
       final driveApi = drive.DriveApi(client);
-      final folderId = await _getDsmFolder(driveApi);
-      if (folderId == null) { client.close(); return []; }
+      final folderIds = await _getDsmFolders(driveApi);
+      if (folderIds.isEmpty) { client.close(); return []; }
 
+      final inFolders = folderIds.map((id) => "'$id' in parents").join(' or ');
       final fileList = await driveApi.files.list(
-        q: "'$folderId' in parents and trashed=false",
+        q: "($inFolders) and (name contains '.db' or name contains '.zip') and trashed=false",
         spaces: 'drive',
         orderBy: 'modifiedTime desc',
         $fields: 'files(id, name, size, createdTime, modifiedTime)',

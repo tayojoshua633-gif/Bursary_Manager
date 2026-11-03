@@ -32,6 +32,8 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
 
   List<Map<String, dynamic>> _classes = [];
   int _selectedClassId = 0; // 0 = All Classes
+  List<Map<String, dynamic>> _arms = [];
+  int _selectedArmId = 0; // 0 = All Arms
 
   List<Map<String, dynamic>> _ledger = [];
   int _maxInstalments = 0;
@@ -91,11 +93,13 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
       final p2Key = DatabaseHelperWrapper.sqlTermKeyExpr('p2');
 
       final String classFilter = _selectedClassId > 0 ? 'AND s.classId = ?' : '';
+      final String armFilter = _selectedArmId > 0 ? 'AND s.armId = ?' : '';
       final List<dynamic> studentParams = [
         targetKey, targetKey, // b2/p2 sort key for freshPreviousBalance
         _term, _session, // LEFT JOIN student_bills
       ];
       if (_selectedClassId > 0) studentParams.add(_selectedClassId);
+      if (_selectedArmId > 0) studentParams.add(_selectedArmId);
 
       final studentRows = await db.rawQuery('''
         SELECT
@@ -122,6 +126,7 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
           AND b.term = ? AND b.session = ?
         WHERE s.isActive = 1
           $classFilter
+          $armFilter
         ORDER BY c.name, a.name, s.surname, s.firstName
       ''', studentParams);
 
@@ -189,7 +194,7 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
       if (_ledger.isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No students found for the selected class')),
+          const SnackBar(content: Text('No students found for the selected class/arm')),
         );
       }
     } catch (e) {
@@ -235,13 +240,32 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
     }
   }
 
+  Future<void> _onClassChanged(int? classId) async {
+    setState(() {
+      _selectedClassId = classId ?? 0;
+      _selectedArmId = 0;
+      _arms = [];
+      _ledger = [];
+    });
+    if (_selectedClassId > 0) {
+      final arms = await _db.getArmsByClass(_selectedClassId);
+      if (mounted) setState(() => _arms = arms);
+    }
+  }
+
   String _getSelectedClassName() {
     if (_selectedClassId == 0) return 'All Classes';
     final classData = _classes.firstWhere(
       (c) => c['id'] == _selectedClassId,
       orElse: () => {'name': ''},
     );
-    return classData['name'] ?? '';
+    final className = classData['name'] ?? '';
+    if (_selectedArmId == 0) return className;
+    final armData = _arms.firstWhere(
+      (a) => a['id'] == _selectedArmId,
+      orElse: () => {'name': ''},
+    );
+    return '$className - ${armData['name'] ?? ''}';
   }
 
   @override
@@ -365,12 +389,32 @@ class _VirtualLedgerScreenState extends State<VirtualLedgerScreen> {
                                 (c) => DropdownMenuItem<int>(value: c['id'], child: Text(c['name'])),
                               ),
                             ],
-                            onChanged: (v) {
-                              setState(() {
-                                _selectedClassId = v ?? 0;
-                                _ledger = [];
-                              });
-                            },
+                            onChanged: _onClassChanged,
+                          ),
+                          SizedBox(height: ds.cardPadding),
+                          DropdownButtonFormField<int>(
+                            // Re-keyed per class so the selection resets to "All Arms"
+                            key: ValueKey('arm-$_selectedClassId-${_arms.length}'),
+                            decoration: const InputDecoration(
+                              labelText: 'Select Arm',
+                              border: OutlineInputBorder(),
+                              prefixIcon: Icon(Icons.groups),
+                            ),
+                            initialValue: _selectedArmId,
+                            items: [
+                              const DropdownMenuItem<int>(value: 0, child: Text('All Arms')),
+                              ..._arms.map(
+                                (a) => DropdownMenuItem<int>(value: a['id'], child: Text(a['name'])),
+                              ),
+                            ],
+                            onChanged: _selectedClassId == 0
+                                ? null
+                                : (v) {
+                                    setState(() {
+                                      _selectedArmId = v ?? 0;
+                                      _ledger = [];
+                                    });
+                                  },
                           ),
                           SizedBox(height: ds.cardPadding),
                           SizedBox(

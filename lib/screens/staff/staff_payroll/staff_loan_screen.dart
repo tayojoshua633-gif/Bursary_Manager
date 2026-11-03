@@ -459,6 +459,230 @@ class _StaffLoanScreenState extends State<StaffLoanScreen> with SingleTickerProv
     );
   }
 
+  /// Every paid salary that deducted [loan], oldest first, with the months
+  /// each one covered and the balance left after it.
+  Future<void> _showRepaymentHistory(Map<String, dynamic> loan) async {
+    final loanId = loan['id'] as int;
+    final amount = (loan['amount'] as num).toDouble();
+    final perMonth = (loan['deductionPerMonth'] as num).toDouble();
+    final loanModel = StaffLoan.fromMap(loan);
+
+    List<Map<String, dynamic>> payments;
+    try {
+      payments = await _repoDb.getSalaryPaymentsForStaff(loan['staffId'] as int);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load repayment history: $e')),
+      );
+      return;
+    }
+
+    DateTime monthKey(String m) {
+      try {
+        return DateFormat('MMMM yyyy').parse(m);
+      } catch (_) {
+        return DateTime(0);
+      }
+    }
+
+    final rows = <Map<String, dynamic>>[];
+    for (final p in payments) {
+      final month = p['month'] as String;
+      final isPaid = (p['isPaid'] as int? ?? 0) == 1;
+      final skip = _dbHelper.parseLoanSkips(p['loanSkips'] as String?)[loanId];
+      if (skip != null) {
+        rows.add({
+          'skip': skip,
+          'isPaid': isPaid,
+          'salaryMonth': month,
+          'months': [for (final m in (skip['months'] as List? ?? const [])) m.toString()],
+          'amount': 0.0,
+        });
+      }
+      if (!isPaid) continue;
+      final months = _dbHelper.parseLoanDeductionsApplied(
+        p['loanDeductionsApplied'] as String?,
+        month,
+      )[loanId];
+      if (months == null || months.isEmpty) continue;
+      rows.add({
+        'isPaid': true,
+        'salaryMonth': month,
+        'paymentDate': p['paymentDate'],
+        'months': [...months]..sort((a, b) => monthKey(a).compareTo(monthKey(b))),
+        'amount': perMonth * months.length,
+      });
+    }
+    // Repayments recorded outside salary (Record Payment)
+    for (final m in StaffLoan.manualRepaymentsFor(loan)) {
+      final date = DateTime.tryParse(m['date'] as String? ?? '');
+      rows.add({
+        'manual': m,
+        'isPaid': true,
+        'salaryMonth': date == null ? '' : DateFormat('MMMM yyyy').format(date),
+        'paymentDate': m['date'],
+        'months': <String>[],
+        'amount': (m['amount'] as num?)?.toDouble() ?? perMonth,
+      });
+    }
+    rows.sort((a, b) => monthKey(a['salaryMonth']).compareTo(monthKey(b['salaryMonth'])));
+
+    // The salary deduction that finished the loan also collected the
+    // rounding leftover (e.g. N0.01 on N100,000 over 3 months).
+    final residue = StaffLoan.roundingResidueFor(loan);
+    if (residue != 0 && loan['status'] == 'Completed' && !StaffLoan.completedByManualRepayment(loan)) {
+      final salaryRows = rows.where((r) => r['skip'] == null && r['manual'] == null);
+      if (salaryRows.isNotEmpty) {
+        salaryRows.last['amount'] = (salaryRows.last['amount'] as double) + residue;
+      }
+    }
+
+    double runningBalance = amount;
+    for (final r in rows) {
+      runningBalance -= r['amount'] as double;
+      r['balanceAfter'] = runningBalance < 0 ? 0.0 : runningBalance;
+    }
+    final recorded = rows.fold<double>(0, (sum, r) => sum + (r['amount'] as double));
+    final unrecorded = loanModel.totalPaid - recorded;
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Repayment History — ${loan['staffName'] ?? ''}'),
+        content: SizedBox(
+          width: 480,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _detailRow('Loan Amount', _currencyFormat.format(amount)),
+                _detailRow('Monthly Deduction', _currencyFormat.format(perMonth)),
+                _detailRow('Total Repaid', _currencyFormat.format(loanModel.totalPaid)),
+                _detailRow('Balance', _currencyFormat.format(loanModel.balance)),
+                const Divider(),
+                if (rows.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'No salary deductions recorded for this loan yet.',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  )
+                else
+                  ...rows.map((r) {
+                    final months = r['months'] as List<String>;
+                    final skip = r['skip'] as Map<String, dynamic>?;
+                    final manual = r['manual'] as Map<String, dynamic>?;
+                    if (manual != null) {
+                      final d = DateTime.tryParse(manual['date'] as String? ?? '');
+                      final by = manual['by'] as String?;
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.payments, color: Colors.teal.shade600, size: 20),
+                        title: Text(
+                          'Record Payment${d == null ? '' : ' · ${DateFormat('dd MMM yyyy').format(d)}'}',
+                        ),
+                        subtitle: Text(
+                          'Paid outside salary${by != null && by.isNotEmpty ? ' (by $by)' : ''}',
+                        ),
+                        trailing: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              '-${_currencyFormat.format(r['amount'])}',
+                              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal),
+                            ),
+                            Text(
+                              'Bal: ${_currencyFormat.format(r['balanceAfter'])}',
+                              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                    if (skip != null) {
+                      final note = skip['note'] as String?;
+                      final by = skip['by'] as String?;
+                      final details = [
+                        skip['mode'] == 'carry' ? 'Carried to next salary' : 'Loan extended',
+                        if (months.isNotEmpty) 'for ${months.join(', ')}',
+                        if (note != null && note.isNotEmpty) '— $note',
+                        if (by != null && by.isNotEmpty) '(by $by)',
+                      ].join(' ');
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.pause_circle, color: Colors.blue.shade600, size: 20),
+                        title: Text(r['isPaid'] == true
+                            ? '${r['salaryMonth']} salary · Skipped'
+                            : '${r['salaryMonth']} salary · Skip set (not paid yet)'),
+                        subtitle: Text(details),
+                        trailing: Text(
+                          'Bal: ${_currencyFormat.format(r['balanceAfter'])}',
+                          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        ),
+                      );
+                    }
+                    String paidOn = '';
+                    final rawDate = r['paymentDate'] as String?;
+                    if (rawDate != null && rawDate.isNotEmpty) {
+                      final d = DateTime.tryParse(rawDate);
+                      if (d != null) paidOn = ' · paid ${DateFormat('dd MMM yyyy').format(d)}';
+                    }
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                      title: Text('${r['salaryMonth']} salary$paidOn'),
+                      subtitle: Text(
+                        months.length == 1
+                            ? 'Covered: ${months.first}'
+                            : 'Covered ${months.length} months: ${months.join(', ')}',
+                      ),
+                      trailing: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '-${_currencyFormat.format(r['amount'])}',
+                            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange),
+                          ),
+                          Text(
+                            'Bal: ${_currencyFormat.format(r['balanceAfter'])}',
+                            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                if (unrecorded.abs() > 0.01) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '${_currencyFormat.format(unrecorded.abs())} of the repaid amount has no '
+                    'salary record — it was adjusted manually or deducted before '
+                    'repayment history was tracked.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _detailRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1225,6 +1449,12 @@ class _StaffLoanScreenState extends State<StaffLoanScreen> with SingleTickerProv
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
+                  TextButton.icon(
+                    onPressed: () => _showRepaymentHistory(loan),
+                    icon: const Icon(Icons.history, size: 18),
+                    label: const Text('History'),
+                  ),
+                  const Spacer(),
                   IconButton(
                     icon: Icon(
                       hasBeenPaid ? Icons.lock_outline : Icons.edit,

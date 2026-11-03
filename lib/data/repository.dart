@@ -454,7 +454,12 @@ abstract class DataRepository {
   });
   Future<List<Map<String, dynamic>>> getSalaryPaymentsByMonth(String month);
   Future<Map<String, dynamic>?> getStaffSalaryPayment(int staffId, String month);
+  Future<List<Map<String, dynamic>>> getSalaryPaymentsForStaff(int staffId);
   Future<void> setLoanDeductionsAppliedForPayment(int staffId, String month, String? json);
+  Future<void> setLoanSkipsForPayment(int staffId, String month, String? json);
+  Future<void> setOwingCarriedForwardForPayment(int staffId, String month, double? amount);
+  Future<void> markSalaryMonthsPaidWith(int staffId, List<String> months, String paidWithMonth);
+  Future<List<String>> reopenSalaryMonthsPaidWith(int staffId, String paidWithMonth);
 
   // -- Staff Salary Increments/History --
   Future<int> insertSalaryHistory(
@@ -500,6 +505,7 @@ abstract class DataRepository {
     required String term,
     required String session,
     double minPercentagePaid = 0.0,
+    int armId = 0,
   });
 
   /// Get debtors summary statistics
@@ -522,6 +528,7 @@ abstract class DataRepository {
     required String term,
     required String session,
     int classId = 0,
+    int armId = 0,
   });
 
   /// Get students who have fully paid off their bill for a term/session
@@ -529,6 +536,7 @@ abstract class DataRepository {
     required int classId,
     required String term,
     required String session,
+    int armId = 0,
   });
 
   // ========================================

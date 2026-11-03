@@ -10,6 +10,7 @@ import '../../utils/age_helper.dart';
 import '../../utils/nigeria_states_lgas.dart';
 import '../../data/database_helper_wrapper.dart';
 import '../../widgets/student_quick_access_bar.dart';
+import '../../widgets/health_info_section.dart';
 
 class StudentEditScreen extends StatefulWidget {
   final Student student;
@@ -44,6 +45,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
   late TextEditingController _admCtrl;
   late TextEditingController _dateOfAdmissionCtrl;
   late TextEditingController _recommendationCtrl;
+  late final HealthInfoController _health;
   final TextEditingController _parentSearchCtrl = TextEditingController();
 
   String? _gender;
@@ -99,6 +101,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
     _admCtrl = TextEditingController(text: widget.student.admissionNo);
     _dateOfAdmissionCtrl = TextEditingController(text: widget.student.dateOfAdmission ?? '');
     _recommendationCtrl = TextEditingController(text: widget.student.recommendation ?? '');
+    _health = HealthInfoController(student: widget.student);
     _nationalityCtrl.addListener(_onNationalityChanged);
 
     // Pre-select the state/LGA dropdowns if the stored values match the list.
@@ -378,6 +381,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
       'photoPath': _photoPath,
       'dateOfAdmission': _dateOfAdmissionCtrl.text.trim().isEmpty ? null : _dateOfAdmissionCtrl.text.trim(),
       'recommendation': _recommendationCtrl.text.trim().isEmpty ? null : _recommendationCtrl.text.trim(),
+      ..._health.toMap(),
     };
 
     await _db.updateStudent(widget.student.id!, data);
@@ -520,6 +524,7 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
     _admCtrl.dispose();
     _dateOfAdmissionCtrl.dispose();
     _recommendationCtrl.dispose();
+    _health.dispose();
     _parentSearchCtrl.dispose();
     super.dispose();
   }
@@ -743,6 +748,11 @@ class _StudentEditScreenState extends State<StudentEditScreen> {
                       decoration: const InputDecoration(
                           labelText: "LGA (Local Govt. Area)", border: OutlineInputBorder()),
                     ),
+
+              const SizedBox(height: 20),
+
+              // HEALTH INFORMATION (Optional) — expanded so it's visible
+              HealthInfoSection(controller: _health, ds: ds, initiallyExpanded: true),
 
               const SizedBox(height: 20),
 

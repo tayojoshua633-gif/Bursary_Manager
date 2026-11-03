@@ -31,12 +31,15 @@ import '../db/database_helper.dart';
 import '../utils/school_sync_registry.dart';
 import '../utils/school_sync_client.dart';
 import '../utils/central_backup_helper.dart';
+import '../utils/cloud_sync_helper.dart';
 import '../utils/permission_helper.dart';
 import 'reports/unified_report_screen.dart';
 import '../utils/active_session_term_notifier.dart';
 import 'guide/app_guide_screen.dart';
 import 'examinations/examination_menu_screen.dart';
 import 'updates/updates_screen.dart';
+import 'portal_sync/portal_student_sync_screen.dart';
+import '../utils/portal_student_sync_service.dart';
 import '../utils/update_checker.dart';
 import '../widgets/whats_new_dialog.dart';
 
@@ -66,6 +69,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String _appMode = 'standalone';
   bool _isReadOnlyMode = false;
   bool _isSyncing = false;
+  bool _driveSignedIn = false;
 
   List<LinkedSchool> _linkedSchools = [];
   String? _activeSchoolId;
@@ -84,9 +88,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.initState();
     _loadAppMode();
     _loadLinkedSchools();
+    _loadDriveStatus();
     _loadActiveSessionTerm();
     _loadLicenseStatus();
     _checkForUpdates();
+    unawaited(PortalStudentSyncService.ensureStarted());
+    // Periodic auto-backup to Google Drive (no-op unless enabled on the
+    // Online Backup screen). Safe to restart each time Home is built.
+    unawaited(CloudSyncHelper.startPeriodicAutoBackup());
     ActiveSessionTermNotifier.listenable.addListener(_loadActiveSessionTerm);
     _uptimeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
@@ -241,8 +250,55 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
-  /// Manual sync: refreshes the active school on Read-Only devices, pushes
-  /// this device's own data to the central server on Write devices.
+  Future<void> _loadDriveStatus() async {
+    final signedIn = await CloudSyncHelper.isAvailable();
+    if (mounted) setState(() => _driveSignedIn = signedIn);
+  }
+
+  /// Write devices: pushes to the central server and, when signed in to
+  /// Google, uploads the full backup (database + photos) to Google Drive —
+  /// the same backup as the Online Backup screen. Both run together.
+  Future<Map<String, dynamic>> _pushBackups() async {
+    final driveSignedIn = await CloudSyncHelper.isAvailable();
+    final results = await Future.wait([
+      CentralBackupHelper.triggerAutoUpload(),
+      if (driveSignedIn) CloudSyncHelper.manualBackup(),
+    ]);
+    final central = results[0];
+    if (!driveSignedIn) return central;
+
+    final drive = results[1];
+    final centralOk = central['success'] == true;
+    final driveOk = drive['success'] == true;
+    if (centralOk && driveOk) {
+      return {
+        'success': true,
+        'message': 'Backed up to Google Drive and the central server',
+      };
+    }
+    if (driveOk) {
+      return {
+        'success': false,
+        'message': 'Backed up to Google Drive, but the central server push '
+            'failed: ${central['message']}',
+      };
+    }
+    if (centralOk) {
+      return {
+        'success': false,
+        'message': 'Pushed to the central server, but the Google Drive '
+            'backup failed: ${drive['message']}',
+      };
+    }
+    return {
+      'success': false,
+      'message': 'Backup failed. Google Drive: ${drive['message']}. '
+          'Central server: ${central['message']}',
+    };
+  }
+
+  /// Manual sync: refreshes the active school on Read-Only devices; on Write
+  /// devices pushes to the central server and backs up to Google Drive.
   Future<void> _triggerManualSync() async {
     if (_isSyncing) return;
     setState(() => _isSyncing = true);
@@ -256,10 +312,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         result = await SchoolSyncClient.refreshSchool(active, makeActive: true);
       }
     } else {
-      result = await CentralBackupHelper.triggerAutoUpload();
+      result = await _pushBackups();
     }
 
     if (!mounted) return;
+    // Sign-in state may have changed (e.g. on the Online Backup screen).
+    unawaited(_loadDriveStatus());
 
     if (result['success'] == true && _isReadOnlyMode) {
       await Future.wait([_loadActiveSessionTerm(), _loadLicenseStatus()]);
@@ -459,7 +517,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               )
             : page,
       ),
-    ).then((_) => Future.wait([_loadActiveSessionTerm(), _loadLinkedSchools()]));
+    ).then((_) => Future.wait([_loadActiveSessionTerm(), _loadLinkedSchools(), _loadDriveStatus()]));
   }
 
   @override
@@ -551,7 +609,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                         tooltip: _isReadOnlyMode
                             ? 'Sync active school'
-                            : 'Push to central backup',
+                            : _driveSignedIn
+                                ? 'Sync Now (Google Drive + central backup)'
+                                : 'Push to central backup',
                         onPressed: _triggerManualSync,
                       ),
               ),
@@ -1001,6 +1061,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       pageId: 'parents_management',
                     ),
 
+                    // Staff Management Category
+                    _menuCard(
+                      context,
+                      title: 'Staff Management',
+                      subtitle: 'Staff records & allocations',
+                      icon: Icons.badge_outlined,
+                      color: Colors.indigo,
+                      page: StaffManagementMenu(
+                        currentUser: widget.currentUser,
+                      ),
+                      pageId: 'staff_management',
+                    ),
+
                     // Transportation Category
                     _menuCard(
                       context,
@@ -1045,18 +1118,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       pageId: 'expenditure',
                     ),
 
-                    // Staff Management Category
-                    _menuCard(
-                      context,
-                      title: 'Staff Management',
-                      subtitle: 'Staff records & allocations',
-                      icon: Icons.badge_outlined,
-                      color: Colors.indigo,
-                      page: StaffManagementMenu(
-                        currentUser: widget.currentUser,
+                    // School Portal Sync: class teachers' student corrections
+                    if (PortalStudentSyncScreen.allowed(widget.currentUser))
+                      ValueListenableBuilder<int>(
+                        valueListenable: PortalStudentSyncService.pendingCount,
+                        builder: (context, waiting, _) => _menuCard(
+                          context,
+                          title: 'School Portal Sync',
+                          subtitle: waiting > 0 ? '$waiting waiting for review' : 'Student updates from teachers',
+                          icon: Icons.cloud_sync_outlined,
+                          color: Colors.teal,
+                          page: PortalStudentSyncScreen(currentUser: widget.currentUser),
+                          pageId: 'portal_student_sync',
+                          badge: waiting > 0 ? '$waiting' : null,
+                        ),
                       ),
-                      pageId: 'staff_management',
-                    ),
 
                     // Preferences Category
                     _menuCard(
@@ -1312,7 +1388,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     )
                   : page,
             ),
-          ).then((_) => Future.wait([_loadActiveSessionTerm(), _loadLinkedSchools()]));
+          ).then((_) => Future.wait([_loadActiveSessionTerm(), _loadLinkedSchools(), _loadDriveStatus()]));
         },
         child: Container(
           padding: EdgeInsets.all(ds.cardPadding),

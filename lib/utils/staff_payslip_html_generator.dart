@@ -14,6 +14,8 @@ class StaffPayslipHtmlGenerator {
     final totalPayable = (staff['totalPayable'] as num? ?? staff['netSalary'] as num? ?? 0).toDouble();
     final arrears = (staff['arrears'] as num? ?? 0).toDouble();
     final loanArrears = (staff['loanArrears'] as num? ?? 0).toDouble();
+    final owingBroughtForward = (staff['owingBroughtForward'] as num? ?? 0).toDouble();
+    final isSettled = staff['isSettled'] == true;
 
     final schoolName = (schoolProfile['name'] ?? 'School Name').toString();
     final address = (schoolProfile['address'] ?? '').toString();
@@ -39,6 +41,9 @@ class StaffPayslipHtmlGenerator {
     ));
     if (loanArrears > 0) deductionRows.writeln(_row('Loan Arrears (missed months)', _currencyFormat.format(loanArrears)));
     deductionRows.writeln(_row('Penalties', _currencyFormat.format(staff['totalDeductions'])));
+    if (owingBroughtForward > 0) {
+      deductionRows.writeln(_row('Owing from ${staff['owingFromMonth']}', _currencyFormat.format(owingBroughtForward)));
+    }
 
     final bankRows = StringBuffer();
     bankRows.writeln(_row('Bank Name', (staff['bankName'] ?? '').toString().isEmpty ? 'Not provided' : staff['bankName']));
@@ -89,7 +94,7 @@ class StaffPayslipHtmlGenerator {
   </div>
 
   <div class="net-box">
-    <span class="label">${arrears > 0 ? 'Total Payable' : 'Net Pay'}</span>
+    <span class="label">${isSettled ? 'Owing (carried to next month)' : arrears > 0 ? 'Total Payable' : 'Net Pay'}</span>
     <span class="value">${_currencyFormat.format(totalPayable)}</span>
   </div>
 

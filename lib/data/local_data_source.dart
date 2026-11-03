@@ -1211,8 +1211,44 @@ class LocalDataSource implements DataRepository {
   }
 
   @override
+  Future<List<Map<String, dynamic>>> getSalaryPaymentsForStaff(int staffId) {
+    return _db.getSalaryPaymentsForStaff(staffId);
+  }
+
+  @override
   Future<void> setLoanDeductionsAppliedForPayment(int staffId, String month, String? json) {
     return _db.setLoanDeductionsAppliedForPayment(staffId, month, json);
+  }
+
+  @override
+  Future<void> markSalaryMonthsPaidWith(int staffId, List<String> months, String paidWithMonth) =>
+      _db.markSalaryMonthsPaidWith(staffId, months, paidWithMonth);
+
+  @override
+  Future<List<String>> reopenSalaryMonthsPaidWith(int staffId, String paidWithMonth) =>
+      _db.reopenSalaryMonthsPaidWith(staffId, paidWithMonth);
+
+  @override
+  Future<void> setOwingCarriedForwardForPayment(int staffId, String month, double? amount) {
+    return _db.setOwingCarriedForwardForPayment(staffId, month, amount);
+  }
+
+  @override
+  Future<void> setLoanSkipsForPayment(int staffId, String month, String? json) async {
+    final oldRow = await _db.getStaffSalaryPayment(staffId, month);
+    await _db.setLoanSkipsForPayment(staffId, month, json);
+    final newRow = await _db.getStaffSalaryPayment(staffId, month);
+    await _writeAuditLog(
+      await _db.database,
+      entityType: 'staff_salary_payment',
+      entityId: (newRow?['id'] as int?) ?? staffId,
+      action: 'update',
+      staffId: staffId,
+      changes: {
+        'month': month,
+        'loanSkips': {'old': oldRow?['loanSkips'], 'new': json},
+      },
+    );
   }
 
   // -- Staff Salary Increments/History --
@@ -1328,12 +1364,14 @@ class LocalDataSource implements DataRepository {
     required String term,
     required String session,
     double minPercentagePaid = 0.0,
+    int armId = 0,
   }) {
     return _db.getDebtorsList(
       classId: classId,
       term: term,
       session: session,
       minPercentagePaid: minPercentagePaid,
+      armId: armId,
     );
   }
 
@@ -1370,11 +1408,13 @@ class LocalDataSource implements DataRepository {
     required String term,
     required String session,
     int classId = 0,
+    int armId = 0,
   }) {
     return _db.getFeesBalanceSummary(
       term: term,
       session: session,
       classId: classId,
+      armId: armId,
     );
   }
 
@@ -1383,11 +1423,13 @@ class LocalDataSource implements DataRepository {
     required int classId,
     required String term,
     required String session,
+    int armId = 0,
   }) {
     return _db.getBalancedStudentsList(
       classId: classId,
       term: term,
       session: session,
+      armId: armId,
     );
   }
 

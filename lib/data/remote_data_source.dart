@@ -1123,6 +1123,49 @@ class RemoteDataSource implements DataRepository {
   }
 
   @override
+  Future<List<Map<String, dynamic>>> getSalaryPaymentsForStaff(int staffId) async {
+    final response =
+        await _request('GET', '/api/staff-financial/salary-payments/staff/$staffId');
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  @override
+  Future<void> markSalaryMonthsPaidWith(int staffId, List<String> months, String paidWithMonth) async {
+    await _request('POST', '/api/staff-financial/salary-payments/paid-with', body: {
+      'staffId': staffId,
+      'months': months,
+      'paidWithMonth': paidWithMonth,
+    });
+  }
+
+  @override
+  Future<List<String>> reopenSalaryMonthsPaidWith(int staffId, String paidWithMonth) async {
+    final response = await _request('POST', '/api/staff-financial/salary-payments/paid-with/reopen', body: {
+      'staffId': staffId,
+      'paidWithMonth': paidWithMonth,
+    });
+    return [for (final m in (response as List? ?? const [])) m.toString()];
+  }
+
+  @override
+  Future<void> setOwingCarriedForwardForPayment(int staffId, String month, double? amount) async {
+    await _request('POST', '/api/staff-financial/salary-payments/owing-carried', body: {
+      'staffId': staffId,
+      'month': month,
+      'amount': amount,
+    });
+  }
+
+  @override
+  Future<void> setLoanSkipsForPayment(int staffId, String month, String? json) async {
+    await _request('POST', '/api/staff-financial/salary-payments/loan-skips', body: {
+      'staffId': staffId,
+      'month': month,
+      'json': json,
+    });
+  }
+
+  @override
   Future<void> setLoanDeductionsAppliedForPayment(int staffId, String month, String? json) async {
     await _request('POST', '/api/staff-financial/salary-payments/loan-deductions', body: {
       'staffId': staffId,
@@ -1247,10 +1290,11 @@ class RemoteDataSource implements DataRepository {
     required String term,
     required String session,
     double minPercentagePaid = 0.0,
+    int armId = 0,
   }) async {
     final response = await _request(
       'GET',
-      '/api/reports/debtors?classId=$classId&term=$term&session=$session&minPercentagePaid=$minPercentagePaid',
+      '/api/reports/debtors?classId=$classId&term=$term&session=$session&minPercentagePaid=$minPercentagePaid&armId=$armId',
     );
     return List<Map<String, dynamic>>.from(response);
   }
@@ -1287,10 +1331,11 @@ class RemoteDataSource implements DataRepository {
     required String term,
     required String session,
     int classId = 0,
+    int armId = 0,
   }) async {
     final response = await _request(
       'GET',
-      '/api/reports/fees-balance/summary?term=$term&session=$session&classId=$classId',
+      '/api/reports/fees-balance/summary?term=$term&session=$session&classId=$classId&armId=$armId',
     );
     return Map<String, dynamic>.from(response);
   }
@@ -1300,10 +1345,11 @@ class RemoteDataSource implements DataRepository {
     required int classId,
     required String term,
     required String session,
+    int armId = 0,
   }) async {
     final response = await _request(
       'GET',
-      '/api/reports/fees-balance/students?classId=$classId&term=$term&session=$session',
+      '/api/reports/fees-balance/students?classId=$classId&term=$term&session=$session&armId=$armId',
     );
     return List<Map<String, dynamic>>.from(response);
   }

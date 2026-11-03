@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../utils/db_backup_helper.dart';
 import '../../utils/backup_reminder_helper.dart';
+import '../../utils/cloud_sync_helper.dart';
 import '../../utils/google_drive_backup_helper.dart';
 import '../../utils/storage_permission_helper.dart';
 import 'selective_restore_dialog.dart';
@@ -21,7 +22,15 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
   // Google Drive state
   bool _isSignedInToGoogle = false;
   String? _googleUserEmail;
+
+  // Last successful online backup
   DateTime? _lastOnlineBackup;
+
+  // Automatic backup settings
+  bool _autoBackup = false;
+  int _autoBackupInterval = 1;
+  bool _isReadOnlyDevice = false;
+  DateTime? _nextAutoBackup;
 
   @override
   void initState() {
@@ -29,34 +38,65 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
     _checkGoogleSignIn();
   }
 
-  /// Load the last online backup time. If this device has no record yet
-  /// (e.g. fresh install), fall back to the newest backup found in Drive.
-  Future<void> _loadLastOnlineBackup() async {
-    var last = await BackupReminderHelper.getLastOnlineBackup();
-    if (last == null && _isSignedInToGoogle) {
-      final backups = await GoogleDriveBackupHelper.listBackupsInDrive();
-      if (backups.isNotEmpty) {
-        last = (backups.first['modifiedTime'] as DateTime?)?.toLocal();
-        if (last != null) await BackupReminderHelper.recordOnlineBackup(last);
-      }
-    }
-    if (mounted) setState(() => _lastOnlineBackup = last);
+  Future<void> _loadAutoBackupSettings() async {
+    final results = await Future.wait([
+      CloudSyncHelper.isAutoBackupEnabled(),
+      CloudSyncHelper.getAutoBackupIntervalHours(),
+      CloudSyncHelper.isReadOnlyMode(),
+      CloudSyncHelper.getNextAutoBackupDue(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _autoBackup = results[0] as bool;
+      _autoBackupInterval = results[1] as int;
+      _isReadOnlyDevice = results[2] as bool;
+      _nextAutoBackup = results[3] as DateTime?;
+    });
   }
 
-  String _formatLastBackup(DateTime time) {
-    final formatted = DateFormat('EEE, MMM d, yyyy h:mm a').format(time);
-    final diff = DateTime.now().difference(time);
+  Future<void> _setAutoBackup(bool enabled) async {
+    await CloudSyncHelper.setAutoBackupEnabled(enabled);
+    await _loadAutoBackupSettings();
+    // Restart the timer so a newly enabled periodic backup runs if already due.
+    if (enabled) await CloudSyncHelper.startPeriodicAutoBackup();
+  }
+
+  Future<void> _setAutoBackupInterval(int hours) async {
+    await CloudSyncHelper.setAutoBackupIntervalHours(hours);
+    await _loadAutoBackupSettings();
+    await CloudSyncHelper.startPeriodicAutoBackup();
+  }
+
+  /// Load the last online backup time: the locally recorded time, refreshed
+  /// from the newest file on Google Drive (covers backups from other devices).
+  Future<void> _loadLastOnlineBackup() async {
+    final local = await BackupReminderHelper.getLastOnlineBackup();
+    if (mounted) setState(() => _lastOnlineBackup = local);
+
+    if (!_isSignedInToGoogle) return;
+    final backups = await GoogleDriveBackupHelper.listBackupsInDrive();
+    if (backups.isEmpty) return;
+    final remote = (backups.first['modifiedTime'] as DateTime?)?.toLocal();
+    if (remote == null) return;
+    if (local == null || remote.isAfter(local)) {
+      await BackupReminderHelper.recordOnlineBackup(remote);
+      if (mounted) setState(() => _lastOnlineBackup = remote);
+    }
+  }
+
+  String _formatLastBackup(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
     final String ago;
     if (diff.inMinutes < 1) {
       ago = 'just now';
     } else if (diff.inHours < 1) {
       ago = '${diff.inMinutes} min ago';
     } else if (diff.inDays < 1) {
-      ago = '${diff.inHours} hr${diff.inHours == 1 ? '' : 's'} ago';
+      ago = '${diff.inHours} hour${diff.inHours == 1 ? '' : 's'} ago';
     } else {
       ago = '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
     }
-    return '$formatted ($ago)';
+    return '${DateFormat('EEE, d MMM yyyy • h:mm a').format(dt)} ($ago)';
   }
 
   /// Check Google Sign-In status
@@ -64,7 +104,7 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
     setState(() => _isLoading = true);
 
     final isSignedIn = await GoogleDriveBackupHelper.isSignedIn();
-    final email = GoogleDriveBackupHelper.getCurrentUserEmail();
+    final email = await GoogleDriveBackupHelper.getEmailAsync();
 
     if (mounted) {
       setState(() {
@@ -72,8 +112,9 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
         _googleUserEmail = email;
         _isLoading = false;
       });
+      _loadLastOnlineBackup();
+      _loadAutoBackupSettings();
     }
-    await _loadLastOnlineBackup();
   }
 
   /// Sign in to Google account
@@ -157,8 +198,8 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
 
     setState(() => _isLoading = true);
 
-    // First create a local backup
-    final backupResult = await DBBackupHelper.backupDatabase();
+    // First create a local backup archive (database + photos)
+    final backupResult = await DBBackupHelper.createOnlineBackupArchive();
 
     if (!backupResult['success']) {
       setState(() => _isLoading = false);
@@ -191,10 +232,11 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
     }
 
     if (uploadResult['success']) {
-      // Record backup
-      await BackupReminderHelper.recordBackup();
-      await BackupReminderHelper.recordOnlineBackup();
-      if (mounted) setState(() => _lastOnlineBackup = DateTime.now());
+      // Record backup (also restarts the auto-backup countdown)
+      await CloudSyncHelper.recordSuccessfulBackup();
+      if (!mounted) return;
+      setState(() => _lastOnlineBackup = DateTime.now());
+      await _loadAutoBackupSettings();
     }
   }
 
@@ -326,11 +368,38 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
       return;
     }
 
+    // Newer backups are a zip archive (database.db + photos/). Extract the
+    // database out (and restore any photos) before working with it; legacy
+    // backups are already a raw .db file and can be used as-is.
+    String restoreDbPath = downloadPath;
+    if (fileName.toLowerCase().endsWith('.zip')) {
+      final extractedDbPath = '$downloadPath.db';
+      final extracted = await DBBackupHelper.extractDatabaseFromArchive(
+        downloadPath,
+        extractedDbPath,
+      );
+      if (extracted == null) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Backup archive is missing a database'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+      restoreDbPath = extractedDbPath;
+    }
+
+    if (!mounted) return;
+
     // Show selective restore dialog
     final selectedTables = await showDialog<List<String>>(
       context: context,
       builder: (context) => SelectiveRestoreDialog(
-        backupFilePath: downloadPath,
+        backupFilePath: restoreDbPath,
         backupFileName: fileName,
       ),
     );
@@ -341,7 +410,7 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
     setState(() => _isLoading = true);
 
     final restoreResult = await DBBackupHelper.selectiveRestoreDatabase(
-      downloadPath,
+      restoreDbPath,
       selectedTables,
     );
 
@@ -460,6 +529,81 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
         child: _buildScreenContent(context),
       );
 
+  Widget _buildAutoBackupSection() {
+    final canEdit = !_isReadOnlyDevice;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.schedule, color: Colors.blue.shade700, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                'Automatic Backup',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text(
+              'Auto-Backup to Google Drive',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text(
+              'Backs up your data and photos to Google Drive automatically.',
+              style: TextStyle(fontSize: 12),
+            ),
+            value: _autoBackup && canEdit,
+            activeThumbColor: Colors.green.shade700,
+            onChanged: canEdit ? _setAutoBackup : null,
+          ),
+          if (_isReadOnlyDevice)
+            Text(
+              '⚠ This device is in Read-Only mode (linked schools), so it does not back up to Drive.',
+              style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+            ),
+          if (_autoBackup && canEdit) ...[
+            const SizedBox(height: 4),
+            DropdownButtonFormField<int>(
+              initialValue: _autoBackupInterval,
+              decoration: const InputDecoration(
+                labelText: 'Backup frequency',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.timer_outlined),
+                isDense: true,
+              ),
+              items: [
+                for (final h in CloudSyncHelper.autoBackupIntervalOptions)
+                  DropdownMenuItem(
+                    value: h,
+                    child: Text(CloudSyncHelper.describeInterval(h)),
+                  ),
+              ],
+              onChanged: (v) {
+                if (v != null) _setAutoBackupInterval(v);
+              },
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _nextAutoBackup == null || !_nextAutoBackup!.isAfter(DateTime.now())
+                  ? 'Next backup: due now (runs while the app is open).'
+                  : 'Next backup: ${DateFormat('EEE, d MMM yyyy • h:mm a').format(_nextAutoBackup!)}'
+                      ' (runs while the app is open).',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildScreenContent(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -495,7 +639,7 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
                       const SizedBox(height: 12),
                       Text(
                         _isSignedInToGoogle
-                            ? 'Upload your backups to Google Drive for cloud storage'
+                            ? 'Upload your data and photos to Google Drive for cloud storage'
                             : 'Sign in to Google to enable cloud backup',
                         style: const TextStyle(color: Colors.grey),
                       ),
@@ -616,6 +760,9 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
                             ),
                           ),
                         ),
+                        const SizedBox(height: 20),
+
+                        _buildAutoBackupSection(),
                       ] else ...[
                         // Sign in button
                         SizedBox(
@@ -661,6 +808,7 @@ class _OnlineBackupScreenState extends State<OnlineBackupScreen> {
                                   ),
                                   SizedBox(height: 4),
                                   Text(
+                                    '• Includes your database, staff/student photos and school logo\n'
                                     '• Access backups from anywhere\n'
                                     '• Automatic organization in "Bursary Backups" folder\n'
                                     '• Free with your Google account\n'

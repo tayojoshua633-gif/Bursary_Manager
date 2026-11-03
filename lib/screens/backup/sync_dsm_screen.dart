@@ -46,7 +46,7 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
   Future<void> _checkAuth() async {
     setState(() => _checkingAuth = true);
     final signedIn = await GoogleDriveBackupHelper.isSignedIn();
-    final email = GoogleDriveBackupHelper.getCurrentUserEmail();
+    final email = await GoogleDriveBackupHelper.getEmailAsync();
     if (mounted) {
       setState(() {
         _isSignedIn = signedIn;
@@ -130,8 +130,8 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
             Text('No Backups Found'),
           ]),
           content: const Text(
-            'No backups were found in the "DSM CloudSync" folder.\n\n'
-            'Run CloudSync on the DSM desktop app first.',
+            'No backups were found in the "DSM Backup" Google Drive folder.\n\n'
+            'Back up to Google Drive on the DSM desktop app first.',
           ),
           actions: [
             TextButton(
@@ -314,12 +314,14 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
     });
 
     String? tempPath;
+    String? extractedPath;
     try {
       // 1. Download to temp file
+      final isZip = (_selectedBackupName ?? '').toLowerCase().endsWith('.zip');
       final tempDir = await getTemporaryDirectory();
       tempPath = p.join(
         tempDir.path,
-        'dsm_sync_${DateTime.now().millisecondsSinceEpoch}.db',
+        'dsm_sync_${DateTime.now().millisecondsSinceEpoch}${isZip ? '.zip' : '.db'}',
       );
       final dlResult = await GoogleDriveBackupHelper.downloadBackupFromDrive(
           _selectedBackupId!, tempPath);
@@ -327,9 +329,22 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
         throw Exception(dlResult['message']);
       }
 
+      // Current DSM backups are a zip (database.db + photos/); take the
+      // database out and put the photos in place. Older ones are a raw .db.
+      var dbPath = tempPath;
+      if (isZip) {
+        setState(() => _syncStep = 'Extracting backup…');
+        extractedPath = await DBBackupHelper.extractDatabaseFromArchive(
+            tempPath, '$tempPath.db');
+        if (extractedPath == null) {
+          throw Exception('The backup archive does not contain a database.');
+        }
+        dbPath = extractedPath;
+      }
+
       // 2. Read table names from the downloaded backup
       setState(() => _syncStep = 'Reading backup tables…');
-      final tablesToRestore = await _getTablesFromBackup(tempPath);
+      final tablesToRestore = await _getTablesFromBackup(dbPath);
       if (tablesToRestore.isEmpty) {
         throw Exception('No tables found in the backup file.');
       }
@@ -338,7 +353,7 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
       setState(() =>
           _syncStep = 'Restoring ${tablesToRestore.length} tables…');
       final result = await DBBackupHelper.selectiveRestoreDatabase(
-          tempPath, tablesToRestore);
+          dbPath, tablesToRestore);
 
       if (mounted) {
         setState(() {
@@ -356,9 +371,10 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
         });
       }
     } finally {
-      // Clean up temp file
-      if (tempPath != null) {
-        try { File(tempPath).deleteSync(); } catch (_) {}
+      // Clean up temp files
+      for (final path in [tempPath, extractedPath]) {
+        if (path == null) continue;
+        try { File(path).deleteSync(); } catch (_) {}
       }
     }
   }
@@ -615,9 +631,9 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
         ]),
         const SizedBox(height: 8),
         Text(
-          'Selects the latest backup from the "DSM CloudSync" Google Drive '
-          'folder (auto-created by the DSM desktop app when CloudSync runs) '
-          'and restores it into this app with one click.',
+          'Selects the latest backup from the "DSM Backup" Google Drive '
+          'folder (created by the DSM desktop app when it backs up to Google '
+          'Drive) and restores it, with its photos, into this app with one click.',
           style: TextStyle(fontSize: 13, color: Colors.indigo.shade700),
         ),
         const SizedBox(height: 10),
@@ -659,7 +675,7 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
         Text(
           _loadingBackups
               ? 'Loading backups…'
-              : 'DSM CloudSync on Google Drive (${_backups.length})',
+              : 'DSM Backup on Google Drive (${_backups.length})',
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
         ),
         const Spacer(),
@@ -690,7 +706,7 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
           child: Column(children: [
             Icon(Icons.cloud_off, size: 40, color: Colors.grey.shade400),
             const SizedBox(height: 8),
-            Text('"DSM CloudSync" folder not found on this Google account.',
+            Text('No DSM backups found on this Google account.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
@@ -717,8 +733,9 @@ class _SyncDsmScreenState extends State<SyncDsmScreen> {
                   ]),
                   const SizedBox(height: 6),
                   Text(
-                    '1. On the DSM desktop app, go to\n'
-                    '   Settings → CloudSync → tap "Backup Now" at least once.\n\n'
+                    '1. On the DSM desktop app, open Online Backup and tap\n'
+                    '   "Backup to Google Drive" (or the cloud button on\n'
+                    '   the home screen) at least once.\n\n'
                     '2. Sign Out here, then Sign In again — the app needs\n'
                     '   updated Google permissions to read the sync folder.',
                     style: TextStyle(fontSize: 12, color: Colors.amber.shade900),

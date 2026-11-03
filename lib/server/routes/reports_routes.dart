@@ -17,12 +17,14 @@ class ReportsRoutes {
         final term = request.url.queryParameters['term'] ?? '';
         final session = request.url.queryParameters['session'] ?? '';
         final minPaid = double.tryParse(request.url.queryParameters['minPercentagePaid'] ?? '0') ?? 0.0;
+        final armId = int.tryParse(request.url.queryParameters['armId'] ?? '0') ?? 0;
 
         final debtors = await _db.getDebtorsList(
           classId: classId,
           term: term,
           session: session,
           minPercentagePaid: minPaid,
+          armId: armId,
         );
 
         return Response.ok(jsonEncode(debtors), headers: {'Content-Type': 'application/json'});

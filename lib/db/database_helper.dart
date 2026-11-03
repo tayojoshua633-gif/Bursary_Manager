@@ -1,7 +1,9 @@
 // lib/db/database_helper.dart
 import 'dart:async';
+import 'dart:convert';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
+import '../models/staff_loan.dart';
 import '../utils/password_helper.dart';
 import '../utils/admission_settings_helper.dart';
 
@@ -121,7 +123,21 @@ class DatabaseHelper {
   //      deactivated in, so Inactive Students and New Students → Lefts can
   //      filter by term. Existing inactive students are backfilled from the
   //      term of their most recent bill.
-  static const int _dbVersion = 66;
+  // v67: Added optional health information columns to students (genotype,
+  //      bloodGroup, hasDisability, disabilityDetails, allergies,
+  //      medicalConditions, medication, emergencyContactName,
+  //      emergencyContactPhone). All nullable so existing students are unaffected.
+  // v68: Added loanSkips to staff_salary_payments — loan repayments a staff
+  //      member asked to skip for that month, and whether each is postponed
+  //      by extending the loan or carried to the next salary.
+  // v69: Added owingCarriedForward to staff_salary_payments — when a
+  //      month's net salary is negative after all deductions, the month is
+  //      settled (closed, nothing paid) and the amount owed is deducted in
+  //      full from the next salary.
+  // v70: Added paidWithMonth to staff_salary_payments — earlier unpaid
+  //      months whose salary was paid as arrears with a later month are
+  //      closed and point at that month, so they can't be paid twice.
+  static const int _dbVersion = 70;
   static const String _defaultDbName = 'bursary_manager.db';
   // Which file the singleton currently points at — mutable (not const) so a
   // Read-Only device can switch between multiple linked schools' cached
@@ -266,7 +282,16 @@ class DatabaseHelper {
         leftTerm TEXT,
         leftSession TEXT,
         dateOfAdmission TEXT,
-        recommendation TEXT
+        recommendation TEXT,
+        genotype TEXT,
+        bloodGroup TEXT,
+        hasDisability INTEGER,
+        disabilityDetails TEXT,
+        allergies TEXT,
+        medicalConditions TEXT,
+        medication TEXT,
+        emergencyContactName TEXT,
+        emergencyContactPhone TEXT
       )
     ''');
 
@@ -965,6 +990,9 @@ class DatabaseHelper {
         totalUnits REAL,
         workedUnits REAL,
         loanDeductionsApplied TEXT,
+        loanSkips TEXT,
+        owingCarriedForward REAL,
+        paidWithMonth TEXT,
         createdAt TEXT,
         updatedAt TEXT,
         FOREIGN KEY (staffId) REFERENCES staff(id),
@@ -2954,6 +2982,38 @@ class DatabaseHelper {
         WHERE isActive = 0 AND leftTerm IS NULL
       ''');
       print('✅ v66: leftTerm/leftSession added to students and backfilled');
+    }
+
+    if (oldVersion < 67) {
+      for (final col in const [
+        'genotype TEXT',
+        'bloodGroup TEXT',
+        'hasDisability INTEGER',
+        'disabilityDetails TEXT',
+        'allergies TEXT',
+        'medicalConditions TEXT',
+        'medication TEXT',
+        'emergencyContactName TEXT',
+        'emergencyContactPhone TEXT',
+      ]) {
+        await _safeExec(db, 'ALTER TABLE students ADD COLUMN $col');
+      }
+      print('✅ v67: health information columns added to students table');
+    }
+
+    if (oldVersion < 68) {
+      await _safeExec(db, 'ALTER TABLE staff_salary_payments ADD COLUMN loanSkips TEXT');
+      print('✅ v68: loanSkips column added to staff_salary_payments table');
+    }
+
+    if (oldVersion < 69) {
+      await _safeExec(db, 'ALTER TABLE staff_salary_payments ADD COLUMN owingCarriedForward REAL');
+      print('✅ v69: owingCarriedForward column added to staff_salary_payments table');
+    }
+
+    if (oldVersion < 70) {
+      await _safeExec(db, 'ALTER TABLE staff_salary_payments ADD COLUMN paidWithMonth TEXT');
+      print('✅ v70: paidWithMonth (and loan repayment log) columns added');
     }
 
     // ensure session/term exists
@@ -6227,10 +6287,14 @@ class DatabaseHelper {
     required String term,
     required String session,
     double minPercentagePaid = 0.0, // 0 = all debtors, 50 = paid less than 50%
+    int armId = 0, // 0 = all arms
   }) async {
     final db = await database;
 
     final targetKey = termSortKey(term, session);
+    final String armFilter = armId > 0 ? 'AND s.armId = ?' : '';
+    final List<dynamic> params = [targetKey, targetKey, term, session, term, session, classId];
+    if (armId > 0) params.add(armId);
     final result = await db.rawQuery('''
       SELECT
         s.id as studentId,
@@ -6265,8 +6329,9 @@ class DatabaseHelper {
         AND b.session = ?
       WHERE s.classId = ?
         AND s.isActive = 1
+        $armFilter
       ORDER BY s.surname, s.firstName
-    ''', [targetKey, targetKey, term, session, term, session, classId]);
+    ''', params);
 
     // Calculate grand total, outstanding and percentage, then filter
     final debtors = <Map<String, dynamic>>[];
@@ -6399,10 +6464,12 @@ class DatabaseHelper {
     required String term,
     required String session,
     int classId = 0, // 0 = all classes
+    int armId = 0,   // 0 = all arms
   }) async {
     final db = await database;
 
     final String classFilter = classId > 0 ? 'AND s.classId = ?' : '';
+    final String armFilter = armId > 0 ? 'AND s.armId = ?' : '';
     final targetKey = termSortKey(term, session);
     final List<dynamic> params = [
       targetKey, targetKey, // b2/p2 sort key for freshPreviousBalance
@@ -6410,6 +6477,7 @@ class DatabaseHelper {
       term, session,        // LEFT JOIN student_bills
     ];
     if (classId > 0) params.add(classId);
+    if (armId > 0) params.add(armId);
 
     final result = await db.rawQuery('''
       WITH student_totals AS (
@@ -6433,6 +6501,7 @@ class DatabaseHelper {
           AND b.term = ? AND b.session = ?
         WHERE s.isActive = 1
           $classFilter
+          $armFilter
       )
       SELECT
         COUNT(CASE WHEN (currentTermFee + freshPreviousBalance) > 0 THEN 1 END) as totalBilledStudents,
@@ -6481,13 +6550,16 @@ class DatabaseHelper {
     required int classId, // 0 = all classes
     required String term,
     required String session,
+    int armId = 0, // 0 = all arms
   }) async {
     final db = await database;
 
     final targetKey = termSortKey(term, session);
     final String classFilter = classId > 0 ? 'AND s.classId = ?' : '';
+    final String armFilter = armId > 0 ? 'AND s.armId = ?' : '';
     final List<dynamic> params = [targetKey, targetKey, term, session, term, session];
     if (classId > 0) params.add(classId);
+    if (armId > 0) params.add(armId);
 
     final result = await db.rawQuery('''
       SELECT
@@ -6523,6 +6595,7 @@ class DatabaseHelper {
         AND b.session = ?
       WHERE s.isActive = 1
         $classFilter
+        $armFilter
       ORDER BY s.surname, s.firstName
     ''', params);
 
@@ -7582,6 +7655,12 @@ class DatabaseHelper {
     return db.query('staff_salary_payments', where: 'month = ?', whereArgs: [month]);
   }
 
+  /// Get every salary payment record for a staff member (all months)
+  Future<List<Map<String, dynamic>>> getSalaryPaymentsForStaff(int staffId) async {
+    final db = await database;
+    return db.query('staff_salary_payments', where: 'staffId = ?', whereArgs: [staffId]);
+  }
+
   /// Record (or clear, when null) which loan deductions were applied for a
   /// staff's salary payment in a given month, so marking the payment as
   /// NOT PAID can reverse exactly those deductions instead of losing track
@@ -7594,6 +7673,141 @@ class DatabaseHelper {
       where: 'staffId = ? AND month = ?',
       whereArgs: [staffId, month],
     );
+  }
+
+  /// Earlier unpaid months whose salary [month]'s salary pays as arrears —
+  /// the same walk getSalaryArrearsForStaff makes.
+  Future<List<String>> getSalaryArrearsMonths(
+    int staffId,
+    String month, {
+    int maxMonthsBack = 24,
+    String? employmentDate,
+  }) async {
+    final result = <String>[];
+    final target = _parseMonth(month);
+    if (target == null) return result;
+    for (int i = 1; i <= maxMonthsBack; i++) {
+      final prevMonth = _formatMonth(DateTime(target.year, target.month - i, 1));
+      if (employmentDate != null && !isStaffEmployedByMonth(employmentDate, prevMonth)) break;
+      final payment = await getStaffSalaryPayment(staffId, prevMonth);
+      if (payment != null &&
+          (payment['isPaid'] as int) == 1 &&
+          payment['paidWithMonth'] != month) {
+        break;
+      }
+      result.add(prevMonth);
+    }
+    return result;
+  }
+
+  /// Closes earlier unpaid [months] whose salary was paid as arrears with
+  /// [paidWithMonth]'s salary, so they can't be paid a second time.
+  Future<void> markSalaryMonthsPaidWith(int staffId, List<String> months, String paidWithMonth) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    for (final m in months) {
+      final existing = await getStaffSalaryPayment(staffId, m);
+      final data = {'isPaid': 1, 'paymentDate': now, 'paidWithMonth': paidWithMonth, 'updatedAt': now};
+      if (existing != null) {
+        await db.update('staff_salary_payments', data, where: 'id = ?', whereArgs: [existing['id']]);
+      } else {
+        await db.insert('staff_salary_payments', {...data, 'staffId': staffId, 'month': m, 'createdAt': now});
+      }
+    }
+  }
+
+  /// Reopens the months [paidWithMonth]'s salary closed (when that salary
+  /// is marked NOT PAID) and returns them.
+  Future<List<String>> reopenSalaryMonthsPaidWith(int staffId, String paidWithMonth) async {
+    final db = await database;
+    final rows = await db.query(
+      'staff_salary_payments',
+      columns: ['month'],
+      where: 'staffId = ? AND paidWithMonth = ?',
+      whereArgs: [staffId, paidWithMonth],
+    );
+    await db.update(
+      'staff_salary_payments',
+      {
+        'isPaid': 0,
+        'paymentDate': null,
+        'paidWithMonth': null,
+        'updatedAt': DateTime.now().toIso8601String(),
+      },
+      where: 'staffId = ? AND paidWithMonth = ?',
+      whereArgs: [staffId, paidWithMonth],
+    );
+    return [for (final r in rows) r['month'] as String];
+  }
+
+  /// Record (or clear, when null) how much a staff member still owes after a
+  /// month was settled with a negative net salary. The amount is deducted in
+  /// full from the next salary.
+  Future<void> setOwingCarriedForwardForPayment(int staffId, String month, double? amount) async {
+    final db = await database;
+    await db.update(
+      'staff_salary_payments',
+      {'owingCarriedForward': amount, 'updatedAt': DateTime.now().toIso8601String()},
+      where: 'staffId = ? AND month = ?',
+      whereArgs: [staffId, month],
+    );
+  }
+
+  /// Amount owed from the last settled salary before [month], which
+  /// [month]'s salary must deduct. Walks back over unpaid months to the
+  /// nearest paid/settled one; returns {'amount', 'fromMonth'} when that
+  /// month carried an amount owing, otherwise null.
+  Future<Map<String, dynamic>?> getOwingBroughtForward(
+    int staffId,
+    String month, {
+    int maxMonthsBack = 24,
+    String? employmentDate,
+  }) async {
+    try {
+      final target = _parseMonth(month);
+      if (target == null) return null;
+      final payments = await getSalaryPaymentsForStaff(staffId);
+      final paymentByMonth = {for (final p in payments) p['month'] as String: p};
+      for (int i = 1; i <= maxMonthsBack; i++) {
+        final prevMonth = _formatMonth(DateTime(target.year, target.month - i, 1));
+        if (employmentDate != null && !isStaffEmployedByMonth(employmentDate, prevMonth)) break;
+        final payment = paymentByMonth[prevMonth];
+        if (payment == null ||
+            (payment['isPaid'] as int) != 1 ||
+            payment['paidWithMonth'] == month) {
+          continue;
+        }
+        final owing = (payment['owingCarriedForward'] as num?)?.toDouble() ?? 0;
+        return owing > 0 ? {'amount': owing, 'fromMonth': prevMonth} : null;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Record (or clear, when null) the loan repayments skipped for a staff's
+  /// salary in a given month. Creates the month's payment row (unpaid) if
+  /// it doesn't exist yet, since a skip is usually set before paying.
+  Future<void> setLoanSkipsForPayment(int staffId, String month, String? json) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    final existing = await getStaffSalaryPayment(staffId, month);
+    if (existing != null) {
+      await db.update(
+        'staff_salary_payments',
+        {'loanSkips': json, 'updatedAt': now},
+        where: 'id = ?',
+        whereArgs: [existing['id']],
+      );
+    } else {
+      await db.insert('staff_salary_payments', {
+        'staffId': staffId,
+        'month': month,
+        'isPaid': 0,
+        'loanSkips': json,
+        'createdAt': now,
+        'updatedAt': now,
+      });
+    }
   }
 
   /// Toggle staff salary payment status
@@ -7799,15 +8013,20 @@ class DatabaseHelper {
 
         final payment = await getStaffSalaryPayment(staffId, prevMonth);
 
-        // Paid month found — stop counting arrears
-        if (payment != null && (payment['isPaid'] as int) == 1) break;
+        // Paid month found — stop counting arrears. Months this salary
+        // itself closed (paid as its arrears) still count towards it.
+        if (payment != null &&
+            (payment['isPaid'] as int) == 1 &&
+            payment['paidWithMonth'] != selectedMonth) {
+          break;
+        }
 
         // Unpaid — either explicitly marked NOT PAID, or simply never marked
         // at all (the normal case: the toggle only ever writes a row when
         // marking PAID or reverting from it, so most unpaid months have no
         // row). Both count as arrears. Compute gross arrears for this month:
         // = Basic + Incentive − Deduction (loan NOT subtracted here;
-        //   loan is tracked separately via getLoanArrearsForStaff and shown
+        //   loan is tracked separately via getLoanDeductionPlan and shown
         //   as accumulated in the loan deduction column)
         // Basic is pro-rated using whatever payroll basis (Full/Percentage/
         // Days/Weeks) was in effect for that missed month.
@@ -7845,74 +8064,236 @@ class DatabaseHelper {
     return (result.first['total'] as num? ?? 0).toDouble();
   }
 
-  /// Returns the total accumulated loan deduction amount for consecutive unpaid
-  /// months before [selectedMonth]. Uses current active loan terms.
-  Future<double> getLoanArrearsForStaff(
-    int staffId,
-    String selectedMonth, {
-    int maxMonthsBack = 24,
-    String? employmentDate,
-  }) async {
-    double arrears = 0.0;
-    try {
-      final targetDate = _parseMonth(selectedMonth);
-      if (targetDate == null) return 0.0;
-
-      final db = await database;
-      final activeLoans = await db.query(
-        'staff_loans',
-        where: 'staffId = ? AND status = ?',
-        whereArgs: [staffId, 'Active'],
-      );
-      if (activeLoans.isEmpty) return 0.0;
-
-      final deductionPerMonth = activeLoans.fold<double>(
-        0, (sum, l) => sum + (l['deductionPerMonth'] as num).toDouble(),
-      );
-
-      for (int i = 1; i <= maxMonthsBack; i++) {
-        int m = targetDate.month - i;
-        int y = targetDate.year;
-        while (m <= 0) { m += 12; y--; }
-        final prevMonth = _formatMonth(DateTime(y, m, 1));
-
-        if (employmentDate != null && !isStaffEmployedByMonth(employmentDate, prevMonth)) break;
-
-        final payment = await getStaffSalaryPayment(staffId, prevMonth);
-        if (payment != null && (payment['isPaid'] as int) == 1) break;
-
-        arrears += deductionPerMonth;
-      }
-    } catch (_) {}
-    return arrears;
+  /// Month a loan starts falling due: its collection month, falling back to
+  /// the month it was recorded in. Deductions never reach back before this.
+  DateTime? _loanStartMonth(Map<String, dynamic> loan) {
+    final collection = loan['collectionDate'] as String?;
+    if (collection != null && collection.isNotEmpty) {
+      final d = DateTime.tryParse(collection);
+      if (d != null) return DateTime(d.year, d.month, 1);
+    }
+    final recorded = _parseMonth(loan['month'] as String? ?? '');
+    if (recorded != null) return recorded;
+    final created = DateTime.tryParse(loan['createdAt'] as String? ?? '');
+    return created == null ? null : DateTime(created.year, created.month, 1);
   }
 
-  /// Returns the count of consecutive unpaid salary months before [selectedMonth].
-  Future<int> getUnpaidMonthsCount(
+  /// Parses a salary payment's loanDeductionsApplied JSON into
+  /// loanId -> months that payment deducted the loan for. Older records
+  /// stored only a month count; those are read as the payment month plus
+  /// the (count - 1) months before it, which is what was deducted then.
+  Map<int, List<String>> parseLoanDeductionsApplied(String? json, String paymentMonth) {
+    final result = <int, List<String>>{};
+    if (json == null || json.isEmpty) return result;
+    try {
+      final Map<String, dynamic> applied = jsonDecode(json);
+      final paidDate = _parseMonth(paymentMonth);
+      for (final entry in applied.entries) {
+        final loanId = int.tryParse(entry.key);
+        if (loanId == null) continue;
+        final value = entry.value;
+        if (value is List) {
+          result[loanId] = value.map((m) => m.toString()).toList();
+        } else if (value is num && paidDate != null) {
+          result[loanId] = [
+            for (int i = 0; i < value.toInt(); i++)
+              _formatMonth(DateTime(paidDate.year, paidDate.month - i, 1)),
+          ];
+        }
+      }
+    } catch (_) {}
+    return result;
+  }
+
+  /// Parses a salary payment's loanSkips JSON into loanId -> skip details:
+  /// 'mode' ('extend' = loan runs longer, 'carry' = collected with the next
+  /// salary), 'note', 'by', 'at', and — once that salary is paid — 'months',
+  /// the loan months the skip postponed.
+  Map<int, Map<String, dynamic>> parseLoanSkips(String? json) {
+    final result = <int, Map<String, dynamic>>{};
+    if (json == null || json.isEmpty) return result;
+    try {
+      final Map<String, dynamic> skips = jsonDecode(json);
+      for (final entry in skips.entries) {
+        final loanId = int.tryParse(entry.key);
+        if (loanId == null || entry.value is! Map) continue;
+        result[loanId] = Map<String, dynamic>.from(entry.value as Map);
+      }
+    } catch (_) {}
+    return result;
+  }
+
+  /// Works out the loan deductions that belong to [staffId]'s salary for
+  /// [month]:
+  /// - a paid month returns exactly what was deducted (and skipped) when it
+  ///   was marked paid;
+  /// - an unpaid month returns, per Active loan, this month plus any months
+  ///   carried over from a skipped salary, plus earlier consecutive unpaid
+  ///   months back to the loan's start month — skipping months another
+  ///   payment already deducted or postponed by extending the loan — capped
+  ///   at the loan's months remaining.
+  ///
+  /// Returns {'currentDeduction', 'arrearsDeduction', 'loans', 'skipped'}.
+  /// Each 'loans' entry is {'loan': loan row, 'months': months this salary
+  /// covers}; each 'skipped' entry adds the skip's 'mode', 'note' and 'by'
+  /// and lists the months that would otherwise have been deducted.
+  Future<Map<String, dynamic>> getLoanDeductionPlan(
     int staffId,
-    String selectedMonth, {
+    String month, {
     int maxMonthsBack = 24,
     String? employmentDate,
   }) async {
-    int count = 0;
+    final entries = <Map<String, dynamic>>[];
+    final skipped = <Map<String, dynamic>>[];
+
+    Map<String, dynamic> skipEntry(
+            Map<String, dynamic> loan, List<String> months, Map<String, dynamic> skip) =>
+        {
+          'loan': loan,
+          'months': months,
+          'mode': skip['mode'] == 'carry' ? 'carry' : 'extend',
+          'note': skip['note'],
+          'by': skip['by'],
+        };
+
     try {
-      final targetDate = _parseMonth(selectedMonth);
-      if (targetDate == null) return 0;
+      final db = await database;
+      final allLoans = await db.query('staff_loans', where: 'staffId = ?', whereArgs: [staffId]);
+      final loansById = {for (final l in allLoans) l['id'] as int: l};
+      final payments = await getSalaryPaymentsForStaff(staffId);
+      final paymentByMonth = {for (final p in payments) p['month'] as String: p};
 
-      for (int i = 1; i <= maxMonthsBack; i++) {
-        int m = targetDate.month - i;
-        int y = targetDate.year;
-        while (m <= 0) { m += 12; y--; }
-        final prevMonth = _formatMonth(DateTime(y, m, 1));
+      final thisPayment = paymentByMonth[month];
+      final thisSkips = parseLoanSkips(thisPayment?['loanSkips'] as String?);
+      if (thisPayment != null && (thisPayment['isPaid'] as int) == 1) {
+        // The latest salary to deduct each loan — if the loan is now
+        // Completed, that salary took the final month (and its rounding).
+        final latestPayer = <int, DateTime>{};
+        for (final p in payments) {
+          if ((p['isPaid'] as int) != 1) continue;
+          final pDate = _parseMonth(p['month'] as String);
+          if (pDate == null) continue;
+          for (final id in parseLoanDeductionsApplied(p['loanDeductionsApplied'] as String?, p['month'] as String).keys) {
+            final seen = latestPayer[id];
+            if (seen == null || pDate.isAfter(seen)) latestPayer[id] = pDate;
+          }
+        }
+        final thisDate = _parseMonth(month);
+        parseLoanDeductionsApplied(thisPayment['loanDeductionsApplied'] as String?, month)
+            .forEach((loanId, months) {
+          final loan = loansById[loanId];
+          if (loan != null && months.isNotEmpty) {
+            entries.add({
+              'loan': loan,
+              'months': months,
+              'completes': loan['status'] == 'Completed' &&
+                  latestPayer[loanId] == thisDate &&
+                  !StaffLoan.completedByManualRepayment(loan),
+            });
+          }
+        });
+        thisSkips.forEach((loanId, skip) {
+          final loan = loansById[loanId];
+          if (loan == null) return;
+          final months = [for (final m in (skip['months'] as List? ?? const [])) m.toString()];
+          skipped.add(skipEntry(loan, months, skip));
+        });
+      } else {
+        final target = _parseMonth(month);
+        if (target != null) {
+          // Months each loan is already settled for by other paid salaries
+          // (deducted, or skipped by extending the loan), months carried
+          // over from earlier skipped salaries, and skips set on other
+          // still-unpaid months.
+          final covered = <int, Set<String>>{};
+          final carried = <int, Set<String>>{};
+          final pendingSkipMode = <String, Map<int, String?>>{};
+          for (final p in payments) {
+            final pMonth = p['month'] as String;
+            if (pMonth == month) continue;
+            final skips = parseLoanSkips(p['loanSkips'] as String?);
+            if ((p['isPaid'] as int) != 1) {
+              pendingSkipMode[pMonth] = {for (final e in skips.entries) e.key: e.value['mode'] as String?};
+              continue;
+            }
+            parseLoanDeductionsApplied(p['loanDeductionsApplied'] as String?, pMonth)
+                .forEach((id, months) => covered.putIfAbsent(id, () => <String>{}).addAll(months));
+            final pDate = _parseMonth(pMonth);
+            skips.forEach((id, skip) {
+              final months = [for (final m in (skip['months'] as List? ?? const [])) m.toString()];
+              if (skip['mode'] == 'carry') {
+                if (pDate != null && pDate.isBefore(target)) {
+                  carried.putIfAbsent(id, () => <String>{}).addAll(months);
+                }
+              } else {
+                covered.putIfAbsent(id, () => <String>{}).addAll(months);
+              }
+            });
+          }
 
-        if (employmentDate != null && !isStaffEmployedByMonth(employmentDate, prevMonth)) break;
+          for (final loan in allLoans) {
+            if (loan['status'] != 'Active') continue;
+            final loanId = loan['id'] as int;
+            final remaining = loan['monthsRemaining'] as int? ?? 0;
+            final start = _loanStartMonth(loan);
+            if (remaining <= 0 || (start != null && target.isBefore(start))) continue;
 
-        final payment = await getStaffSalaryPayment(staffId, prevMonth);
-        if (payment != null && (payment['isPaid'] as int) == 1) break;
-        count++;
+            final done = covered[loanId] ?? const <String>{};
+            final due = <String>[];
+            void addDue(String m) {
+              if (!done.contains(m) && !due.contains(m)) due.add(m);
+            }
+
+            addDue(month);
+            final carriedMonths = (carried[loanId] ?? const <String>{}).toList()
+              ..sort((a, b) => (_parseMonth(a) ?? DateTime(0)).compareTo(_parseMonth(b) ?? DateTime(0)));
+            carriedMonths.forEach(addDue);
+            for (int i = 1; i <= maxMonthsBack && due.length < remaining; i++) {
+              final prev = DateTime(target.year, target.month - i, 1);
+              if (start != null && prev.isBefore(start)) break;
+              final prevMonth = _formatMonth(prev);
+              if (employmentDate != null && !isStaffEmployedByMonth(employmentDate, prevMonth)) break;
+              final payment = paymentByMonth[prevMonth];
+              if (payment != null && (payment['isPaid'] as int) == 1) break;
+              // A missed month whose repayment was skipped by extending the
+              // loan isn't collected as arrears.
+              final pendingSkip = pendingSkipMode[prevMonth];
+              if (pendingSkip != null && pendingSkip.containsKey(loanId) && pendingSkip[loanId] != 'carry') {
+                continue;
+              }
+              addDue(prevMonth);
+            }
+            final months = due.take(remaining).toList();
+
+            final skip = thisSkips[loanId];
+            if (skip != null) {
+              skipped.add(skipEntry(loan, months, skip));
+            } else if (months.isNotEmpty) {
+              entries.add({'loan': loan, 'months': months, 'completes': months.length >= remaining});
+            }
+          }
+        }
       }
     } catch (_) {}
-    return count;
+
+    double current = 0;
+    double arrears = 0;
+    for (final e in entries) {
+      final loan = e['loan'] as Map<String, dynamic>;
+      final perMonth = (loan['deductionPerMonth'] as num).toDouble();
+      final months = e['months'] as List<String>;
+      final thisMonth = months.contains(month) ? 1 : 0;
+      // The month that finishes the loan also collects the rounding leftover
+      final residue = e['completes'] == true ? StaffLoan.roundingResidueFor(loan) : 0.0;
+      current += perMonth * thisMonth + (thisMonth == 1 ? residue : 0);
+      arrears += perMonth * (months.length - thisMonth) + (thisMonth == 1 ? 0 : residue);
+    }
+    return {
+      'currentDeduction': current,
+      'arrearsDeduction': arrears,
+      'loans': entries,
+      'skipped': skipped,
+    };
   }
 
   // ------------------------------------------------------------------

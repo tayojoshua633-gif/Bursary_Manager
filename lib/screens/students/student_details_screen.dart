@@ -647,6 +647,82 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
     );
   }
 
+  bool get _hasHealthInfo => [
+        current.genotype,
+        current.bloodGroup,
+        current.disabilityDetails,
+        current.allergies,
+        current.medicalConditions,
+        current.medication,
+        current.emergencyContactName,
+        current.emergencyContactPhone,
+      ].any((v) => (v ?? '').trim().isNotEmpty) ||
+      current.hasDisability == 1;
+
+  // Read-only; health details are edited via Edit Student.
+  Widget _buildHealthCard(DisplaySettings ds) {
+    String? orNull(String? v) => (v ?? '').trim().isEmpty ? null : v!.trim();
+    final disability = current.hasDisability == 1
+        ? 'Yes${orNull(current.disabilityDetails) != null ? ' — ${current.disabilityDetails!.trim()}' : ''}'
+        : current.hasDisability == 0
+            ? 'No'
+            : null;
+    final emergencyPhone = orNull(current.emergencyContactPhone);
+
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
+        elevation: 2,
+        color: Colors.red.shade50,
+        child: Padding(
+          padding: EdgeInsets.all(ds.cardPadding),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.medical_services, color: Colors.red.shade700, size: ds.iconSize),
+                  SizedBox(width: ds.cardPadding * 0.5),
+                  Text(
+                    'Health Information',
+                    style: TextStyle(
+                      fontSize: ds.titleFontSize,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red.shade800,
+                    ),
+                  ),
+                ],
+              ),
+              const Divider(),
+              if (!_hasHealthInfo)
+                Text(
+                  'No health information recorded.',
+                  style: TextStyle(
+                    fontSize: ds.bodyFontSize,
+                    fontStyle: FontStyle.italic,
+                    color: Colors.grey.shade600,
+                  ),
+                )
+              else ...[
+                info('Genotype', orNull(current.genotype), ds),
+                info('Blood Group', orNull(current.bloodGroup), ds),
+                info('Disability', disability, ds),
+                info('Allergies', orNull(current.allergies), ds),
+                info('Medical Conditions', orNull(current.medicalConditions), ds),
+                info('Medication', orNull(current.medication), ds),
+                info('Emergency Contact', orNull(current.emergencyContactName), ds),
+                if (emergencyPhone != null)
+                  _phoneRow('Emergency Phone', emergencyPhone, ds)
+                else
+                  info('Emergency Phone', null, ds),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget info(String label, String? value, DisplaySettings ds) {
     return Padding(
       padding: EdgeInsets.symmetric(vertical: ds.cardPadding * 0.3),
@@ -848,6 +924,12 @@ class _StudentDetailsScreenState extends State<StudentDetailsScreen> with RouteA
             ),
 
             SizedBox(height: ds.cardPadding * 1.25),
+
+            // HEALTH INFORMATION CARD
+            if (_hasHealthInfo || _canManageStudents) ...[
+              _buildHealthCard(ds),
+              SizedBox(height: ds.cardPadding * 1.25),
+            ],
 
             // RECOMMENDATION CARD
             if (_hasRecommendation || _canManageStudents) ...[

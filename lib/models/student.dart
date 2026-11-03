@@ -23,6 +23,17 @@ class Student {
   String? leftDate;
   String? leftReason;
 
+  // Optional health information
+  String? genotype;
+  String? bloodGroup;
+  int? hasDisability; // 1 = yes, 0 = no, null = not recorded
+  String? disabilityDetails;
+  String? allergies;
+  String? medicalConditions;
+  String? medication;
+  String? emergencyContactName;
+  String? emergencyContactPhone;
+
   // Optional joined fields (from classes and arms)
   String? className;
   String? armName;
@@ -51,6 +62,15 @@ class Student {
     this.isActive = 1,
     this.leftDate,
     this.leftReason,
+    this.genotype,
+    this.bloodGroup,
+    this.hasDisability,
+    this.disabilityDetails,
+    this.allergies,
+    this.medicalConditions,
+    this.medication,
+    this.emergencyContactName,
+    this.emergencyContactPhone,
     this.className,
     this.armName,
   });
@@ -81,6 +101,15 @@ class Student {
       isActive: (map['isActive'] as int?) ?? 1,
       leftDate: map['leftDate'],
       leftReason: map['leftReason'],
+      genotype: map['genotype'],
+      bloodGroup: map['bloodGroup'],
+      hasDisability: map['hasDisability'] as int?,
+      disabilityDetails: map['disabilityDetails'],
+      allergies: map['allergies'],
+      medicalConditions: map['medicalConditions'],
+      medication: map['medication'],
+      emergencyContactName: map['emergencyContactName'],
+      emergencyContactPhone: map['emergencyContactPhone'],
 
       // Joined fields (from SELECT s.*, c.name AS className, a.name AS armName)
       className: map['className'],
@@ -114,6 +143,15 @@ class Student {
       'isActive': isActive,
       'leftDate': leftDate,
       'leftReason': leftReason,
+      'genotype': genotype,
+      'bloodGroup': bloodGroup,
+      'hasDisability': hasDisability,
+      'disabilityDetails': disabilityDetails,
+      'allergies': allergies,
+      'medicalConditions': medicalConditions,
+      'medication': medication,
+      'emergencyContactName': emergencyContactName,
+      'emergencyContactPhone': emergencyContactPhone,
     };
   }
 }

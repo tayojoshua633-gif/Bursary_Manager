@@ -880,6 +880,31 @@ class DatabaseHelperWrapper {
     return repo.getStaffSalaryPayment(staffId, month);
   }
 
+  Future<List<Map<String, dynamic>>> getSalaryPaymentsForStaff(int staffId) async {
+    final repo = await _repository;
+    return repo.getSalaryPaymentsForStaff(staffId);
+  }
+
+  Future<void> markSalaryMonthsPaidWith(int staffId, List<String> months, String paidWithMonth) async {
+    final repo = await _repository;
+    return repo.markSalaryMonthsPaidWith(staffId, months, paidWithMonth);
+  }
+
+  Future<List<String>> reopenSalaryMonthsPaidWith(int staffId, String paidWithMonth) async {
+    final repo = await _repository;
+    return repo.reopenSalaryMonthsPaidWith(staffId, paidWithMonth);
+  }
+
+  Future<void> setOwingCarriedForwardForPayment(int staffId, String month, double? amount) async {
+    final repo = await _repository;
+    return repo.setOwingCarriedForwardForPayment(staffId, month, amount);
+  }
+
+  Future<void> setLoanSkipsForPayment(int staffId, String month, String? json) async {
+    final repo = await _repository;
+    return repo.setLoanSkipsForPayment(staffId, month, json);
+  }
+
   Future<void> setLoanDeductionsAppliedForPayment(int staffId, String month, String? json) async {
     final repo = await _repository;
     return repo.setLoanDeductionsAppliedForPayment(staffId, month, json);
@@ -956,6 +981,7 @@ class DatabaseHelperWrapper {
     required String term,
     required String session,
     double minPercentagePaid = 0.0,
+    int armId = 0,
   }) async {
     final repo = await _repository;
     return repo.getDebtorsList(
@@ -963,6 +989,7 @@ class DatabaseHelperWrapper {
       term: term,
       session: session,
       minPercentagePaid: minPercentagePaid,
+      armId: armId,
     );
   }
 
@@ -994,12 +1021,14 @@ class DatabaseHelperWrapper {
     required String term,
     required String session,
     int classId = 0,
+    int armId = 0,
   }) async {
     final repo = await _repository;
     return repo.getFeesBalanceSummary(
       term: term,
       session: session,
       classId: classId,
+      armId: armId,
     );
   }
 
@@ -1007,12 +1036,14 @@ class DatabaseHelperWrapper {
     required int classId,
     required String term,
     required String session,
+    int armId = 0,
   }) async {
     final repo = await _repository;
     return repo.getBalancedStudentsList(
       classId: classId,
       term: term,
       session: session,
+      armId: armId,
     );
   }
 

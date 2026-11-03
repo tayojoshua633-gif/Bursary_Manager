@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:archive/archive_io.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -290,6 +291,193 @@ class DBBackupHelper {
         'message': 'Backup failed: $e',
         'filePath': null,
       };
+    }
+  }
+
+  /// ================================
+  /// CREATE ONLINE BACKUP ARCHIVE (database + photos)
+  /// ================================
+  /// Used by the Online Backup (Google Drive) screen and CloudSyncHelper so
+  /// the uploaded file also carries staff/student photos and the school
+  /// logo, not just the raw .db.
+  ///
+  /// Zip layout: `database.db`, `photos/students/…`, `photos/staff/…`,
+  /// `photos/logo/…`. Photos are collected from the paths stored in the
+  /// database, so wherever a photo was saved it is picked up.
+  ///
+  /// [keepLocalCopy] false writes the zip to the temp folder for the caller
+  /// to delete, so frequent auto-backups don't pile up in the backup folder.
+  /// [sendToCentral] also sends the .db snapshot to the central support
+  /// server (fire-and-forget), as [backupDatabase] does.
+  static Future<Map<String, dynamic>> createOnlineBackupArchive({
+    bool keepLocalCopy = true,
+    bool sendToCentral = true,
+  }) async {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final snapshotPath = join(Directory.systemTemp.path, 'bm_online_snapshot_$ts.db');
+    var snapshotHandedOff = false;
+    try {
+      if (keepLocalCopy && !await _requestStoragePermission()) {
+        return {'success': false, 'message': 'Storage permission denied', 'filePath': null};
+      }
+
+      await _snapshotPrefsToDb();
+      final database = await DatabaseHelper().database;
+      await snapshotDatabaseTo(database, snapshotPath);
+
+      final archive = Archive();
+      final dbBytes = await File(snapshotPath).readAsBytes();
+      archive.addFile(ArchiveFile('database.db', dbBytes.length, dbBytes));
+
+      final added = <String>{};
+      Future<void> addPhoto(String folder, String? path) async {
+        if (path == null || path.isEmpty) return;
+        final file = File(path);
+        final entry = 'photos/$folder/${basename(path.replaceAll('\\', '/'))}';
+        if (added.contains(entry) || !await file.exists()) return;
+        final bytes = await file.readAsBytes();
+        archive.addFile(ArchiveFile(entry, bytes.length, bytes));
+        added.add(entry);
+      }
+
+      for (final table in ['students', 'staff']) {
+        try {
+          final rows = await database.rawQuery(
+              "SELECT photoPath FROM $table WHERE photoPath IS NOT NULL AND photoPath != ''");
+          for (final row in rows) {
+            await addPhoto(table, row['photoPath'] as String?);
+          }
+        } catch (_) {}
+      }
+      try {
+        final logo = await database.rawQuery(
+            "SELECT logoPath FROM school_profile WHERE logoPath IS NOT NULL AND logoPath != '' LIMIT 1");
+        if (logo.isNotEmpty) await addPhoto('logo', logo.first['logoPath'] as String?);
+      } catch (_) {}
+
+      final zipBytes = ZipEncoder().encode(archive);
+      if (zipBytes == null || zipBytes.isEmpty) {
+        return {'success': false, 'message': 'Failed to create backup archive', 'filePath': null};
+      }
+
+      final schoolName = await _getSchoolName();
+      final cleanName =
+          schoolName.replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(' ', '_');
+      final timestamp = DateFormat('yyyy-MM-dd_HHmmss').format(DateTime.now());
+      final filename = '${cleanName}_Backup_$timestamp.zip';
+      final folderPath =
+          keepLocalCopy ? (await _getBackupFolder()).path : Directory.systemTemp.path;
+      final backupPath = join(folderPath, filename);
+      await File(backupPath).writeAsBytes(zipBytes);
+
+      // The central server expects a plain .db, so it gets the snapshot,
+      // deleted once the upload finishes either way.
+      if (sendToCentral) {
+        snapshotHandedOff = true;
+        unawaited(CentralBackupHelper.uploadBackup(snapshotPath).whenComplete(() {
+          try { File(snapshotPath).deleteSync(); } catch (_) {}
+        }));
+      }
+
+      return {
+        'success': true,
+        'message': 'Backup created successfully',
+        'filePath': backupPath,
+        'filename': filename,
+        'photoCount': added.length,
+      };
+    } catch (e) {
+      return {'success': false, 'message': 'Backup failed: $e', 'filePath': null};
+    } finally {
+      if (!snapshotHandedOff) {
+        try { File(snapshotPath).deleteSync(); } catch (_) {}
+      }
+    }
+  }
+
+  /// Extracts `database.db` from an online-backup archive (BM's own, or a
+  /// DSM backup zip) to [tempDbPath]
+  /// and puts its photos in place on this device (under the app documents
+  /// folder). Photo/logo paths in the extracted database that don't exist
+  /// on this device are pointed at the restored files, so a backup from
+  /// another phone or PC shows its photos here. Returns [tempDbPath] on
+  /// success, or null if the archive has no `database.db` entry.
+  static Future<String?> extractDatabaseFromArchive(
+      String zipPath, String tempDbPath) async {
+    try {
+      final bytes = await File(zipPath).readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final appDir = await getApplicationDocumentsDirectory();
+      const localFolders = {
+        'students': 'student_photos',
+        'staff': 'staff_photos',
+        'logo': 'school_logo',
+      };
+      // folder -> { file name -> restored local path }
+      final restored = <String, Map<String, String>>{};
+      bool dbFound = false;
+
+      for (final file in archive) {
+        if (!file.isFile) continue;
+        final content = file.content as List<int>;
+
+        if (file.name == 'database.db') {
+          await File(tempDbPath).writeAsBytes(content);
+          dbFound = true;
+        } else if (file.name.startsWith('photos/')) {
+          var parts = file.name.split('/');
+          // DSM backups keep the logo at the top: photos/school_logo.png
+          if (parts.length == 2 && parts[1].startsWith('school_logo')) {
+            parts = ['photos', 'logo', parts[1]];
+          }
+          if (parts.length != 3) continue;
+          final localFolder = localFolders[parts[1]];
+          if (localFolder == null || parts[2].isEmpty) continue;
+          final dest = File(join(appDir.path, localFolder, parts[2]));
+          await dest.parent.create(recursive: true);
+          await dest.writeAsBytes(content);
+          (restored[parts[1]] ??= {})[parts[2]] = dest.path;
+        }
+      }
+
+      if (!dbFound) return null;
+      if (restored.isNotEmpty) await _relinkPhotoPaths(tempDbPath, restored);
+      return tempDbPath;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Rewrites photo/logo paths in [dbPath] that don't resolve on this device
+  /// to the matching file restored from the archive (matched by file name).
+  static Future<void> _relinkPhotoPaths(
+      String dbPath, Map<String, Map<String, String>> restored) async {
+    Database? db;
+    try {
+      db = await openDatabase(dbPath);
+      Future<void> relink(String table, String column, String folder) async {
+        final files = restored[folder];
+        if (files == null) return;
+        final rows = await db!.rawQuery(
+            "SELECT rowid AS rid, $column AS path FROM $table WHERE $column IS NOT NULL AND $column != ''");
+        for (final row in rows) {
+          final path = row['path'] as String;
+          if (File(path).existsSync()) continue;
+          final local = files[basename(path.replaceAll('\\', '/'))];
+          if (local == null) continue;
+          await db.rawUpdate(
+              'UPDATE $table SET $column = ? WHERE rowid = ?', [local, row['rid']]);
+        }
+      }
+
+      for (final table in ['students', 'staff']) {
+        try { await relink(table, 'photoPath', table); } catch (_) {}
+      }
+      try { await relink('school_profile', 'logoPath', 'logo'); } catch (_) {}
+    } catch (e) {
+      debugPrint('_relinkPhotoPaths error: $e');
+    } finally {
+      await db?.close();
     }
   }
 

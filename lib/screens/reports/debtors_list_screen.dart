@@ -32,6 +32,8 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
 
   List<Map<String, dynamic>> _classes = [];
   int? _selectedClassId;
+  List<Map<String, dynamic>> _arms = [];
+  int _selectedArmId = 0; // 0 = All Arms
 
   // Filter options
   String _filterType = 'all'; // 'all' or 'percentage'
@@ -112,6 +114,7 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
           term: _term!,
           session: _session!,
           minPercentagePaid: minPercentage,
+          armId: _selectedArmId,
         );
       }
 
@@ -141,6 +144,19 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
     }
   }
 
+  Future<void> _onClassChanged(int? classId) async {
+    setState(() {
+      _selectedClassId = classId;
+      _selectedArmId = 0;
+      _arms = [];
+      _debtors = []; // Clear previous results
+    });
+    if (classId != null && classId > 0) {
+      final arms = await _db.getArmsByClass(classId);
+      if (mounted) setState(() => _arms = arms);
+    }
+  }
+
   String _getSelectedClassName() {
     if (_selectedClassId == null) return '';
     if (_selectedClassId == 0) return 'All Classes';
@@ -148,7 +164,13 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
       (c) => c['id'] == _selectedClassId,
       orElse: () => {'name': ''},
     );
-    return classData['name'] ?? '';
+    final className = classData['name'] ?? '';
+    if (_selectedArmId == 0) return className;
+    final armData = _arms.firstWhere(
+      (a) => a['id'] == _selectedArmId,
+      orElse: () => {'name': ''},
+    );
+    return '$className - ${armData['name'] ?? ''}';
   }
 
   // ================================
@@ -477,12 +499,40 @@ class _DebtorsListScreenState extends State<DebtorsListScreen> {
                                         child: Text(c['name']),
                                       )),
                             ],
-                            onChanged: (v) {
-                              setState(() {
-                                _selectedClassId = v;
-                                _debtors = []; // Clear previous results
-                              });
-                            },
+                            onChanged: _onClassChanged,
+                          ),
+
+                          const SizedBox(height: 16),
+
+                          // Arm Selector (only for a specific class)
+                          DropdownButtonFormField<int>(
+                            // Re-keyed per class so the selection resets to "All Arms"
+                            key: ValueKey('arm-$_selectedClassId-${_arms.length}'),
+                            decoration: const InputDecoration(
+                              labelText: 'Select Arm',
+                              border: OutlineInputBorder(),
+                              prefixIcon: Icon(Icons.groups),
+                            ),
+                            initialValue: _selectedArmId,
+                            items: [
+                              const DropdownMenuItem<int>(
+                                value: 0,
+                                child: Text('All Arms'),
+                              ),
+                              ..._arms
+                                  .map((a) => DropdownMenuItem<int>(
+                                        value: a['id'],
+                                        child: Text(a['name']),
+                                      )),
+                            ],
+                            onChanged: (_selectedClassId ?? 0) == 0
+                                ? null
+                                : (v) {
+                                    setState(() {
+                                      _selectedArmId = v ?? 0;
+                                      _debtors = []; // Clear previous results
+                                    });
+                                  },
                           ),
 
                           const SizedBox(height: 16),
