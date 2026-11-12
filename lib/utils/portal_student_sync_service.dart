@@ -31,7 +31,9 @@ class PortalStudentSyncService {
   /// (school_portal/lib/teacher.php) and DSM's
   /// PortalTeacherSyncService.studentFields; never renumber them. 30 (photo)
   /// is left out on purpose. [review] marks the fields that identify the
-  /// child or decide which parent account sees them.
+  /// child or decide which parent account sees them (phone 2 too: a parent
+  /// logs in and sees children by phone 1 or 2). 23–25
+  /// ([StudentField.parentColumn]) live on the family's parents row.
   static const Map<int, StudentField> studentFields = {
     1: StudentField('surname', 'Surname', 'text', required: true, review: true),
     2: StudentField('firstName', 'First Name', 'text', required: true, review: true),
@@ -46,6 +48,9 @@ class PortalStudentSyncService {
     11: StudentField('parentPhone', 'Parent Phone', 'phone', required: true, review: true),
     12: StudentField('parentEmail', 'Parent Email', 'email'),
     13: StudentField('parentAddress', 'Parent Address', 'long'),
+    23: StudentField('parentPhone2', 'Parent Phone 2', 'phone', review: true, parentColumn: 'phoneNumber2'),
+    24: StudentField('parentOccupation', 'Parent Occupation', 'text', parentColumn: 'occupation'),
+    25: StudentField('parentOfficeAddress', 'Parent Office Address', 'long', parentColumn: 'officeAddress'),
     14: StudentField('genotype', 'Genotype', 'genotype'),
     15: StudentField('bloodGroup', 'Blood Group', 'blood'),
     16: StudentField('hasDisability', 'Has a Disability', 'yesno'),
@@ -240,7 +245,15 @@ class PortalStudentSyncService {
     for (final e in fresh) {
       if (!students.containsKey(e.studentId)) {
         final r = await db.query('students', where: 'id = ?', whereArgs: [e.studentId], limit: 1);
-        students[e.studentId] = r.isEmpty ? null : r.first;
+        // With the family's parents-row details under the fields' names.
+        final p = r.isEmpty ? null : await studentParent(db, e.studentId);
+        students[e.studentId] = r.isEmpty
+            ? null
+            : {
+                ...r.first,
+                for (final f in studentFields.values)
+                  if (f.parentColumn != null) f.column: p?[f.parentColumn],
+              };
       }
       final st = students[e.studentId];
       final f = fieldOf(e.itemId);
@@ -300,6 +313,9 @@ class PortalStudentSyncService {
     if ((st['isActive'] as num?)?.toInt() != 1) return 'Student is no longer active.';
     if ((st['armId'] as num?)?.toInt() != e.armId || (st['classId'] as num?)?.toInt() != e.classId) {
       return 'Student is no longer in this class.';
+    }
+    if (f.parentColumn != null && (st['parentPhone'] as String? ?? '').trim().isEmpty) {
+      return 'The student has no parent phone, so there is no parent record to update.';
     }
     return _valueProblem(f, e.value);
   }
@@ -364,12 +380,16 @@ class PortalStudentSyncService {
           if (r.status == SyncStatus.blocked || f == null) continue; // never write a blocked entry
           if (r.status != SyncStatus.same) {
             final text = (e.value.text ?? '').trim();
-            final values = <String, Object?>{
-              f.column: f.type == 'yesno' ? e.value.number!.round() : (text.isEmpty ? null : text),
-            };
-            // As HealthInfoController: no disability, no details.
-            if (f.type == 'yesno' && e.value.number == 0) values['disabilityDetails'] = null;
-            await txn.update('students', values, where: 'id = ?', whereArgs: [e.studentId]);
+            if (f.parentColumn != null) {
+              await writeStudentParent(txn, e.studentId, f.parentColumn!, text.isEmpty ? null : text, now);
+            } else {
+              final values = <String, Object?>{
+                f.column: f.type == 'yesno' ? e.value.number!.round() : (text.isEmpty ? null : text),
+              };
+              // As HealthInfoController: no disability, no details.
+              if (f.type == 'yesno' && e.value.number == 0) values['disabilityDetails'] = null;
+              await txn.update('students', values, where: 'id = ?', whereArgs: [e.studentId]);
+            }
             changedRecords++;
             await txn.insert('audit_log', {
               'entityType': 'portal_teacher_entry',
@@ -493,7 +513,48 @@ class StudentField {
   final String type;
   final bool required;
   final bool review;
-  const StudentField(this.column, this.label, this.type, {this.required = false, this.review = false});
+
+  /// The parents column this detail is kept in, or null for a students
+  /// column. [column] is then only the portal's name for it.
+  final String? parentColumn;
+  const StudentField(this.column, this.label, this.type, {this.required = false, this.review = false, this.parentColumn});
+}
+
+/// The student's parents row: the one whose phone 1 is the student's
+/// parentPhone, preferring the same name — as StudentEditScreen finds it.
+/// Null when the student has no parent phone or the family has no row yet.
+Future<Map<String, Object?>?> studentParent(DatabaseExecutor db, int studentId) async {
+  final s = await db.query('students', columns: ['parentName', 'parentPhone'], where: 'id = ?', whereArgs: [studentId], limit: 1);
+  final phone = s.isEmpty ? '' : (s.first['parentPhone'] as String? ?? '').trim();
+  if (phone.isEmpty) return null;
+  final p = await db.rawQuery(
+      'SELECT * FROM parents WHERE TRIM(phoneNumber) = ? ORDER BY (TRIM(parentName) = ?) DESC, id LIMIT 1',
+      [phone, (s.first['parentName'] as String? ?? '').trim()]);
+  return p.isEmpty ? null : p.first;
+}
+
+/// Sets one parents column for the student's family, adding the parents row
+/// from the student's parent details when there is none yet (as
+/// StudentEditScreen does on save). Does nothing without a parent phone.
+Future<void> writeStudentParent(DatabaseExecutor db, int studentId, String column, String? value, String now) async {
+  final p = await studentParent(db, studentId);
+  if (p != null) {
+    await db.update('parents', {column: value, 'updatedAt': now}, where: 'id = ?', whereArgs: [p['id']]);
+    return;
+  }
+  final s = await db.query('students', where: 'id = ?', whereArgs: [studentId], limit: 1);
+  final phone = s.isEmpty ? '' : (s.first['parentPhone'] as String? ?? '').trim();
+  if (phone.isEmpty) return;
+  String? opt(Object? v) => (v as String? ?? '').trim().isEmpty ? null : (v as String).trim();
+  await db.insert('parents', {
+    'parentName': (s.first['parentName'] as String? ?? '').trim(),
+    'phoneNumber': phone,
+    'homeAddress': (s.first['parentAddress'] as String? ?? '').trim(),
+    'emailAddress': opt(s.first['parentEmail']),
+    column: value,
+    'createdAt': now,
+    'updatedAt': now,
+  });
 }
 
 enum SyncStatus { newValue, changed, same, conflict, blocked }
